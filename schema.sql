@@ -11,7 +11,11 @@ CREATE TABLE IF NOT EXISTS reservations (
     phone_number TEXT NOT NULL,
     status TEXT DEFAULT 'confirmed',
     special_requests TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    payment_status TEXT DEFAULT 'unpaid',
+    payment_intent_id TEXT,
+    payment_amount DECIMAL(10,2),
+    payment_date TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS tables (
@@ -38,6 +42,12 @@ CREATE TABLE IF NOT EXISTS orders (
     person_name TEXT,
     status TEXT DEFAULT 'pending',
     total_amount DECIMAL(10,2),
+    target_date TEXT,
+    target_time TEXT,
+    order_type TEXT,
+    customer_phone TEXT,
+    customer_address TEXT,
+    special_instructions TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (reservation_id) REFERENCES reservations(id),
     FOREIGN KEY (table_id) REFERENCES tables(id)
