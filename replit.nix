@@ -1,9 +1,9 @@
 { pkgs }: {
   deps = [
-    pkgs.python310
-    pkgs.python310Packages.pip	
-    pkgs.python310Packages.flask
-    pkgs.python310Packages.python-dotenv
-    pkgs.python310Packages.requests
+    pkgs.python312
+    pkgs.python312Packages.pip	
+    pkgs.python312Packages.flask
+    pkgs.python312Packages.python-dotenv
+    pkgs.python312Packages.requests
   ];
 
