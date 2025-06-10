@@ -307,6 +307,38 @@ class RestaurantReservationSkill(SkillBase):
             **self.swaig_fields
         )
 
+        # Register the payment tool
+        def _pay_reservation_handler(args, raw_data):
+            from swaig_agents import pay_reservation_by_phone
+            reservation_number = args.get('reservation_number')
+            cardholder_name = args.get('cardholder_name')
+            phone_number = args.get('phone_number')
+            email = args.get('email')
+            result = pay_reservation_by_phone(
+                reservation_number=reservation_number,
+                cardholder_name=cardholder_name,
+                phone_number=phone_number,
+                email=email
+            )
+            return SwaigFunctionResult(result.get('message', 'Payment processed.'), data=result)
+
+        self.agent.define_tool(
+            name="pay_reservation",
+            description="Collect payment for a reservation/order using SignalWire Pay and Stripe.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "reservation_number": {"type": "string", "description": "Reservation number to pay for"},
+                    "cardholder_name": {"type": "string", "description": "Name on the credit card"},
+                    "phone_number": {"type": "string", "description": "SMS number for receipt"},
+                    "email": {"type": "string", "description": "Optional email for receipt"}
+                },
+                "required": ["reservation_number", "cardholder_name", "phone_number"]
+            },
+            handler=_pay_reservation_handler,
+            **self.swaig_fields
+        )
+        
     def _send_reservation_sms(self, reservation_data, phone_number):
         """Send SMS confirmation for reservation"""
         try:
