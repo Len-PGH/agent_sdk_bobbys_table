@@ -1,0 +1,10 @@
+Flask
+Flask_SQLAlchemy
+Flask_HTTPAuth
+python-dotenv
+signalwire-agents
+gunicorn
+fastapi
+uvicorn
+requests
+stripe
