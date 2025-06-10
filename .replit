@@ -1,5 +1,12 @@
 modules = ["nodejs-20", "python-3.12", "web", "bash"]
-run = "bash start.sh"
+run = "python app.py"
 
 [nix]
 channel = "stable-24_05"
+
+[deployment]
+run = ["sh", "-c", "python app.py"]
+
+[[ports]]
+localPort = 8080
+externalPort = 80
