@@ -1,6 +1,6 @@
 modules = ["nodejs-20", "python-3.12", "web", "bash"]
 
-run = "bash start.sh && python3 init_db.py && python3 init_test_data.py && python3 app.py"
+run = "bash start_replit.sh"
 
 [nix]
 channel = "stable-24_05"
@@ -9,7 +9,7 @@ channel = "stable-24_05"
 requiredFiles = [".replit", "replit.nix"]
 
 [deployment]
-run = ["sh", "-c", "bash start.sh && python3 init_db.py && python3 init_test_data.py && python3 app.py"]
+run = ["sh", "-c", "bash start_replit.sh"]
 
 [[ports]]
 localPort = 8080
