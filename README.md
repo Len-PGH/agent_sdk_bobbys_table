@@ -4,6 +4,12 @@ A comprehensive restaurant management system with integrated web and voice inter
 
 ## 🚀 Quick Start
 
+## Run on Replit
+
+Click the button below to import and run this project on Replit:
+
+[![Run on Replit](https://replit.com/badge?theme=dark&variant=small)](https://replit.com/new/github/Len-PGH/agent_sdk_bobbys_table)
+
 ### Start the Integrated Service
 
 ```bash
