@@ -1,18 +1,15 @@
-modules = ["python-3.12", "web", "bash"]
-run = "python3 init_db.py && python3 init_test_data.py && python3 app.py"
+modules = ["nodejs-20", "python-3.12", "web", "bash"]
+
+run = "bash start.sh && python3 init_db.py && python3 init_test_data.py && python3 app.py"
 
 [nix]
 channel = "stable-24_05"
-
-[unitTest]
-language = "python3"
 
 [gitHubImport]
 requiredFiles = [".replit", "replit.nix"]
 
 [deployment]
-run = ["sh", "-c", "python3 init_db.py && python3 init_test_data.py && python3 app.py"]
-deploymentTarget = "cloudrun"
+run = ["sh", "-c", "bash start.sh && python3 init_db.py && python3 init_test_data.py && python3 app.py"]
 
 [[ports]]
 localPort = 8080
