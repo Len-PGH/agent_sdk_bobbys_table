@@ -1283,11 +1283,11 @@ class RestaurantReservationSkill(SkillBase):
             r'my name is ([a-zA-Z\s]+?)(?:\s*\.|\s+at|\s+for|\s+and|\s*$)',
             r'i\'m ([a-zA-Z\s]+?)(?:\s*\.|\s+at|\s+for|\s+and|\s*$)',
             r'this is ([a-zA-Z\s]+?)(?:\s*\.|\s+at|\s+for|\s+and|\s*$)',
-            # Removed problematic patterns that can create nonsense names
             r'([a-zA-Z]+\s+[a-zA-Z]+)\s+calling',   # "John Smith calling"
             r'([a-zA-Z]+\s+[a-zA-Z]+)\s+here',      # "John Smith here"
         ]
         
+        # First try explicit name patterns
         for pattern in name_patterns:
             match = re.search(pattern, conversation_text, re.IGNORECASE)
             if match:
@@ -1298,6 +1298,55 @@ class RestaurantReservationSkill(SkillBase):
                     name.lower() not in ['a party of', 'party of', 'the party', 'a party', 'today', 'tomorrow', 'tonight']):
                     extracted['name'] = name
                     break
+        
+        # If no explicit name found, look for standalone names at the end of messages
+        if 'name' not in extracted:
+            # Look for single words that could be names (like "randwest")
+            user_messages_reversed = list(reversed(user_messages))
+            for message in user_messages_reversed:
+                words = message.strip().split()
+                if len(words) == 1:
+                    word = words[0]
+                    # Check if it looks like a name (alphabetic, reasonable length, not common words)
+                    if (word.replace(' ', '').isalpha() and 
+                        3 <= len(word) <= 20 and
+                        word.lower() not in ['yes', 'no', 'okay', 'ok', 'sure', 'thanks', 'thank', 'you', 'please', 'hello', 'hi', 'bye', 'goodbye', 'today', 'tomorrow', 'tonight', 'morning', 'afternoon', 'evening', 'and', 'or', 'but', 'the', 'for', 'with', 'order', 'reservation', 'table', 'party', 'person', 'people']):
+                        extracted['name'] = word.title()
+                        print(f"🔍 Found standalone name: {word.title()}")
+                        break
+            
+            # If still no name found, look for names in the full conversation text
+            if 'name' not in extracted:
+                # First, try to find the very last word if it looks like a name
+                last_words = conversation_text.strip().split()
+                if last_words:
+                    last_word = last_words[-1].strip('.,!?')
+                    if (last_word.replace(' ', '').isalpha() and 
+                        3 <= len(last_word) <= 20 and
+                        last_word.lower() not in ['yes', 'no', 'okay', 'ok', 'sure', 'thanks', 'thank', 'you', 'please', 'hello', 'hi', 'bye', 'goodbye', 'today', 'tomorrow', 'tonight', 'morning', 'afternoon', 'evening', 'and', 'or', 'but', 'the', 'for', 'with', 'order', 'reservation', 'table', 'party', 'person', 'people', 'west', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'one', 'zero']):
+                        extracted['name'] = last_word.title()
+                        print(f"🔍 Found name as last word: {last_word.title()}")
+                
+                # If still no name, look for potential names that appear after common phrases
+                if 'name' not in extracted:
+                    name_context_patterns = [
+                        r'(?:my name is|i\'m|this is|name is)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)',
+                        r'([a-zA-Z]+\s+[a-zA-Z]+)(?:\s*\.|\s*$)',  # Two words at end of sentence
+                    ]
+                    
+                    for pattern in name_context_patterns:
+                        matches = re.findall(pattern, conversation_text, re.IGNORECASE)
+                        for match in matches:
+                            name = match.strip().title()
+                            # Enhanced filtering
+                            if (name.replace(' ', '').isalpha() and 
+                                3 <= len(name) <= 30 and
+                                name.lower() not in ['yes', 'no', 'okay', 'ok', 'sure', 'thanks', 'thank', 'you', 'please', 'hello', 'hi', 'bye', 'goodbye', 'today', 'tomorrow', 'tonight', 'morning', 'afternoon', 'evening', 'and', 'or', 'but', 'the', 'for', 'with', 'order', 'reservation', 'table', 'party', 'person', 'people', 'brian west', 'west', 'eight two', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'one', 'zero']):
+                                extracted['name'] = name
+                                print(f"🔍 Found name from context: {name}")
+                                break
+                        if 'name' in extracted:
+                            break
         
         # Extract party size - improved patterns with context awareness
         party_patterns = [
@@ -1310,6 +1359,8 @@ class RestaurantReservationSkill(SkillBase):
             r'party of (one|two|three|four|five|six|seven|eight|nine|ten)',  # word numbers
             r'for a party of (one|two|three|four|five|six|seven|eight|nine|ten)',
             r'(?:reservation for|table for)\s+(\d+)',  # "table for 2"
+            r'(one|two|three|four|five|six|seven|eight|nine|ten) person',  # "one person"
+            r'(one|two|three|four|five|six|seven|eight|nine|ten) people',  # "two people"
             # Removed standalone patterns that can conflict with time
         ]
         
@@ -1349,20 +1400,22 @@ class RestaurantReservationSkill(SkillBase):
                 r'([A-Z][a-z]+) will have',  # "Squidward will have"
                 r'other person.*?is ([A-Z][a-z]+)',  # "other person is SpongeBob"
                 r'person.*?name is ([A-Z][a-z]+)',  # "person name is SpongeBob"
-                r'and ([A-Z][a-z]+)',  # "and SpongeBob"
+                # Removed the problematic "and ([A-Z][a-z]+)" pattern that catches drink names
             ]
             
             for pattern in name_mention_patterns:
                 matches = re.findall(pattern, conversation_text, re.IGNORECASE)
                 for match in matches:
                     name = match.strip().title()
-                    # Filter out common false positives
+                    # Enhanced filtering to exclude menu items and drinks
                     if (name.replace(' ', '').isalpha() and 
-                        name.lower() not in ['today', 'tomorrow', 'tonight', 'order', 'will', 'have', 'like', 'want', 'for', 'and', 'the', 'or'] and
+                        name.lower() not in ['today', 'tomorrow', 'tonight', 'order', 'will', 'have', 'like', 'want', 'for', 'and', 'the', 'or', 'pepsi', 'coke', 'cola', 'sprite', 'water', 'beer', 'wine', 'coffee', 'tea', 'juice', 'lemonade', 'soda', 'drink'] and
                         len(name) > 2 and
                         not name.lower().startswith('for ') and
                         not name.lower().startswith('and ') and
-                        not name.lower().startswith('or ')):
+                        not name.lower().startswith('or ') and
+                        # Additional check: don't include common menu item words
+                        not any(food_word in name.lower() for food_word in ['wings', 'burger', 'pizza', 'salad', 'soup', 'steak', 'chicken', 'fish', 'pasta', 'sandwich'])):
                         person_names.add(name)
                         print(f"🔍 Found person name: {name}")
             
@@ -1485,6 +1538,14 @@ class RestaurantReservationSkill(SkillBase):
                     extracted['time'] = f"{hour:02d}:{minute:02d}"
                     break
         
+        # Extract phone number from caller ID if not found in conversation
+        if 'phone_number' not in extracted and caller_phone:
+            # Use caller ID as phone number
+            normalized_phone = self._normalize_phone_number(caller_phone)
+            if normalized_phone:
+                extracted['phone_number'] = normalized_phone
+                print(f"🔍 Using caller ID as phone number: {normalized_phone}")
+        
         print(f"🔍 Extracted info: {extracted}")
         return extracted
     
@@ -1533,8 +1594,9 @@ class RestaurantReservationSkill(SkillBase):
                 # Look for specific food mentions with precise matching to avoid false positives
                 conversation_lower = conversation_text.lower()
                 
-                # Handle "buff wings" specifically - it should only match Buffalo Wings, not BBQ Wings
-                if 'buff wings' in conversation_lower or 'buffalo wings' in conversation_lower:
+                # Handle wings variations - map different wing mentions to Buffalo Wings
+                wing_mentions = ['buff wings', 'buffalo wings', 'barbecue wings', 'bbq wings', 'wings']
+                if any(mention in conversation_lower for mention in wing_mentions):
                     for item_name, menu_item in menu_item_names.items():
                         if 'buffalo wings' in item_name and menu_item.id not in [item['menu_item_id'] for item in extracted_items]:
                             extracted_items.append({
@@ -1618,7 +1680,16 @@ class RestaurantReservationSkill(SkillBase):
                             content = entry['content'].lower()
                             
                             # Look for reservation numbers using improved extraction
-                            from number_utils import extract_reservation_number_from_text
+                            try:
+                                from number_utils import extract_reservation_number_from_text
+                            except ImportError:
+                                # Add parent directory to path if import fails
+                                import sys
+                                import os
+                                parent_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+                                if parent_dir not in sys.path:
+                                    sys.path.insert(0, parent_dir)
+                                from number_utils import extract_reservation_number_from_text
                             extracted_number = extract_reservation_number_from_text(content)
                             if extracted_number:
                                 reservation_number = extracted_number
