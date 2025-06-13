@@ -1,5 +1,16 @@
 modules = ["nodejs-20", "python-3.12", "web", "bash"]
-run = "bash start.sh"
+
+run = "bash start_replit.sh"
 
 [nix]
 channel = "stable-24_05"
+
+[gitHubImport]
+requiredFiles = [".replit", "replit.nix"]
+
+[deployment]
+run = ["sh", "-c", "bash start_replit.sh"]
+
+[[ports]]
+localPort = 8080
+externalPort = 80
