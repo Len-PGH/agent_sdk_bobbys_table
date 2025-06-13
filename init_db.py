@@ -5,18 +5,18 @@ from datetime import datetime
 def init_db():
     """Initialize the database with schema and sample data."""
     db_path = 'instance/restaurant.db'
-
+    
     # Create instance directory if it doesn't exist
     os.makedirs('instance', exist_ok=True)
-
+    
     # Connect to database
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-
+    
     # Read and execute schema
     with open('schema.sql', 'r') as f:
         cursor.executescript(f.read())
-
+    
     # Add sample tables
     tables = [
         (1, 2, 'available', 'Window'),
@@ -26,8 +26,8 @@ def init_db():
         (5, 4, 'available', 'Center'),
         (6, 8, 'available', 'Private Room')
     ]
-    cursor.executemany('INSERT OR IGNORE INTO tables (table_number, capacity, status, location) VALUES (?, ?, ?, ?)', tables)
-
+    cursor.executemany('INSERT INTO tables (table_number, capacity, status, location) VALUES (?, ?, ?, ?)', tables)
+    
     # Add sample menu items
     menu_items = [
         ('Classic Burger', 'Angus beef patty with lettuce, tomato, and special sauce', 12.99, 'Main Course'),
@@ -37,12 +37,12 @@ def init_db():
         ('Garlic Bread', 'Toasted bread with garlic butter', 4.99, 'Appetizer')
     ]
     cursor.executemany('INSERT INTO menu_items (name, description, price, category) VALUES (?, ?, ?, ?)', menu_items)
-
+    
     # Commit and close
     conn.commit()
     conn.close()
-
+    
     print(f"Database initialized at {db_path}")
 
 if __name__ == '__main__':
-    init_db()
+    init_db() 

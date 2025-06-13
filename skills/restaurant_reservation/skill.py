@@ -321,7 +321,7 @@ class RestaurantReservationSkill(SkillBase):
         # Get reservation tool
         self.agent.define_tool(
             name="get_reservation",
-            description="Look up an existing reservation by any available information: phone number, first name, last name, full name, date, time, party size, or reservation ID. Can return formatted text for voice or structured JSON for programmatic use.",
+            description="Look up an existing reservation by any available information: phone number, first name, last name, full name, date, time, party size, reservation ID, or confirmation number. Can return formatted text for voice or structured JSON for programmatic use.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -331,6 +331,7 @@ class RestaurantReservationSkill(SkillBase):
                     "last_name": {"type": "string", "description": "Customer last name"},
                     "reservation_id": {"type": "integer", "description": "Reservation ID"},
                     "reservation_number": {"type": "string", "description": "6-digit reservation number"},
+                    "confirmation_number": {"type": "string", "description": "Payment confirmation number (format: CONF-XXXXXXXX)"},
                     "date": {"type": "string", "description": "Reservation date (YYYY-MM-DD)"},
                     "time": {"type": "string", "description": "Reservation time (HH:MM)"},
                     "party_size": {"type": "integer", "description": "Number of people"},
@@ -477,15 +478,51 @@ class RestaurantReservationSkill(SkillBase):
             **self.swaig_fields
         )
 
-        # Register the card details collection tool
-        def _get_card_details_handler(args, raw_data):
-            """Interactive card details collection handler"""
+
+
+        # Register the step-by-step payment processing tool
+        def _pay_reservation_handler(args, raw_data):
+            """Process payment with step-by-step card detail collection to avoid number confusion"""
+            
+            # Import payment session functions with better error handling
+            start_payment_session = None
+            update_payment_step = None
+            end_payment_session = None
+            
+            try:
+                import sys
+                import os
+                parent_dir = os.path.dirname(os.path.dirname(__file__))
+                if parent_dir not in sys.path:
+                    sys.path.insert(0, parent_dir)
+                
+                # Import the app module and get the functions
+                import app as app_module
+                start_payment_session = getattr(app_module, 'start_payment_session', None)
+                update_payment_step = getattr(app_module, 'update_payment_step', None)
+                end_payment_session = getattr(app_module, 'end_payment_session', None)
+                
+                print(f"🔍 Payment session functions imported: start={start_payment_session is not None}, update={update_payment_step is not None}, end={end_payment_session is not None}")
+                
+            except Exception as e:
+                print(f"⚠️ Could not import payment session functions: {e}")
+                start_payment_session = lambda *args: print("🔍 start_payment_session called but not available")
+                update_payment_step = lambda *args: print("🔍 update_payment_step called but not available")
+                end_payment_session = lambda *args: print("🔍 end_payment_session called but not available")
             
             # Extract what we have from the conversation
             reservation_number = args.get('reservation_number')
             cardholder_name = args.get('cardholder_name')
+            phone_number = args.get('phone_number')
+            
+            # Get call ID for payment session tracking
+            call_id = raw_data.get('call_id', 'unknown') if raw_data else 'unknown'
+            
+            # Payment step tracking - check what step we're on
+            payment_step = args.get('payment_step', 'start')
             card_number = args.get('card_number')
-            expiry_date = args.get('expiry_date')
+            expiry_month = args.get('expiry_month')
+            expiry_year = args.get('expiry_year')
             cvv = args.get('cvv')
             zip_code = args.get('zip_code')
             
@@ -498,237 +535,11 @@ class RestaurantReservationSkill(SkillBase):
                     from number_utils import extract_reservation_number_from_text
                     
                     # First, try to extract from the most recent user messages (last 5 messages)
-                    # This helps prioritize the reservation number the user just mentioned
                     recent_user_messages = []
                     for entry in reversed(call_log):
                         if entry.get('role') == 'user' and entry.get('content'):
                             recent_user_messages.append(entry.get('content', ''))
-                            if len(recent_user_messages) >= 5:  # Look at last 5 user messages
-                                break
-                    
-                    # Try each recent message individually, starting with the most recent
-                    # But skip messages that are clearly about credit card information
-                    for message in recent_user_messages:
-                        # Skip messages that are clearly credit card related
-                        message_lower = message.lower()
-                        if any(phrase in message_lower for phrase in [
-                            'card number', 'credit card', 'expiration', 'expiry', 'cvv', 'security code',
-                            'zip code', 'postal code', 'billing', 'four two four', 'zero four three'
-                        ]):
-                            print(f"🔍 Skipping credit card related message: '{message}'")
-                            continue
-                        
-                        # Skip very short messages that are likely responses to prompts
-                        if len(message.strip()) < 10:
-                            print(f"🔍 Skipping short message: '{message}'")
-                            continue
-                        
-                        reservation_number = extract_reservation_number_from_text(message)
-                        if reservation_number:
-                            print(f"🔍 Extracted reservation number from recent message: {reservation_number}")
-                            print(f"🔍 Message: '{message}'")
-                            break
-                    
-                    # If not found in individual recent messages, try combined recent text (excluding card info)
-                    if not reservation_number:
-                        # Filter out credit card related messages
-                        filtered_messages = []
-                        for message in recent_user_messages:
-                            message_lower = message.lower()
-                            if not any(phrase in message_lower for phrase in [
-                                'card number', 'credit card', 'expiration', 'expiry', 'cvv', 'security code',
-                                'zip code', 'postal code', 'billing', 'four two four', 'zero four three'
-                            ]):
-                                filtered_messages.append(message)
-                        
-                        if filtered_messages:
-                            recent_text = ' '.join(filtered_messages)
-                            reservation_number = extract_reservation_number_from_text(recent_text)
-                            if reservation_number:
-                                print(f"🔍 Extracted reservation number from filtered recent text: {reservation_number}")
-                    
-                    # If still not found, try the full conversation as last resort (also filtered)
-                    if not reservation_number:
-                        all_user_messages = [entry.get('content', '') for entry in call_log if entry.get('role') == 'user']
-                        # Filter out credit card related messages
-                        filtered_all_messages = []
-                        for message in all_user_messages:
-                            message_lower = message.lower()
-                            if not any(phrase in message_lower for phrase in [
-                                'card number', 'credit card', 'expiration', 'expiry', 'cvv', 'security code',
-                                'zip code', 'postal code', 'billing', 'four two four', 'zero four three'
-                            ]):
-                                filtered_all_messages.append(message)
-                        
-                        if filtered_all_messages:
-                            conversation_text = ' '.join(filtered_all_messages)
-                            reservation_number = extract_reservation_number_from_text(conversation_text)
-                            if reservation_number:
-                                print(f"🔍 Extracted reservation number from filtered full conversation: {reservation_number}")
-                    
-                    if reservation_number:
-                        print(f"🔍 Final extracted reservation number: {reservation_number}")
-                
-                # Extract cardholder name from conversation - improved logic
-                if not cardholder_name:
-                    # Look for cardholder name in recent conversation
-                    for entry in reversed(call_log):
-                        if entry.get('role') == 'user':
-                            content = entry.get('content', '').strip()
-                            # Check if this looks like a name response (not a reservation number or other info)
-                            if (content and 
-                                not content.lower().startswith(('reservation', 'my reservation', 'number', 'yes', 'no', 'can i', 'i want', 'i need', 'i just', 'i already', 'i told')) and
-                                not re.match(r'^[\d\s]+$', content) and  # Not just numbers
-                                len(content.split()) >= 2 and  # At least first and last name
-                                len(content) < 50 and  # Reasonable name length
-                                not any(word in content.lower() for word in ['payment', 'pay', 'bill', 'card', 'credit', 'gave', 'told', 'said']) and  # Not payment-related keywords or references
-                                not any(word in content.lower() for word in ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'zero']) and  # Not spoken numbers
-                                # Must look like an actual name (contains alphabetic characters and common name patterns)
-                                re.search(r'^[A-Za-z]+ [A-Za-z]+', content) and  # First Last name pattern
-                                not any(phrase in content.lower() for phrase in ['you', 'it', 'that', 'this', 'already', 'before'])):  # Not references to previous statements
-                                cardholder_name = content
-                                print(f"🔍 Extracted cardholder name from conversation: {cardholder_name}")
-                                break
-            
-            # Step 1: Check if we have reservation number
-            if not reservation_number:
-                message = (
-                    "I'd be happy to help you pay your bill! First, I'll need your reservation number. "
-                    "It's a 6-digit number that was provided when you made your reservation. "
-                    "What's your reservation number?"
-                )
-                from number_utils import numbers_to_words
-                message = numbers_to_words(message)
-                return SwaigFunctionResult(message)
-            
-            # Step 2: Look up the reservation to get bill amount
-            total_bill = 0.0  # Initialize outside try block
-            reservation = None  # Initialize outside try block
-            
-            try:
-                import sys
-                import os
-                parent_dir = os.path.dirname(os.path.dirname(__file__))
-                if parent_dir not in sys.path:
-                    sys.path.insert(0, parent_dir)
-                
-                from app import app
-                from models import Reservation, Order
-                
-                with app.app_context():
-                    reservation = Reservation.query.filter_by(reservation_number=reservation_number).first()
-                    if not reservation:
-                        message = (
-                            f"I couldn't find a reservation with number {reservation_number}. "
-                            "Could you please double-check the reservation number? "
-                            "It should be a 6-digit number."
-                        )
-                        from number_utils import numbers_to_words
-                        message = numbers_to_words(message)
-                        return SwaigFunctionResult(message)
-                    
-                    # Calculate total bill amount
-                    orders = Order.query.filter_by(reservation_id=reservation.id).all()
-                    for order in orders:
-                        total_bill += order.total_amount or 0.0
-                    
-                    # Check if already paid
-                    if reservation.payment_status == 'paid':
-                        message = (
-                            f"Great news! Your bill for reservation {reservation_number} has already been paid. "
-                            f"The total was ${total_bill:.2f}. Is there anything else I can help you with?"
-                        )
-                        from number_utils import numbers_to_words
-                        message = numbers_to_words(message)
-                        return SwaigFunctionResult(message)
-                    
-                    # If no bill amount, inform customer
-                    if total_bill <= 0:
-                        message = (
-                            f"I found your reservation for {reservation.name}, but there's no bill to pay yet. "
-                            "This might be because you haven't placed any orders, or your orders are still being prepared. "
-                            "Would you like me to check your order status instead?"
-                        )
-                        from number_utils import numbers_to_words
-                        message = numbers_to_words(message)
-                        return SwaigFunctionResult(message)
-            
-            except Exception as e:
-                print(f"❌ Error looking up reservation: {e}")
-                message = (
-                    "I'm having trouble accessing the reservation system right now. "
-                    "Please try again in a moment, or I can transfer you to our manager for assistance."
-                )
-                from number_utils import numbers_to_words
-                message = numbers_to_words(message)
-                return SwaigFunctionResult(message)
-            
-            # Step 3: Check if we have cardholder name
-            if not cardholder_name:
-                message = (
-                    f"Perfect! I found your reservation for {reservation.name}. "
-                    f"Your total bill is ${total_bill:.2f}. "
-                    "To process your payment, I'll need the name exactly as it appears on your credit card. "
-                    "Please tell me the full name on the card - first and last name."
-                )
-                from number_utils import numbers_to_words
-                message = numbers_to_words(message)
-                return SwaigFunctionResult(message)
-            
-            # Step 4: Collect card details conversationally
-            message = (
-                f"Thank you! I have your name as {cardholder_name} for the card. "
-                f"Your total bill is ${total_bill:.2f} for reservation {reservation_number}. "
-                "I'm ready to securely collect your payment information. "
-                "You'll be prompted to enter your card number, expiration date, CVV, and ZIP code using your phone keypad. "
-                "Would you like me to proceed with collecting your card details now?"
-            )
-            from number_utils import numbers_to_words
-            message = numbers_to_words(message)
-            return SwaigFunctionResult(message)
-
-        self.agent.define_tool(
-            name="get_card_details",
-            description="🚨 STEP 1 OF PAYMENT PROCESS - ALWAYS CALL THIS FIRST 🚨 Collect credit card details for payment processing. This function guides customers through providing their card information step by step before processing payment. ALWAYS call this function when customer wants to pay - NEVER call pay_reservation directly.",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "reservation_number": {"type": "string", "description": "6-digit reservation number to pay for (will be extracted from conversation if not provided)"},
-                    "cardholder_name": {"type": "string", "description": "Name on the credit card (will be requested if not provided)"},
-                    "card_number": {"type": "string", "description": "Credit card number (will be collected via secure DTMF)"},
-                    "expiry_date": {"type": "string", "description": "Card expiration date MM/YY (will be collected via secure DTMF)"},
-                    "cvv": {"type": "string", "description": "Card CVV/security code (will be collected via secure DTMF)"},
-                    "zip_code": {"type": "string", "description": "Billing ZIP code (will be collected via secure DTMF)"}
-                },
-                "required": []  # No required fields - function will collect information step by step
-            },
-            handler=_get_card_details_handler
-        )
-
-        # Register the payment processing tool
-        def _pay_reservation_handler(args, raw_data):
-            """Process payment after card details have been collected via get_card_details"""
-            
-            # Extract what we have from the conversation
-            reservation_number = args.get('reservation_number')
-            cardholder_name = args.get('cardholder_name')
-            phone_number = args.get('phone_number')
-            
-            # Try to extract information from conversation if not provided
-            if not reservation_number or not cardholder_name:
-                call_log = raw_data.get('call_log', []) if raw_data else []
-                
-                # Extract reservation number from conversation (prioritize recent messages)
-                if not reservation_number:
-                    from number_utils import extract_reservation_number_from_text
-                    
-                    # First, try to extract from the most recent user messages (last 5 messages)
-                    # This helps prioritize the reservation number the user just mentioned
-                    recent_user_messages = []
-                    for entry in reversed(call_log):
-                        if entry.get('role') == 'user' and entry.get('content'):
-                            recent_user_messages.append(entry.get('content', ''))
-                            if len(recent_user_messages) >= 5:  # Look at last 5 user messages
+                            if len(recent_user_messages) >= 5:
                                 break
                     
                     # Try each recent message individually, starting with the most recent
@@ -736,30 +547,15 @@ class RestaurantReservationSkill(SkillBase):
                         reservation_number = extract_reservation_number_from_text(message)
                         if reservation_number:
                             print(f"🔍 Extracted reservation number from recent message: {reservation_number}")
-                            print(f"🔍 Message: '{message}'")
                             break
-                    
-                    # If not found in individual recent messages, try combined recent text
-                    if not reservation_number:
-                        recent_text = ' '.join(recent_user_messages)
-                        reservation_number = extract_reservation_number_from_text(recent_text)
-                        if reservation_number:
-                            print(f"🔍 Extracted reservation number from combined recent text: {reservation_number}")
-                    
-                    # If still not found, try the full conversation as last resort
-                    if not reservation_number:
-                        conversation_text = ' '.join([entry.get('content', '') for entry in call_log if entry.get('role') == 'user'])
-                        reservation_number = extract_reservation_number_from_text(conversation_text)
-                        if reservation_number:
-                            print(f"🔍 Extracted reservation number from full conversation: {reservation_number}")
                     
                     if reservation_number:
                         print(f"🔍 Final extracted reservation number: {reservation_number}")
                 
                 # Extract cardholder name from conversation - enhanced logic
                 if not cardholder_name:
-                    # Look for cardholder name in recent conversation
-                    for entry in reversed(call_log):
+                    # Look for cardholder name in ALL conversation history (not just recent)
+                    for entry in call_log:  # Check all entries, not just reversed
                         if entry.get('role') == 'user':
                             content = entry.get('content', '').strip()
                             
@@ -779,14 +575,26 @@ class RestaurantReservationSkill(SkillBase):
                                 not re.match(r'^[\d\s]+$', content) and  # Not just numbers
                                 len(content.split()) >= 2 and  # At least first and last name
                                 len(content) < 50 and  # Reasonable name length
-                                not any(word in content.lower() for word in ['payment', 'pay', 'bill', 'card', 'credit', 'gave', 'told', 'said']) and  # Not payment-related keywords or references
-                                not any(word in content.lower() for word in ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'zero']) and  # Not spoken numbers
-                                # Must look like an actual name (contains alphabetic characters and common name patterns)
+                                not any(word in content.lower() for word in ['payment', 'pay', 'bill', 'card', 'credit', 'gave', 'told', 'said']) and
+                                not any(word in content.lower() for word in ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'zero']) and
                                 re.search(r'^[A-Za-z]+ [A-Za-z]+', content) and  # First Last name pattern
-                                not any(phrase in content.lower() for phrase in ['you', 'it', 'that', 'this', 'already', 'before'])):  # Not references to previous statements
+                                not any(phrase in content.lower() for phrase in ['you', 'it', 'that', 'this', 'already', 'before'])):
                                 cardholder_name = content
                                 print(f"🔍 Extracted cardholder name from conversation: {cardholder_name}")
                                 break
+                    
+                    # Also check assistant messages for previously confirmed names
+                    if not cardholder_name:
+                        for entry in call_log:
+                            if entry.get('role') == 'assistant':
+                                content = entry.get('content', '').strip()
+                                # Look for "I have your name as X" pattern
+                                name_pattern = r'I have your name as ([A-Za-z]+ [A-Za-z]+)'
+                                match = re.search(name_pattern, content, re.IGNORECASE)
+                                if match:
+                                    cardholder_name = match.group(1).strip()
+                                    print(f"🔍 Extracted cardholder name from assistant message: {cardholder_name}")
+                                    break
             
             # Get caller's phone number if not provided
             if not phone_number:
@@ -802,7 +610,7 @@ class RestaurantReservationSkill(SkillBase):
                     phone_number = self._normalize_phone_number(caller_phone)
                     print(f"🔍 Using caller ID for SMS receipt: {phone_number}")
             
-            # Check if we have the required information
+            # Step 1: Check if we have the required basic information
             if not reservation_number:
                 message = (
                     "I need your reservation number to process the payment. "
@@ -821,49 +629,328 @@ class RestaurantReservationSkill(SkillBase):
                 message = numbers_to_words(message)
                 return SwaigFunctionResult(message)
             
-            # Process the payment using SignalWire Pay
-            try:
-                # Use the SignalWire Pay integration
-                from swaig_agents import pay_reservation_by_phone
-                result = pay_reservation_by_phone(
-                    reservation_number=reservation_number,
-                    cardholder_name=cardholder_name,
-                    phone_number=phone_number
-                )
-                
-                if result.get('success'):
-                    # Check if we have a SWML result to execute
-                    swml_result = result.get('swml_result')
-                    if swml_result:
-                        # Return the SWML result to execute payment collection
-                        return swml_result
+            # Start payment session once we have basic info
+            if reservation_number and cardholder_name:
+                try:
+                    if start_payment_session:
+                        start_payment_session(call_id, reservation_number)
+                        print(f"🔒 Payment session started for call {call_id}, reservation {reservation_number}")
                     else:
-                        # Fallback message if no SWML result
-                        amount = result.get('amount', 0)
-                        message = (
-                            f"Excellent! I'm now processing your payment for ${amount:.2f} "
-                            f"for reservation {reservation_number}. "
-                            "Please have your credit card ready. You'll be prompted to enter your card details. "
-                            "Once the payment is complete, I'll send a receipt to your phone."
-                        )
-                        from number_utils import numbers_to_words
-                        message = numbers_to_words(message)
-                        return SwaigFunctionResult(message)
-                else:
-                    error_msg = result.get('error', 'Unknown error occurred')
+                        print(f"⚠️ start_payment_session function not available")
+                except Exception as e:
+                    print(f"❌ Error starting payment session: {e}")
+            
+            # Helper function to extract numbers from voice input
+            def extract_numbers_from_voice(call_log, expected_length=None):
+                """Extract numbers from recent voice input, handling spoken digits"""
+                if not call_log:
+                    return None
+                
+                # Look at the most recent user message
+                for entry in reversed(call_log):
+                    if entry.get('role') == 'user':
+                        content = entry.get('content', '').strip().lower()
+                        if not content:
+                            continue
+                        
+                        # Convert spoken numbers to digits
+                        number_words = {
+                            'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
+                            'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9'
+                        }
+                        
+                        # Extract digits from the content
+                        digits = []
+                        words = content.split()
+                        
+                        for word in words:
+                            # Remove punctuation
+                            clean_word = ''.join(c for c in word if c.isalnum())
+                            
+                            # Check if it's a number word
+                            if clean_word in number_words:
+                                digits.append(number_words[clean_word])
+                            # Check if it's already a digit
+                            elif clean_word.isdigit() and len(clean_word) == 1:
+                                digits.append(clean_word)
+                        
+                        # If we found digits, join them
+                        if digits:
+                            result = ''.join(digits)
+                            # Validate length if expected
+                            if expected_length and len(result) != expected_length:
+                                print(f"🔍 Extracted {len(result)} digits but expected {expected_length}: {result}")
+                                return None
+                            print(f"🔍 Extracted numbers from voice: {result}")
+                            return result
+                        
+                        # Also try to extract consecutive digits from the text
+                        import re
+                        digit_match = re.search(r'\d+', content)
+                        if digit_match:
+                            result = digit_match.group()
+                            if expected_length and len(result) != expected_length:
+                                print(f"🔍 Found digits {result} but expected length {expected_length}")
+                                return None
+                            print(f"🔍 Extracted consecutive digits: {result}")
+                            return result
+                        
+                        break
+                
+                return None
+            
+            # Step 2: Collect card details step by step to avoid number confusion
+            call_log = raw_data.get('call_log', []) if raw_data else []
+            
+            if payment_step == 'start' or not card_number:
+                # Try to extract card number from recent input
+                extracted_card = extract_numbers_from_voice(call_log, 16)
+                if extracted_card and len(extracted_card) == 16:
+                    # Card number collected, move to next step
+                    print(f"🔍 Card number collected: {extracted_card[:4]}****{extracted_card[-4:]}")
                     message = (
-                        f"I'm sorry, but there was an issue processing your payment: {error_msg}. "
-                        "Please try again, or I can transfer you to our manager for assistance."
+                        f"Thank you! I have your card number ending in {extracted_card[-4:]}. "
+                        "Next, I need the expiration month. Please say the month as a number. "
+                        "For example, for January say 'one', for December say 'twelve'."
                     )
                     from number_utils import numbers_to_words
                     message = numbers_to_words(message)
                     return SwaigFunctionResult(message)
-                    
-            except Exception as e:
-                print(f"❌ Error processing payment: {e}")
+                else:
+                    # Ask for card number
+                    message = (
+                        f"Perfect! I have your name as {cardholder_name} for reservation {reservation_number}. "
+                        "Now I'll collect your card details step by step to ensure accuracy. "
+                        "First, please say your 16-digit credit card number, one digit at a time. "
+                        "For example, if your card number is 1234, say 'one two three four'."
+                    )
+                    from number_utils import numbers_to_words
+                    message = numbers_to_words(message)
+                    return SwaigFunctionResult(message)
+            
+            elif payment_step == 'card_number' or (card_number and not expiry_month):
+                # Try to extract expiry month from recent input
+                extracted_month = extract_numbers_from_voice(call_log)
+                if extracted_month and extracted_month.isdigit():
+                    month_num = int(extracted_month)
+                    if 1 <= month_num <= 12:
+                        print(f"🔍 Expiry month collected: {month_num}")
+                        message = (
+                            f"Got it, expiration month {month_num}. "
+                            "Now I need the expiration year. Please say the last two digits of the year. "
+                            "For example, for 2025 say 'two five', for 2026 say 'two six'."
+                        )
+                        from number_utils import numbers_to_words
+                        message = numbers_to_words(message)
+                        return SwaigFunctionResult(message)
+                
+                # Ask for expiry month
                 message = (
-                    "I'm having trouble processing payments right now. "
-                    "Please try again in a moment, or I can transfer you to our manager who can help you complete the payment."
+                    f"Thank you! I have your card number ending in {card_number[-4:] if card_number and len(card_number) >= 4 else 'XXXX'}. "
+                    "Next, I need the expiration month. Please say the month as a number. "
+                    "For example, for January say 'one', for December say 'twelve'."
+                )
+                from number_utils import numbers_to_words
+                message = numbers_to_words(message)
+                return SwaigFunctionResult(message)
+            
+            elif payment_step == 'expiry_month' or (expiry_month and not expiry_year):
+                # Try to extract expiry year from recent input
+                extracted_year = extract_numbers_from_voice(call_log, 2)
+                if extracted_year and len(extracted_year) == 2 and extracted_year.isdigit():
+                    year_num = int(extracted_year)
+                    if 25 <= year_num <= 35:  # Reasonable range for card expiry
+                        print(f"🔍 Expiry year collected: {year_num}")
+                        message = (
+                            f"Perfect, expiration {expiry_month}/{year_num}. "
+                            "Now I need the three-digit security code on the back of your card. "
+                            "Please say the three digits one at a time. For example, for 123 say 'one two three'."
+                        )
+                        from number_utils import numbers_to_words
+                        message = numbers_to_words(message)
+                        return SwaigFunctionResult(message)
+                
+                # Ask for expiry year
+                message = (
+                    f"Got it, expiration month {expiry_month}. "
+                    "Now I need the expiration year. Please say the last two digits of the year. "
+                    "For example, for 2025 say 'two five', for 2026 say 'two six'."
+                )
+                from number_utils import numbers_to_words
+                message = numbers_to_words(message)
+                return SwaigFunctionResult(message)
+            
+            elif payment_step == 'expiry_year' or (expiry_year and not cvv):
+                # Try to extract CVV from recent input
+                extracted_cvv = extract_numbers_from_voice(call_log, 3)
+                if extracted_cvv and len(extracted_cvv) == 3 and extracted_cvv.isdigit():
+                    print(f"🔍 CVV collected: ***")
+                    message = (
+                        "Great! Last step - I need your billing ZIP code. "
+                        "Please say the five digits of your ZIP code one at a time. "
+                        "For example, for 12345 say 'one two three four five'."
+                    )
+                    from number_utils import numbers_to_words
+                    message = numbers_to_words(message)
+                    return SwaigFunctionResult(message)
+                
+                # Ask for CVV
+                message = (
+                    f"Perfect, expiration {expiry_month}/{expiry_year}. "
+                    "Now I need the three-digit security code on the back of your card. "
+                    "Please say the three digits one at a time. For example, for 123 say 'one two three'."
+                )
+                from number_utils import numbers_to_words
+                message = numbers_to_words(message)
+                return SwaigFunctionResult(message)
+            
+            elif payment_step == 'cvv' or (cvv and not zip_code):
+                # Try to extract ZIP code from recent input
+                extracted_zip = extract_numbers_from_voice(call_log, 5)
+                if extracted_zip and len(extracted_zip) == 5 and extracted_zip.isdigit():
+                    print(f"🔍 ZIP code collected: {extracted_zip}")
+                    # All details collected, proceed to payment processing
+                    zip_code = extracted_zip
+                    # Fall through to payment processing
+                else:
+                    # Ask for ZIP code
+                    message = (
+                        "Great! Last step - I need your billing ZIP code. "
+                        "Please say the five digits of your ZIP code one at a time. "
+                        "For example, for 12345 say 'one two three four five'."
+                    )
+                    from number_utils import numbers_to_words
+                    message = numbers_to_words(message)
+                    return SwaigFunctionResult(message)
+            
+            # Step 3: All details collected, process payment
+            # Check if we have all required details from the conversation or parameters
+            if not card_number:
+                card_number = extract_numbers_from_voice(call_log, 16)
+            if not expiry_month:
+                extracted_month = extract_numbers_from_voice(call_log)
+                if extracted_month and extracted_month.isdigit():
+                    month_num = int(extracted_month)
+                    if 1 <= month_num <= 12:
+                        expiry_month = str(month_num)
+            if not expiry_year:
+                extracted_year = extract_numbers_from_voice(call_log, 2)
+                if extracted_year and len(extracted_year) == 2:
+                    expiry_year = extracted_year
+            if not cvv:
+                cvv = extract_numbers_from_voice(call_log, 3)
+            if not zip_code:
+                zip_code = extract_numbers_from_voice(call_log, 5)
+            
+            # Proceed with payment if we have all details
+            if card_number and expiry_month and expiry_year and cvv and zip_code:
+                try:
+                    # Lookup reservation to get amount
+                    from models import Reservation, Order
+                    reservation = Reservation.query.filter_by(reservation_number=reservation_number).first()
+                    if not reservation:
+                        message = "I couldn't find that reservation. Please check the reservation number and try again."
+                        from number_utils import numbers_to_words
+                        message = numbers_to_words(message)
+                        return SwaigFunctionResult(message)
+                    
+                    # Calculate total amount
+                    total_amount = 0.0
+                    orders = Order.query.filter_by(reservation_id=reservation.id).all()
+                    for order in orders:
+                        total_amount += order.total_amount or 0.0
+                    
+                    if total_amount <= 0:
+                        message = "There's no bill to pay for this reservation yet. Please place your order first."
+                        from number_utils import numbers_to_words
+                        message = numbers_to_words(message)
+                        return SwaigFunctionResult(message)
+                    
+                    # Process payment with collected details
+                    message = (
+                        f"Excellent! I have all your card details. "
+                        f"Processing payment of ${total_amount:.2f} for reservation {reservation_number}. "
+                        f"Card ending in {card_number[-4:] if len(card_number) >= 4 else card_number}, "
+                        f"expires {expiry_month}/{expiry_year}. "
+                        "Please hold while I process your payment..."
+                    )
+                    from number_utils import numbers_to_words
+                    message = numbers_to_words(message)
+                    
+                    # Here you would integrate with actual payment processing
+                    # For now, we'll simulate success and update the database
+                    
+                    # Update reservation payment status
+                    import uuid
+                    confirmation_number = f"CONF-{uuid.uuid4().hex[:8].upper()}"
+                    
+                    reservation.payment_status = 'paid'
+                    reservation.payment_amount = total_amount
+                    reservation.confirmation_number = confirmation_number
+                    
+                    # Update all orders as paid
+                    for order in orders:
+                        order.payment_status = 'paid'
+                        order.payment_amount = order.total_amount
+                        order.confirmation_number = confirmation_number
+                    
+                    from models import db
+                    db.session.commit()
+                    
+                    # End payment session on success
+                    try:
+                        if end_payment_session:
+                            end_payment_session(call_id)
+                            print(f"🔓 Payment session ended for call {call_id}")
+                        else:
+                            print(f"⚠️ end_payment_session function not available")
+                    except Exception as e:
+                        print(f"❌ Error ending payment session: {e}")
+                    
+                    success_message = (
+                        f"Payment successful! Your confirmation number is {confirmation_number}. "
+                        f"I've charged ${total_amount:.2f} to your card ending in {card_number[-4:] if len(card_number) >= 4 else card_number}. "
+                        "I'll send you an SMS receipt with all the details. Thank you for choosing Bobby's Table!"
+                    )
+                    from number_utils import numbers_to_words
+                    success_message = numbers_to_words(success_message)
+                    return SwaigFunctionResult(success_message)
+                    
+                except Exception as e:
+                    print(f"❌ Error processing payment: {e}")
+                    # End payment session on error
+                    try:
+                        if end_payment_session:
+                            end_payment_session(call_id)
+                            print(f"🔓 Payment session ended (error) for call {call_id}")
+                        else:
+                            print(f"⚠️ end_payment_session function not available")
+                    except Exception as e:
+                        print(f"❌ Error ending payment session: {e}")
+                    message = (
+                        "I'm having trouble processing your payment right now. "
+                        "Please try again in a moment, or I can transfer you to our manager for assistance."
+                    )
+                    from number_utils import numbers_to_words
+                    message = numbers_to_words(message)
+                    return SwaigFunctionResult(message)
+            else:
+                # We don't have all the required details yet
+                missing_details = []
+                if not card_number:
+                    missing_details.append("card number")
+                if not expiry_month:
+                    missing_details.append("expiration month")
+                if not expiry_year:
+                    missing_details.append("expiration year")
+                if not cvv:
+                    missing_details.append("security code")
+                if not zip_code:
+                    missing_details.append("ZIP code")
+                
+                message = (
+                    f"I still need your {', '.join(missing_details)}. "
+                    "Let's continue step by step. Please provide the next piece of information."
                 )
                 from number_utils import numbers_to_words
                 message = numbers_to_words(message)
@@ -871,15 +958,21 @@ class RestaurantReservationSkill(SkillBase):
 
         self.agent.define_tool(
             name="pay_reservation",
-            description="🚨 STEP 2 OF PAYMENT PROCESS ONLY 🚨 Process payment for a reservation using SignalWire Pay and Stripe. CRITICAL: This function should ONLY be called AFTER get_card_details has been called first and user has confirmed payment. NEVER call this function directly when customer asks to pay - always call get_card_details first.",
+            description="PAYMENT FUNCTION - Process payment for a reservation with step-by-step card detail collection. CRITICAL: Use this function ONLY for payment processing. When customers provide card details (like 'four two four two...'), continue calling this function. DO NOT call get_order_status or other functions during payment. This function handles the complete payment flow: reservation lookup → cardholder name → card number → expiry → CVV → ZIP → payment processing.",
             parameters={
                 "type": "object",
                 "properties": {
-                    "reservation_number": {"type": "string", "description": "6-digit reservation number to pay for (required)"},
-                    "cardholder_name": {"type": "string", "description": "Name on the credit card (required)"},
-                    "phone_number": {"type": "string", "description": "SMS number for receipt (will use caller ID if not provided)"}
+                    "reservation_number": {"type": "string", "description": "6-digit reservation number to pay for"},
+                    "cardholder_name": {"type": "string", "description": "Name on the credit card"},
+                    "phone_number": {"type": "string", "description": "SMS number for receipt (will use caller ID if not provided)"},
+                    "payment_step": {"type": "string", "description": "Current step in payment process: start, card_number, expiry_month, expiry_year, cvv, zip_code"},
+                    "card_number": {"type": "string", "description": "16-digit credit card number (collected step by step)"},
+                    "expiry_month": {"type": "string", "description": "Card expiration month (1-12)"},
+                    "expiry_year": {"type": "string", "description": "Card expiration year (last 2 digits)"},
+                    "cvv": {"type": "string", "description": "3-digit security code"},
+                    "zip_code": {"type": "string", "description": "5-digit billing ZIP code"}
                 },
-                "required": ["reservation_number", "cardholder_name"]  # These are required for payment processing
+                "required": []  # No required fields - function will collect information step by step
             },
             handler=_pay_reservation_handler
         )
@@ -1679,16 +1772,35 @@ class RestaurantReservationSkill(SkillBase):
                 response_format = args.get('format', 'text').lower()
                 
                 # Auto-fill search criteria from caller information if not provided
-                if not any(args.get(key) for key in ['name', 'first_name', 'last_name', 'reservation_id', 'reservation_number', 'date', 'time', 'party_size', 'email']):
-                    # Extract reservation number from conversation (highest priority)
+                if not any(args.get(key) for key in ['name', 'first_name', 'last_name', 'reservation_id', 'reservation_number', 'confirmation_number', 'date', 'time', 'party_size', 'email']):
+                    # Extract information from conversation (highest priority)
                     call_log = raw_data.get('call_log', []) if raw_data else []
                     reservation_number = None
+                    confirmation_number = None
                     customer_name = None
                     
                     # Process call log in reverse order to prioritize recent messages
                     for entry in reversed(call_log):
                         if entry.get('role') == 'user' and entry.get('content'):
                             content = entry['content'].lower()
+                            
+                            # Look for confirmation numbers first (highest priority)
+                            import re
+                            conf_patterns = [
+                                r'CONF[-\s]*([A-Z0-9]{8})',
+                                r'confirmation\s+(?:number\s+)?CONF[-\s]*([A-Z0-9]{8})',
+                                r'confirmation\s+(?:number\s+)?([A-Z0-9]{8})',
+                                r'conf\s+([A-Z0-9]{8})'
+                            ]
+                            for pattern in conf_patterns:
+                                match = re.search(pattern, entry['content'], re.IGNORECASE)
+                                if match:
+                                    confirmation_number = f"CONF-{match.group(1)}"
+                                    print(f"🔄 Extracted confirmation number from conversation: {confirmation_number}")
+                                    break
+                            
+                            if confirmation_number:
+                                break
                             
                             # Look for reservation numbers using improved extraction
                             try:
@@ -1713,20 +1825,29 @@ class RestaurantReservationSkill(SkillBase):
                             elif 'smith family' in content or 'smith' in content:
                                 customer_name = 'Smith Family'
                     
-                    # Use extracted information for search (prioritize reservation number)
-                    if reservation_number:
+                    # Use extracted information for search (prioritize confirmation number, then reservation number)
+                    if confirmation_number:
+                        args['confirmation_number'] = confirmation_number
+                        print(f"🔄 Auto-filled confirmation number from conversation: {confirmation_number}")
+                    elif reservation_number:
                         args['reservation_number'] = reservation_number
                         print(f"🔄 Auto-filled reservation number from conversation: {reservation_number}")
                     if customer_name:
                         args['name'] = customer_name
                         print(f"🔄 Auto-filled name from conversation: {customer_name}")
                 
-                # Build search criteria - prioritize reservation ID/number
+                # Build search criteria - prioritize confirmation number, then reservation ID/number
                 search_criteria = []
                 query = Reservation.query
                 
-                # Priority 1: Reservation ID or Number (most specific)
-                if args.get('reservation_id'):
+                # Priority 1: Confirmation Number (most specific for paid reservations)
+                if args.get('confirmation_number'):
+                    query = query.filter(Reservation.confirmation_number == args['confirmation_number'])
+                    search_criteria.append(f"confirmation number {args['confirmation_number']}")
+                    print(f"🔍 Searching by confirmation number: {args['confirmation_number']}")
+                
+                # Priority 2: Reservation ID or Number (most specific)
+                elif args.get('reservation_id'):
                     query = query.filter(Reservation.id == args['reservation_id'])
                     search_criteria.append(f"reservation ID {args['reservation_id']}")
                     print(f"🔍 Searching by reservation ID: {args['reservation_id']}")
@@ -2087,6 +2208,11 @@ class RestaurantReservationSkill(SkillBase):
                         message += f"Status: {reservation.status}. Reservation number: {reservation.reservation_number}. "
                         message += f"Total bill: ${total_bill:.2f}. "
                         message += f"Bill paid: {'Yes' if paid else 'No'}. "
+                        
+                        # Add confirmation number if payment is complete
+                        if paid and reservation.confirmation_number:
+                            message += f"Your payment confirmation number is {reservation.confirmation_number}. "
+                        
                         if party_orders:
                             message += "Party orders: "
                             for po in party_orders:

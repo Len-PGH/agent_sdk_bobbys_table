@@ -1463,33 +1463,24 @@ def swaig_receptionist():
                         'required': []
                     }
                 },
-                'get_card_details': {
-                    'function': 'get_card_details',
-                    'purpose': 'Collect credit card details for payment processing. This function guides customers through providing their card information step by step before processing payment.',
-                    'argument': {
-                        'type': 'object',
-                        'properties': {
-                            'reservation_number': {'type': 'string', 'description': '6-digit reservation number to pay for (will be extracted from conversation if not provided)'},
-                            'cardholder_name': {'type': 'string', 'description': 'Name on the credit card (will be requested if not provided)'},
-                            'card_number': {'type': 'string', 'description': 'Credit card number (will be collected via secure DTMF)'},
-                            'expiry_date': {'type': 'string', 'description': 'Card expiration date MM/YY (will be collected via secure DTMF)'},
-                            'cvv': {'type': 'string', 'description': 'Card CVV/security code (will be collected via secure DTMF)'},
-                            'zip_code': {'type': 'string', 'description': 'Billing ZIP code (will be collected via secure DTMF)'}
-                        },
-                        'required': []
-                    }
-                },
+
                 'pay_reservation': {
                     'function': 'pay_reservation',
-                    'purpose': 'Process payment for a reservation using SignalWire Pay and Stripe. This function should only be called after get_card_details has collected all necessary information and user has confirmed payment.',
+                    'purpose': 'Process payment for a reservation with step-by-step card detail collection to avoid number confusion. Guides customers through providing each card detail separately.',
                     'argument': {
                         'type': 'object',
                         'properties': {
-                            'reservation_number': {'type': 'string', 'description': '6-digit reservation number to pay for (required)'},
-                            'cardholder_name': {'type': 'string', 'description': 'Name on the credit card (required)'},
-                            'phone_number': {'type': 'string', 'description': 'SMS number for receipt (will use caller ID if not provided)'}
+                            'reservation_number': {'type': 'string', 'description': '6-digit reservation number to pay for'},
+                            'cardholder_name': {'type': 'string', 'description': 'Name on the credit card'},
+                            'phone_number': {'type': 'string', 'description': 'SMS number for receipt (will use caller ID if not provided)'},
+                            'payment_step': {'type': 'string', 'description': 'Current step in payment process: start, card_number, expiry_month, expiry_year, cvv, zip_code'},
+                            'card_number': {'type': 'string', 'description': '16-digit credit card number (collected step by step)'},
+                            'expiry_month': {'type': 'string', 'description': 'Card expiration month (1-12)'},
+                            'expiry_year': {'type': 'string', 'description': 'Card expiration year (last 2 digits)'},
+                            'cvv': {'type': 'string', 'description': '3-digit security code'},
+                            'zip_code': {'type': 'string', 'description': '5-digit billing ZIP code'}
                         },
-                        'required': ['reservation_number', 'cardholder_name']
+                        'required': []
                     }
                 },
                 'pay_order': {
@@ -1731,25 +1722,50 @@ def swaig_receptionist():
         print(f"   Meta Data: {meta_data}")
         print(f"   Meta Data Token: {meta_data_token}")
         
-        # Check if this function call should be blocked due to repetition
-        should_block, block_reason = should_block_function_call(ai_session_id, function_name)
-        if should_block:
-            print(f"🚫 Blocking repetitive function call: {block_reason}")
-            
-            # For get_menu, return the cached menu data
-            if function_name == 'get_menu':
-                memory = get_conversation_memory(ai_session_id)
-                if memory['menu_data']:
-                    print("📋 Returning cached menu data")
-                    # Convert SwaigFunctionResult to dict if needed
-                    cached_data = memory['menu_data']
-                    if hasattr(cached_data, 'to_dict'):
-                        cached_data = cached_data.to_dict()
-                    return jsonify(cached_data)
-            
-            return jsonify({
-                "response": f"I already have that information from our previous conversation. Let me help you with something else instead."
-            })
+        # Function blocking disabled - allow all function calls to proceed
+        # should_block, block_reason = should_block_function_call(ai_session_id, function_name)
+        # if should_block:
+        #     print(f"🚫 Blocking repetitive function call: {block_reason}")
+        #     
+        #     # For get_menu, return the cached menu data
+        #     if function_name == 'get_menu':
+        #         memory = get_conversation_memory(ai_session_id)
+        #         if memory['menu_data']:
+        #             print("📋 Returning cached menu data")
+        #             # Convert SwaigFunctionResult to dict if needed
+        #             cached_data = memory['menu_data']
+        #             if hasattr(cached_data, 'to_dict'):
+        #                 cached_data = cached_data.to_dict()
+        #             return jsonify(cached_data)
+        #     
+        #     return jsonify({
+        #         "response": f"I already have that information from our previous conversation. Let me help you with something else instead."
+        #     })
+        
+        print(f"✅ Function blocking disabled - allowing {function_name} to proceed")
+        
+        # Get call ID for payment session tracking
+        call_id = data.get('call_id', 'unknown')
+        
+        # PAYMENT FLOW PROTECTION: Prevent non-payment functions during payment
+        if is_payment_in_progress(call_id):
+            if function_name != 'pay_reservation':
+                print(f"🚫 PAYMENT PROTECTION: Blocking {function_name} during payment session {call_id}")
+                print(f"   Payment session active - only pay_reservation allowed")
+                
+                # Return a response that redirects back to payment
+                session = _payment_sessions.get(call_id, {})
+                reservation_number = session.get('reservation_number', 'your reservation')
+                
+                response_message = (
+                    f"I'm currently processing your payment for reservation {reservation_number}. "
+                    "Let's continue with the payment process. Please provide your credit card information."
+                )
+                
+                return jsonify({
+                    'response': response_message,
+                    'action': 'continue_payment'
+                })
         
         # Route to appropriate agent function using skills-based architecture
         if function_name in agent._swaig_functions:
@@ -2602,6 +2618,109 @@ def signalwire_payment_callback():
     except Exception as e:
         print(f"❌ Payment callback error: {e}")
         return jsonify({'success': False, 'error': 'Internal server error processing payment callback'}), 500
+
+# Global payment state tracking using database for persistence
+def is_payment_in_progress(call_id):
+    """Check if a payment is currently in progress for this call"""
+    try:
+        # Check if there's an active payment session in the database
+        from models import db
+        
+        # Use a simple table or cache mechanism
+        # For now, use a simple in-memory approach but with better logging
+        session_key = f"payment_session_{call_id}"
+        
+        # Check if session exists in app config (more persistent than global var)
+        if not hasattr(app, 'payment_sessions'):
+            app.payment_sessions = {}
+        
+        is_active = call_id in app.payment_sessions
+        print(f"🔍 Checking payment session for {call_id}: {'ACTIVE' if is_active else 'INACTIVE'}")
+        return is_active
+        
+    except Exception as e:
+        print(f"❌ Error checking payment session: {e}")
+        return False
+
+def start_payment_session(call_id, reservation_number):
+    """Start tracking a payment session"""
+    try:
+        if not hasattr(app, 'payment_sessions'):
+            app.payment_sessions = {}
+        
+        app.payment_sessions[call_id] = {
+            'reservation_number': reservation_number,
+            'started_at': datetime.now(),
+            'step': 'started'
+        }
+        print(f"🔒 Started payment session for call {call_id}, reservation {reservation_number}")
+        print(f"🔍 Total active payment sessions: {len(app.payment_sessions)}")
+        
+    except Exception as e:
+        print(f"❌ Error starting payment session: {e}")
+
+def update_payment_step(call_id, step):
+    """Update the current payment step"""
+    try:
+        if not hasattr(app, 'payment_sessions'):
+            app.payment_sessions = {}
+        
+        if call_id in app.payment_sessions:
+            app.payment_sessions[call_id]['step'] = step
+            print(f"🔄 Payment session {call_id} updated to step: {step}")
+        else:
+            print(f"⚠️ Payment session {call_id} not found for step update")
+            
+    except Exception as e:
+        print(f"❌ Error updating payment session: {e}")
+
+def end_payment_session(call_id):
+    """End a payment session"""
+    try:
+        if not hasattr(app, 'payment_sessions'):
+            app.payment_sessions = {}
+        
+        if call_id in app.payment_sessions:
+            session = app.payment_sessions.pop(call_id)
+            print(f"✅ Ended payment session for call {call_id}")
+            print(f"🔍 Remaining active payment sessions: {len(app.payment_sessions)}")
+            return session
+        else:
+            print(f"⚠️ Payment session {call_id} not found for ending")
+            return None
+            
+    except Exception as e:
+        print(f"❌ Error ending payment session: {e}")
+        return None
+
+def cleanup_old_payment_sessions():
+    """Clean up payment sessions older than 30 minutes"""
+    try:
+        if not hasattr(app, 'payment_sessions'):
+            app.payment_sessions = {}
+        
+        cutoff = datetime.now() - timedelta(minutes=30)
+        expired_sessions = [
+            call_id for call_id, session in app.payment_sessions.items()
+            if session.get('started_at', datetime.now()) < cutoff
+        ]
+        for call_id in expired_sessions:
+            app.payment_sessions.pop(call_id, None)
+            print(f"🧹 Cleaned up expired payment session: {call_id}")
+            
+    except Exception as e:
+        print(f"❌ Error cleaning up payment sessions: {e}")
+
+@app.route('/debug/payment-sessions', methods=['GET'])
+def debug_payment_sessions():
+    """Debug endpoint to check payment sessions"""
+    if not hasattr(app, 'payment_sessions'):
+        app.payment_sessions = {}
+    
+    return jsonify({
+        'payment_sessions': app.payment_sessions,
+        'session_count': len(app.payment_sessions)
+    })
 
 if __name__ == '__main__':
     print("🍽️  Starting Bobby's Table Restaurant System")

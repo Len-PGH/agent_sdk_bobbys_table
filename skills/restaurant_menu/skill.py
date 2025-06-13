@@ -409,7 +409,7 @@ class RestaurantMenuSkill(SkillBase):
         # Get order status tool
         self.agent.define_tool(
             name="get_order_status",
-            description="Check the status of an order",
+            description="Check the status of an order (NOT for payment processing). DO NOT use this function during payment flows when customers are providing card details. Use pay_reservation for payment processing only.",
             parameters={
                 "type": "object",
                 "properties": {
