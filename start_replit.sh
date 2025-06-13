@@ -13,6 +13,10 @@ if [ ! -f "init_db.py" ]; then
     exit 1
 fi
 
+# Initialize the database
+echo "Running init_db.py to initialize the database..."
+python init_db.py
+
 # Check if init_test_data.py exists
 if [ -f "init_test_data.py" ]; then
     echo "Running init_test_data.py to load test data..."
@@ -26,12 +30,6 @@ if [ ! -f "app.py" ]; then
     echo "Error: app.py not found."
     exit 1
 fi
-
-# Initialize the database
-echo "Running init_db.py to initialize the database..."
-python init_db.py
-
-
 
 # Run the application on the correct host and port for Autoscale deployment
 echo "Starting the application..."
