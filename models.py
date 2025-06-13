@@ -19,9 +19,11 @@ class Reservation(db.Model):
     payment_intent_id = db.Column(db.String(100))  # Stripe payment intent ID
     payment_amount = db.Column(db.Float)  # Total amount paid
     payment_date = db.Column(db.DateTime)  # When payment was completed
+    confirmation_number = db.Column(db.String(20))  # Payment confirmation number
     orders = db.relationship('Order', backref='reservation', lazy=True)
 
     def to_dict(self):
+        total_bill = sum(order.total_amount or 0 for order in self.orders)
         return {
             'id': self.id,
             'reservation_number': self.reservation_number,
@@ -37,7 +39,9 @@ class Reservation(db.Model):
             'payment_intent_id': self.payment_intent_id,
             'payment_amount': self.payment_amount,
             'payment_date': self.payment_date.isoformat() if self.payment_date else None,
-            'orders': [order.to_dict() for order in self.orders]
+            'confirmation_number': self.confirmation_number,
+            'orders': [order.to_dict() for order in self.orders],
+            'total_bill': total_bill
         }
 
 class Table(db.Model):
@@ -81,6 +85,7 @@ class MenuItem(db.Model):
 class Order(db.Model):
     __tablename__ = 'orders'
     id = db.Column(db.Integer, primary_key=True)
+    order_number = db.Column(db.String(6), unique=True, nullable=False)  # 6-digit random number
     reservation_id = db.Column(db.Integer, db.ForeignKey('reservations.id'))
     table_id = db.Column(db.Integer, db.ForeignKey('tables.id'))
     person_name = db.Column(db.String(80))  # Name of the person for this order
@@ -92,12 +97,18 @@ class Order(db.Model):
     customer_phone = db.Column(db.String(20))
     customer_address = db.Column(db.Text)   # For delivery orders
     special_instructions = db.Column(db.Text)
+    payment_status = db.Column(db.String(20), default='unpaid')  # 'unpaid', 'paid', 'refunded'
+    payment_intent_id = db.Column(db.String(100))  # Stripe payment intent ID
+    payment_amount = db.Column(db.Float)  # Total amount paid
+    payment_date = db.Column(db.DateTime)  # When payment was completed
+    confirmation_number = db.Column(db.String(20))  # Payment confirmation number
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     items = db.relationship('OrderItem', backref='order', lazy=True)
 
     def to_dict(self):
         return {
             'id': self.id,
+            'order_number': self.order_number,
             'reservation_id': self.reservation_id,
             'table_id': self.table_id,
             'person_name': self.person_name,
@@ -109,6 +120,11 @@ class Order(db.Model):
             'customer_phone': self.customer_phone,
             'customer_address': self.customer_address,
             'special_instructions': self.special_instructions,
+            'payment_status': self.payment_status,
+            'payment_intent_id': self.payment_intent_id,
+            'payment_amount': self.payment_amount,
+            'payment_date': self.payment_date.isoformat() if self.payment_date else None,
+            'confirmation_number': self.confirmation_number,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'items': [item.to_dict() for item in self.items]
         }

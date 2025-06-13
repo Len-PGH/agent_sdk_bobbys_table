@@ -32,8 +32,10 @@ document.addEventListener('DOMContentLoaded', function() {
     var calendarEl = document.getElementById('calendar');
     console.log('Calendar element:', calendarEl);
     
-    // Initialize calendar
-    calendar = new FullCalendar.Calendar(calendarEl, {
+    // Only initialize calendar if the calendar element exists and FullCalendar is available
+    if (calendarEl && typeof FullCalendar !== 'undefined') {
+        // Initialize calendar
+        calendar = new FullCalendar.Calendar(calendarEl, {
         initialView: 'dayGridMonth',  // Set month view as default
         headerToolbar: {
             left: 'prev,next today',
@@ -165,14 +167,17 @@ document.addEventListener('DOMContentLoaded', function() {
         events: '/api/reservations/calendar'
     });
 
-    console.log('Rendering calendar...');
-    calendar.render();
-    console.log('Calendar rendered');
+        console.log('Rendering calendar...');
+        calendar.render();
+        console.log('Calendar rendered');
+    } else {
+        console.log('Calendar element not found or FullCalendar not available, skipping calendar initialization');
+    }
 
     // Make testModal available globally for debugging
     window.testModal = testModal;
 
-    // Schedule button event listeners
+    // Schedule button event listeners (only if elements exist)
     document.querySelectorAll('#scheduleBtn, #scheduleBtn2').forEach(function(btn) {
         btn.addEventListener('click', function() {
             const reservationModal = new bootstrap.Modal(document.getElementById('newReservationModal'));
@@ -187,40 +192,55 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 
-    document.getElementById('partySizeInput').addEventListener('input', function() {
-        renderPartyOrderForms();
-    });
-
-    // Add event listener for when the new reservation modal is shown
-    document.getElementById('newReservationModal').addEventListener('shown.bs.modal', function() {
-        fetchMenuItems();
-    });
-
-    // Handle old school reservation checkbox
-    document.getElementById('oldSchoolReservation').addEventListener('change', function() {
-        const orderSection = document.getElementById('orderSection');
-        if (this.checked) {
-            orderSection.style.display = 'none';
-        } else {
-            orderSection.style.display = 'block';
-            // Re-render party order forms when showing the section
+    // Only add event listeners if elements exist
+    const partySizeInput = document.getElementById('partySizeInput');
+    if (partySizeInput) {
+        partySizeInput.addEventListener('input', function() {
             renderPartyOrderForms();
-        }
-    });
+        });
+    }
 
-    // Handle old school reservation checkbox for edit modal
-    document.getElementById('editOldSchoolReservation').addEventListener('change', function() {
-        const editOrderSection = document.getElementById('editOrderSection');
-        if (this.checked) {
-            editOrderSection.style.display = 'none';
-        } else {
-            editOrderSection.style.display = 'block';
-            // Re-render party order forms when showing the section
-            renderEditPartyOrderForms();
-        }
-    });
+    // Add event listener for when the new reservation modal is shown (only if modal exists)
+    const newReservationModal = document.getElementById('newReservationModal');
+    if (newReservationModal) {
+        newReservationModal.addEventListener('shown.bs.modal', function() {
+            fetchMenuItems();
+        });
+    }
 
-    document.getElementById('reservationForm').addEventListener('submit', function(e) {
+    // Handle old school reservation checkbox (only if element exists)
+    const oldSchoolReservation = document.getElementById('oldSchoolReservation');
+    if (oldSchoolReservation) {
+        oldSchoolReservation.addEventListener('change', function() {
+            const orderSection = document.getElementById('orderSection');
+            if (this.checked) {
+                orderSection.style.display = 'none';
+            } else {
+                orderSection.style.display = 'block';
+                // Re-render party order forms when showing the section
+                renderPartyOrderForms();
+            }
+        });
+    }
+
+    // Handle old school reservation checkbox for edit modal (only if element exists)
+    const editOldSchoolReservation = document.getElementById('editOldSchoolReservation');
+    if (editOldSchoolReservation) {
+        editOldSchoolReservation.addEventListener('change', function() {
+            const editOrderSection = document.getElementById('editOrderSection');
+            if (this.checked) {
+                editOrderSection.style.display = 'none';
+            } else {
+                editOrderSection.style.display = 'block';
+                // Re-render party order forms when showing the section
+                renderEditPartyOrderForms();
+            }
+        });
+    }
+
+    const reservationForm = document.getElementById('reservationForm');
+    if (reservationForm) {
+        reservationForm.addEventListener('submit', function(e) {
         e.preventDefault();
         const formData = new FormData(this);
         
@@ -261,7 +281,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 alert('Error: ' + (data.error || 'Could not create reservation.'));
             }
           });
-    });
+        });
+    }
 });
 
 function showReservationDetails(event) {
@@ -349,7 +370,14 @@ function showReservationDetails(event) {
                     </div>
                 `;
             } else {
-                html += `<div class="text-muted">No party orders found.</div>`;
+                html += `
+                    <div class="text-center py-4">
+                        <i class="fas fa-utensils fa-3x text-muted mb-3"></i>
+                        <h6 class="text-muted">No party orders found</h6>
+                        <p class="text-muted small">This reservation doesn't have any pre-orders yet.</p>
+                        <p class="text-muted small">Click "Edit & Add Items" to add food and drinks to this reservation.</p>
+                    </div>
+                `;
             }
             details.innerHTML = html;
             
@@ -382,6 +410,22 @@ function updatePaymentButtons(status) {
         payBillBtn.style.display = 'inline-block';
         billPaidBtn.style.display = 'none';
     }
+}
+
+function editCurrentReservation() {
+    if (!currentReservationId) {
+        alert('No reservation selected');
+        return;
+    }
+    
+    // Close the details modal first
+    const detailsModal = bootstrap.Modal.getInstance(document.getElementById('reservationModal'));
+    if (detailsModal) {
+        detailsModal.hide();
+    }
+    
+    // Open the edit reservation modal instead of redirecting
+    editReservation(currentReservationId);
 }
 
 function renderPartyOrderForms() {
@@ -700,7 +744,9 @@ function renderEditMenuItems(personIndex, existingOrder) {
                 // Find existing quantity for this item
                 let existingQuantity = 0;
                 if (existingOrder && existingOrder.items) {
-                    const existingItem = existingOrder.items.find(orderItem => orderItem.menu_item.id === item.id);
+                    const existingItem = existingOrder.items.find(orderItem => {
+                        return orderItem.menu_item && orderItem.menu_item.id === item.id;
+                    });
                     if (existingItem) {
                         existingQuantity = existingItem.quantity;
                     }

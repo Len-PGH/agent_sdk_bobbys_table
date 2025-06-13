@@ -3,6 +3,17 @@ from models import Reservation, Table, MenuItem, Order, OrderItem
 from datetime import datetime, timedelta
 import random
 
+def generate_order_number():
+    """Generate a unique 6-digit order number"""
+    while True:
+        # Generate a 6-digit number (100000 to 999999)
+        number = str(random.randint(100000, 999999))
+        
+        # Check if this number already exists
+        existing = Order.query.filter_by(order_number=number).first()
+        if not existing:
+            return number
+
 def init_test_data():
     """Initialize the database with test data."""
     with app.app_context():
@@ -28,6 +39,7 @@ def init_test_data():
         menu_items = [
             # Starters
             MenuItem(name='Truffle Fries', description='Crispy fries tossed in truffle oil and parmesan', price=8.00, category='Starter'),
+            MenuItem(name='Buffalo Wings', description='Crispy chicken wings tossed in spicy buffalo sauce, served with celery and blue cheese', price=12.99, category='Starter'),
             MenuItem(name='Ahi Tuna Tartare', description='Fresh ahi tuna, avocado, sesame, wonton crisps', price=14.00, category='Starter'),
             MenuItem(name='Charred Octopus', description='Grilled octopus, lemon, smoked paprika aioli', price=15.00, category='Starter'),
             MenuItem(name='Heirloom Tomato Salad', description='Heirloom tomatoes, burrata, basil, olive oil', price=12.00, category='Starter'),
@@ -67,7 +79,9 @@ def init_test_data():
                 time='19:00', 
                 phone_number='+1234567890', 
                 status='confirmed',
-                special_requests='Anniversary dinner, window table preferred'
+                special_requests='Anniversary dinner, window table preferred',
+                payment_status='paid',
+                payment_amount=91.00
             ),
             Reservation(
                 reservation_number='789012', 
@@ -77,7 +91,9 @@ def init_test_data():
                 time='20:00', 
                 phone_number='+1987654321', 
                 status='confirmed',
-                special_requests='Vegetarian options needed'
+                special_requests='Vegetarian options needed',
+                payment_status='partial',
+                payment_amount=42.00
             ),
             Reservation(
                 reservation_number='345678', 
@@ -87,7 +103,8 @@ def init_test_data():
                 time='18:30', 
                 phone_number='+1122334455', 
                 status='pending',
-                special_requests='Business dinner, quiet table please'
+                special_requests='Business dinner, quiet table please',
+                payment_status='unpaid'
             ),
             Reservation(
                 reservation_number='901234', 
@@ -97,7 +114,8 @@ def init_test_data():
                 time='17:30', 
                 phone_number='+1555666777', 
                 status='confirmed',
-                special_requests='Birthday celebration, high chair needed'
+                special_requests='Birthday celebration, high chair needed',
+                payment_status='unpaid'
             ),
             Reservation(
                 reservation_number='567890', 
@@ -107,7 +125,8 @@ def init_test_data():
                 time='20:30', 
                 phone_number='+1999888777', 
                 status='confirmed',
-                special_requests='Gluten-free menu required'
+                special_requests='Gluten-free menu required',
+                payment_status='unpaid'
             ),
             Reservation(
                 reservation_number='246810', 
@@ -117,7 +136,8 @@ def init_test_data():
                 time='19:30', 
                 phone_number='+1444555666', 
                 status='confirmed',
-                special_requests='Large family gathering, private room if available'
+                special_requests='Large family gathering, private room if available',
+                payment_status='unpaid'
             )
         ]
         db.session.add_all(reservations)
@@ -125,12 +145,12 @@ def init_test_data():
         # Add comprehensive test orders with proper person names and complete data
         db.session.flush()  # Ensure reservations have IDs
         
-        # Orders for John Smith's reservation (reservation_id=1, party_size=4)
+        # Orders for John Smith's reservation (reservation_id=1, party_size=4) - All paid since completed
         john_orders = [
-            Order(reservation_id=1, table_id=1, person_name='John Smith', status='completed', total_amount=34.00),
-            Order(reservation_id=1, table_id=1, person_name='Sarah Smith', status='completed', total_amount=28.00),
-            Order(reservation_id=1, table_id=1, person_name='Mike Smith', status='completed', total_amount=19.00),
-            Order(reservation_id=1, table_id=1, person_name='Emma Smith', status='completed', total_amount=10.00)
+            Order(order_number=generate_order_number(), reservation_id=1, table_id=1, person_name='John Smith', status='completed', total_amount=34.00, payment_status='paid', payment_amount=34.00),
+            Order(order_number=generate_order_number(), reservation_id=1, table_id=1, person_name='Sarah Smith', status='completed', total_amount=28.00, payment_status='paid', payment_amount=28.00),
+            Order(order_number=generate_order_number(), reservation_id=1, table_id=1, person_name='Mike Smith', status='completed', total_amount=19.00, payment_status='paid', payment_amount=19.00),
+            Order(order_number=generate_order_number(), reservation_id=1, table_id=1, person_name='Emma Smith', status='completed', total_amount=10.00, payment_status='paid', payment_amount=10.00)
         ]
         db.session.add_all(john_orders)
         db.session.flush()
@@ -148,10 +168,10 @@ def init_test_data():
         ]
         db.session.add_all(john_order_items)
         
-        # Orders for Jane Smith's reservation (reservation_id=2, party_size=2)
+        # Orders for Jane Smith's reservation (reservation_id=2, party_size=2) - Mixed payment status
         jane_orders = [
-            Order(reservation_id=2, table_id=2, person_name='Jane Smith', status='in_progress', total_amount=42.00),
-            Order(reservation_id=2, table_id=2, person_name='David Wilson', status='in_progress', total_amount=47.00)
+            Order(order_number=generate_order_number(), reservation_id=2, table_id=2, person_name='Jane Smith', status='in_progress', total_amount=42.00, payment_status='paid', payment_amount=42.00),
+            Order(order_number=generate_order_number(), reservation_id=2, table_id=2, person_name='David Wilson', status='in_progress', total_amount=47.00, payment_status='unpaid')
         ]
         db.session.add_all(jane_orders)
         db.session.flush()
@@ -167,9 +187,10 @@ def init_test_data():
         ]
         db.session.add_all(jane_order_items)
         
-        # Add some standalone orders (pickup/delivery without reservations)
+        # Add some standalone orders (pickup/delivery without reservations) - Various payment statuses
         standalone_orders = [
             Order(
+                order_number=generate_order_number(),
                 person_name='Lisa Chen',
                 status='pending',
                 total_amount=45.00,
@@ -177,9 +198,11 @@ def init_test_data():
                 target_time='19:30',
                 order_type='pickup',
                 customer_phone='+15551234567',
-                special_instructions='Extra spicy'
+                special_instructions='Extra spicy',
+                payment_status='unpaid'
             ),
             Order(
+                order_number=generate_order_number(),
                 person_name='Mark Rodriguez',
                 status='preparing',
                 total_amount=67.00,
@@ -188,7 +211,9 @@ def init_test_data():
                 order_type='delivery',
                 customer_phone='+15559876543',
                 customer_address='123 Main St, Anytown, ST 12345',
-                special_instructions='Ring doorbell twice'
+                special_instructions='Ring doorbell twice',
+                payment_status='paid',
+                payment_amount=67.00
             )
         ]
         db.session.add_all(standalone_orders)
@@ -318,7 +343,8 @@ def create_demo_reservation_with_party_orders():
         time='18:30',
         phone_number='+15551234567',
         status='confirmed',
-        special_requests='Window seat'
+        special_requests='Window seat',
+        payment_status='unpaid'
     )
     db.session.add(reservation)
     db.session.flush()
@@ -329,10 +355,12 @@ def create_demo_reservation_with_party_orders():
     ]
     for person in party:
         order = Order(
+            order_number=generate_order_number(),
             reservation_id=reservation.id,
             person_name=person['name'],
             status='pending',
-            total_amount=0.0
+            total_amount=0.0,
+            payment_status='unpaid'
         )
         db.session.add(order)
         total = 0.0
@@ -360,7 +388,8 @@ def create_additional_demo_reservations():
         time='12:00',
         phone_number='+15555678901',
         status='confirmed',
-        special_requests='Birthday celebration'
+        special_requests='Birthday celebration',
+        payment_status='unpaid'
     )
     db.session.add(reservation2)
     db.session.flush()
@@ -370,10 +399,12 @@ def create_additional_demo_reservations():
     ]
     for person in party2:
         order = Order(
+            order_number=generate_order_number(),
             reservation_id=reservation2.id,
             person_name=person['name'],
             status='pending',
-            total_amount=0.0
+            total_amount=0.0,
+            payment_status='unpaid'
         )
         db.session.add(order)
         total = 0.0
@@ -397,7 +428,8 @@ def create_additional_demo_reservations():
         time='19:15',
         phone_number='+15559012345',
         status='confirmed',
-        special_requests='High chair needed'
+        special_requests='High chair needed',
+        payment_status='unpaid'
     )
     db.session.add(reservation3)
     db.session.flush()
@@ -409,10 +441,12 @@ def create_additional_demo_reservations():
     ]
     for person in party3:
         order = Order(
+            order_number=generate_order_number(),
             reservation_id=reservation3.id,
             person_name=person['name'],
             status='pending',
-            total_amount=0.0
+            total_amount=0.0,
+            payment_status='unpaid'
         )
         db.session.add(order)
         total = 0.0

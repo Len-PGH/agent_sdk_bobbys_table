@@ -15,7 +15,7 @@ load_dotenv()
 
 # Create Flask app without static folder
 app = Flask(__name__, static_folder=None)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///restaurant.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{os.path.join(os.getcwd(), "instance", "restaurant.db")}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'devsecret')
 
@@ -112,7 +112,88 @@ def verify_password(username, password):
 
 # Use this block instead
 with app.app_context():
-    db.create_all()
+    # Ensure instance directory exists
+    import os
+    os.makedirs('instance', exist_ok=True)
+    
+    try:
+        db.create_all()
+        print("✅ Database tables created/verified")
+        
+        # Database migration: Add missing payment columns to orders table
+        def migrate_orders_table():
+            """Add payment columns to orders table if they don't exist"""
+            try:
+                import sqlite3
+                from sqlalchemy import text
+                
+                # Use direct SQLite connection for more reliable migration
+                db_path = 'instance/restaurant.db'
+                
+                # Check if database file exists
+                if not os.path.exists(db_path):
+                    print("⚠️ Database file doesn't exist, creating new one")
+                    return
+                
+                # Direct SQLite connection for migration
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                
+                # Check if orders table exists
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='orders'")
+                if not cursor.fetchone():
+                    print("⚠️ Orders table doesn't exist yet, skipping migration")
+                    conn.close()
+                    return
+                
+                # Check current columns
+                cursor.execute("PRAGMA table_info(orders)")
+                columns_info = cursor.fetchall()
+                columns = [col[1] for col in columns_info]
+                print(f"📋 Current orders table columns: {columns}")
+                
+                # Define payment columns to add
+                payment_columns = [
+                    ('payment_status', "VARCHAR(20) DEFAULT 'unpaid'"),
+                    ('payment_intent_id', "VARCHAR(100)"),
+                    ('payment_amount', "FLOAT"),
+                    ('payment_date', "DATETIME")
+                ]
+                
+                migration_needed = False
+                for col_name, col_def in payment_columns:
+                    if col_name not in columns:
+                        print(f"🔧 Adding missing column: {col_name}")
+                        cursor.execute(f"ALTER TABLE orders ADD COLUMN {col_name} {col_def}")
+                        migration_needed = True
+                
+                if migration_needed:
+                    # Update existing orders to have 'unpaid' status
+                    cursor.execute("UPDATE orders SET payment_status = 'unpaid' WHERE payment_status IS NULL")
+                    conn.commit()
+                    print("✅ Orders table migration completed")
+                    
+                    # Verify the migration
+                    cursor.execute("PRAGMA table_info(orders)")
+                    updated_columns = [col[1] for col in cursor.fetchall()]
+                    print(f"📋 Updated orders table columns: {updated_columns}")
+                else:
+                    print("✅ Orders table already has all payment columns")
+                
+                conn.close()
+                
+            except Exception as e:
+                print(f"⚠️ Orders table migration error: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # Run migration
+        migrate_orders_table()
+        
+    except Exception as e:
+        print(f"⚠️ Database initialization error: {e}")
+        import traceback
+        traceback.print_exc()
     
     # Initialize menu items if they don't exist
     if not MenuItem.query.first():
@@ -370,19 +451,7 @@ def new_reservation():
         return redirect(url_for('index'))
     return render_template('reservation_form.html', action='Create')
 
-@app.route('/reservation/<int:res_id>/edit', methods=['GET', 'POST'])
-def edit_reservation(res_id):
-    reservation = Reservation.query.get_or_404(res_id)
-    if request.method == 'POST':
-        reservation.name = request.form['name']
-        reservation.party_size = request.form['party_size']
-        reservation.date = request.form['date']
-        reservation.time = request.form['time']
-        reservation.phone_number = request.form['phone_number']
-        db.session.commit()
-        flash('Reservation updated!', 'success')
-        return redirect(url_for('index'))
-    return render_template('reservation_form.html', reservation=reservation, action='Edit')
+# Edit reservation route removed - now handled by modal and API endpoint
 
 @app.route('/reservation/<int:res_id>/delete', methods=['POST'])
 def delete_reservation(res_id):
@@ -513,6 +582,7 @@ def api_create_reservation():
             if not items:
                 continue
             order = Order(
+                order_number=generate_order_number(),
                 reservation_id=reservation.id,
                 table_id=None,  # Table assignment logic can be added
                 person_name=person_name,
@@ -611,34 +681,75 @@ def api_update_reservation(res_id):
                 else:
                     party_orders = party_orders_data
                 
-                for person_name, orders in party_orders.items():
-                    if orders and len(orders) > 0:  # Only create order if there are items
-                        order = Order(
-                            reservation_id=reservation.id,
-                            person_name=person_name,
-                            status='pending'
-                        )
-                        db.session.add(order)
-                        db.session.flush()  # Get order ID
+                print(f"DEBUG: Processing party orders: {party_orders}")
+                
+                # Handle both formats: array of {name, items} or dict with person names as keys
+                if isinstance(party_orders, list):
+                    # New format: array of {name, items}
+                    for person_order in party_orders:
+                        person_name = person_order.get('name', '') or f"Person {party_orders.index(person_order) + 1}"
+                        items = person_order.get('items', [])
                         
-                        total_amount = 0
-                        for oi in orders:
-                            try:
-                                menu_item = MenuItem.query.get(int(oi['menu_item_id']))
-                                if menu_item:
-                                    order_item = OrderItem(
-                                        order_id=order.id,
-                                        menu_item_id=menu_item.id,
-                                        quantity=int(oi['quantity']),
-                                        price_at_time=menu_item.price
-                                    )
-                                    db.session.add(order_item)
-                                    total_amount += menu_item.price * int(oi['quantity'])
-                            except (ValueError, KeyError) as e:
-                                print(f"Error processing order item: {e}")
-                                continue
-                        
-                        order.total_amount = total_amount
+                        if items and len(items) > 0:  # Only create order if there are items
+                            order = Order(
+                                order_number=generate_order_number(),
+                                reservation_id=reservation.id,
+                                person_name=person_name,
+                                status='pending'
+                            )
+                            db.session.add(order)
+                            db.session.flush()  # Get order ID
+                            
+                            total_amount = 0
+                            for oi in items:
+                                try:
+                                    menu_item = MenuItem.query.get(int(oi['menu_item_id']))
+                                    if menu_item:
+                                        order_item = OrderItem(
+                                            order_id=order.id,
+                                            menu_item_id=menu_item.id,
+                                            quantity=int(oi['quantity']),
+                                            price_at_time=menu_item.price
+                                        )
+                                        db.session.add(order_item)
+                                        total_amount += menu_item.price * int(oi['quantity'])
+                                except (ValueError, KeyError) as e:
+                                    print(f"Error processing order item: {e}")
+                                    continue
+                            
+                            order.total_amount = total_amount
+                            print(f"DEBUG: Created order for {person_name} with {len(items)} items, total: ${total_amount}")
+                else:
+                    # Old format: dict with person names as keys
+                    for person_name, orders in party_orders.items():
+                        if orders and len(orders) > 0:  # Only create order if there are items
+                            order = Order(
+                                order_number=generate_order_number(),
+                                reservation_id=reservation.id,
+                                person_name=person_name,
+                                status='pending'
+                            )
+                            db.session.add(order)
+                            db.session.flush()  # Get order ID
+                            
+                            total_amount = 0
+                            for oi in orders:
+                                try:
+                                    menu_item = MenuItem.query.get(int(oi['menu_item_id']))
+                                    if menu_item:
+                                        order_item = OrderItem(
+                                            order_id=order.id,
+                                            menu_item_id=menu_item.id,
+                                            quantity=int(oi['quantity']),
+                                            price_at_time=menu_item.price
+                                        )
+                                        db.session.add(order_item)
+                                        total_amount += menu_item.price * int(oi['quantity'])
+                                except (ValueError, KeyError) as e:
+                                    print(f"Error processing order item: {e}")
+                                    continue
+                            
+                            order.total_amount = total_amount
             except Exception as e:
                 print(f"Error handling party orders: {e}")
                 # Continue without party orders if there's an error
@@ -662,6 +773,18 @@ def get_menu():
     menu_items = MenuItem.query.all()
     return jsonify([item.to_dict() for item in menu_items])
 
+def generate_order_number():
+    """Generate a unique 6-digit order number"""
+    import random
+    while True:
+        # Generate a 6-digit number (100000 to 999999)
+        number = str(random.randint(100000, 999999))
+        
+        # Check if this number already exists
+        existing = Order.query.filter_by(order_number=number).first()
+        if not existing:
+            return number
+
 @app.route('/api/order', methods=['POST'])
 def place_order():
     data = request.json
@@ -671,7 +794,11 @@ def place_order():
     if not reservation_id or not items:
         return jsonify({'error': 'Invalid data'}), 400
 
-    order = Order(reservation_id=reservation_id, status='pending')
+    order = Order(
+        order_number=generate_order_number(),
+        reservation_id=reservation_id, 
+        status='pending'
+    )
     db.session.add(order)
     db.session.flush()  # Get the order ID
 
@@ -715,6 +842,7 @@ def create_standalone_order():
         
         # Create order
         order = Order(
+            order_number=generate_order_number(),
             person_name=customer_name,
             status='pending',
             target_date=order_date,
@@ -814,6 +942,47 @@ def update_order_status(order_id):
         db.session.commit()
         
         return jsonify({'success': True, 'message': f'Order status updated to {new_status}'})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/orders/<int:order_id>/payment', methods=['PUT'])
+def update_order_payment(order_id):
+    """Update order payment status"""
+    try:
+        order = Order.query.get_or_404(order_id)
+        data = request.get_json()
+        payment_status = data.get('payment_status')
+        payment_intent_id = data.get('payment_intent_id')
+        payment_amount = data.get('payment_amount')
+        sms_number = data.get('sms_number')  # Optional SMS number for receipt
+        
+        if payment_status not in ['unpaid', 'paid', 'refunded']:
+            return jsonify({'success': False, 'error': 'Invalid payment status'}), 400
+        
+        order.payment_status = payment_status
+        if payment_intent_id:
+            order.payment_intent_id = payment_intent_id
+        if payment_amount:
+            order.payment_amount = payment_amount
+        if payment_status == 'paid':
+            order.payment_date = datetime.utcnow()
+        
+        db.session.commit()
+        
+        # Send SMS receipt if payment was successful
+        sms_result = None
+        if payment_status == 'paid' and payment_amount:
+            # Use provided SMS number or fall back to order customer phone
+            receipt_phone = sms_number if sms_number else order.customer_phone
+            sms_result = send_order_payment_receipt_sms(order, payment_amount, receipt_phone)
+        
+        return jsonify({
+            'success': True, 
+            'message': f'Order payment status updated to {payment_status}',
+            'sms_result': sms_result
+        })
         
     except Exception as e:
         db.session.rollback()
@@ -985,6 +1154,12 @@ def should_block_function_call(ai_session_id, function_name):
             if time_since_last < 10:
                 return True, f"Function {function_name} was called {time_since_last:.1f} seconds ago. Please use the previous response."
         
+        # For payment functions, allow progression through payment steps
+        elif function_name in ['get_card_details', 'pay_reservation']:
+            # Only block if called within 5 seconds to allow payment flow progression
+            if time_since_last < 5:
+                return True, f"Function {function_name} was called {time_since_last:.1f} seconds ago. Please use the previous response."
+        
         else:
             # Standard 30 second cooldown for other functions
             if time_since_last < 30:
@@ -1085,28 +1260,21 @@ def swaig_receptionist():
                 print("📋 Returning available function names")
                 
                 # Get function names dynamically from the agent's registered SWAIG functions
-                available_functions = []
-                
-                # Check if agent has registered SWAIG functions
-                if hasattr(agent, '_swaig_functions') and agent._swaig_functions:
-                    # Get function names from the agent's registered SWAIG functions
-                    available_functions = list(agent._swaig_functions.keys())
-                    print(f"   Found {len(available_functions)} functions from agent._swaig_functions: {available_functions}")
-                else:
-                    # Fallback to hardcoded list if we can't get them dynamically
-                    print("   Using fallback hardcoded function list")
-                    available_functions = [
-                        'create_reservation',
-                        'get_reservation', 
-                        'update_reservation',
-                        'cancel_reservation',
-                        'get_menu',
-                        'create_order',
-                        'get_order_status',
-                        'update_order_status',
-                        'transfer_to_manager',
-                        'schedule_callback'
-                    ]
+                available_functions = [
+                    'create_reservation',
+                    'get_reservation', 
+                    'update_reservation',
+                    'cancel_reservation',
+                    'get_menu',
+                    'create_order',
+                    'get_order_status',
+                    'update_order_status',
+                    'get_card_details',
+                    'pay_reservation',
+                    'pay_order',
+                    'transfer_to_manager',
+                    'schedule_callback'
+                ]
                 
                 print(f"   Returning {len(available_functions)} available functions: {available_functions}")
                 return jsonify({"functions": available_functions})
@@ -1154,6 +1322,18 @@ def swaig_receptionist():
                                     },
                                     'required': ['items']
                                 }
+                            },
+                            'pre_order': {
+                                'type': 'array',
+                                'description': 'Alternative format for pre-orders - simpler format using menu item names instead of IDs',
+                                'items': {
+                                    'type': 'object',
+                                    'properties': {
+                                        'name': {'type': 'string', 'description': 'Menu item name (e.g., "Kraft Lemonade", "Buffalo Wings")'},
+                                        'quantity': {'type': 'integer', 'description': 'Quantity ordered'}
+                                    },
+                                    'required': ['name', 'quantity']
+                                }
                             }
                         },
                         'required': ['name', 'party_size', 'date', 'time', 'phone_number']
@@ -1161,22 +1341,31 @@ def swaig_receptionist():
                 },
                 'get_reservation': {
                     'function': 'get_reservation',
-                    'purpose': 'Get reservation details by ID or phone number',
+                    'purpose': 'Look up existing reservations by reservation number (preferred) or name. When found by reservation number, asks for confirmation using the name from the database.',
                     'argument': {
                         'type': 'object',
                         'properties': {
-                            'reservation_id': {'type': 'integer', 'description': 'Reservation ID'},
-                            'phone_number': {'type': 'string', 'description': 'Customer phone number'}
+                            'reservation_number': {'type': 'string', 'description': '6-digit reservation number to find (preferred search method)'},
+                            'reservation_id': {'type': 'integer', 'description': 'Specific reservation ID to find'},
+                            'name': {'type': 'string', 'description': 'Customer full name, first name, or last name to search by (partial matches work)'},
+                            'first_name': {'type': 'string', 'description': 'Customer first name to search by'},
+                            'last_name': {'type': 'string', 'description': 'Customer last name to search by'},
+                            'date': {'type': 'string', 'description': 'Reservation date to search by (YYYY-MM-DD)'},
+                            'time': {'type': 'string', 'description': 'Reservation time to search by (HH:MM)'},
+                            'party_size': {'type': 'integer', 'description': 'Number of people to search by'},
+                            'email': {'type': 'string', 'description': 'Customer email address to search by'},
+                            'phone_number': {'type': 'string', 'description': 'Customer phone number (fallback search method only)'}
                         }
                     }
                 },
                 'update_reservation': {
                     'function': 'update_reservation',
-                    'purpose': 'Update an existing reservation',
+                    'purpose': 'Update an existing reservation - can search by reservation number first, then fallback to other methods',
                     'argument': {
                         'type': 'object',
                         'properties': {
-                            'reservation_id': {'type': 'integer', 'description': 'Reservation ID'},
+                            'reservation_number': {'type': 'string', 'description': '6-digit reservation number (preferred method)'},
+                            'reservation_id': {'type': 'integer', 'description': 'Reservation ID (alternative method)'},
                             'name': {'type': 'string', 'description': 'Customer name'},
                             'party_size': {'type': 'integer', 'description': 'Number of people'},
                             'date': {'type': 'string', 'description': 'Reservation date (YYYY-MM-DD)'},
@@ -1184,19 +1373,20 @@ def swaig_receptionist():
                             'phone_number': {'type': 'string', 'description': 'Customer phone number'},
                             'special_requests': {'type': 'string', 'description': 'Special requests or dietary restrictions'}
                         },
-                        'required': ['reservation_id']
+                        'required': []
                     }
                 },
                 'cancel_reservation': {
                     'function': 'cancel_reservation',
-                    'purpose': 'Cancel a reservation',
+                    'purpose': 'Cancel a reservation - can search by reservation number first, then fallback to other methods',
                     'argument': {
                         'type': 'object',
                         'properties': {
-                            'reservation_id': {'type': 'integer', 'description': 'Reservation ID'},
+                            'reservation_number': {'type': 'string', 'description': '6-digit reservation number (preferred method)'},
+                            'reservation_id': {'type': 'integer', 'description': 'Reservation ID (alternative method)'},
                             'phone_number': {'type': 'string', 'description': 'Customer phone number for verification'}
                         },
-                        'required': ['reservation_id']
+                        'required': []
                     }
                 },
                 'get_menu': {
@@ -1209,39 +1399,108 @@ def swaig_receptionist():
                 },
                 'create_order': {
                     'function': 'create_order',
-                    'purpose': 'Create a new food order',
+                    'purpose': 'Create a new food order with optional payment processing. Can be standalone order or linked to a reservation.',
                     'argument': {
                         'type': 'object',
                         'properties': {
-                            'reservation_id': {'type': 'integer', 'description': 'Associated reservation ID'},
-                            'items': {'type': 'array', 'description': 'List of menu items to order'},
-                            'special_instructions': {'type': 'string', 'description': 'Special cooking instructions'}
+                            'reservation_id': {'type': 'integer', 'description': 'Associated reservation ID (optional for standalone orders)'},
+                            'items': {
+                                'type': 'array', 
+                                'description': 'List of menu items to order with quantities',
+                                'items': {
+                                    'type': 'object',
+                                    'properties': {
+                                        'name': {'type': 'string', 'description': 'Menu item name'},
+                                        'quantity': {'type': 'integer', 'description': 'Quantity to order'}
+                                    },
+                                    'required': ['name', 'quantity']
+                                }
+                            },
+                            'customer_name': {'type': 'string', 'description': 'Customer name for standalone orders'},
+                            'customer_phone': {'type': 'string', 'description': 'Customer phone number for standalone orders'},
+                            'order_type': {'type': 'string', 'description': 'Order type: pickup or delivery', 'enum': ['pickup', 'delivery']},
+                            'special_instructions': {'type': 'string', 'description': 'Special cooking instructions'},
+                            'payment_preference': {'type': 'string', 'description': 'Payment preference: "now" to pay immediately with credit card, "pickup" to pay at pickup (default)', 'enum': ['now', 'pickup']}
                         },
-                        'required': ['reservation_id', 'items']
+                        'required': ['items']
                     }
                 },
                 'get_order_status': {
                     'function': 'get_order_status',
-                    'purpose': 'Get the status of an order',
+                    'purpose': 'Get the status of an order - can search by order number first, then fallback to other methods',
                     'argument': {
                         'type': 'object',
                         'properties': {
-                            'order_id': {'type': 'integer', 'description': 'Order ID'},
-                            'reservation_id': {'type': 'integer', 'description': 'Reservation ID'}
+                            'order_number': {'type': 'string', 'description': '6-digit order number (preferred method)'},
+                            'order_id': {'type': 'integer', 'description': 'Order ID (alternative method)'},
+                            'reservation_id': {'type': 'integer', 'description': 'Reservation ID (alternative method)'},
+                            'customer_phone': {'type': 'string', 'description': 'Customer phone number for verification'}
                         }
                     }
                 },
                 'update_order_status': {
                     'function': 'update_order_status',
-                    'purpose': 'Update the status of an order',
+                    'purpose': 'Update the status of an order - can search by order number first, then fallback to other methods',
                     'argument': {
                         'type': 'object',
                         'properties': {
-                            'order_id': {'type': 'integer', 'description': 'Order ID'},
+                            'order_number': {'type': 'string', 'description': '6-digit order number (preferred method)'},
+                            'order_id': {'type': 'integer', 'description': 'Order ID (alternative method)'},
                             'status': {'type': 'string', 'description': 'New order status'}
                         },
-                        'required': ['order_id', 'status']
+                        'required': []
                     }
+                },
+                'get_card_details': {
+                    'function': 'get_card_details',
+                    'purpose': 'Collect credit card details for payment processing. This function guides customers through providing their card information step by step before processing payment.',
+                    'argument': {
+                        'type': 'object',
+                        'properties': {
+                            'reservation_number': {'type': 'string', 'description': '6-digit reservation number to pay for (will be extracted from conversation if not provided)'},
+                            'cardholder_name': {'type': 'string', 'description': 'Name on the credit card (will be requested if not provided)'},
+                            'card_number': {'type': 'string', 'description': 'Credit card number (will be collected via secure DTMF)'},
+                            'expiry_date': {'type': 'string', 'description': 'Card expiration date MM/YY (will be collected via secure DTMF)'},
+                            'cvv': {'type': 'string', 'description': 'Card CVV/security code (will be collected via secure DTMF)'},
+                            'zip_code': {'type': 'string', 'description': 'Billing ZIP code (will be collected via secure DTMF)'}
+                        },
+                        'required': []
+                    }
+                },
+                'pay_reservation': {
+                    'function': 'pay_reservation',
+                    'purpose': 'Process payment for a reservation using SignalWire Pay and Stripe. This function should only be called after get_card_details has collected all necessary information and user has confirmed payment.',
+                    'argument': {
+                        'type': 'object',
+                        'properties': {
+                            'reservation_number': {'type': 'string', 'description': '6-digit reservation number to pay for (required)'},
+                            'cardholder_name': {'type': 'string', 'description': 'Name on the credit card (required)'},
+                            'phone_number': {'type': 'string', 'description': 'SMS number for receipt (will use caller ID if not provided)'}
+                        },
+                        'required': ['reservation_number', 'cardholder_name']
+                    }
+                },
+                'pay_order': {
+                    'function': 'pay_order',
+                    'purpose': 'Process payment for an existing order using SignalWire Pay and Stripe. Use this when customers want to pay for their order over the phone.',
+                    'argument': {
+                        'type': 'object',
+                        'properties': {
+                            'order_number': {'type': 'string', 'description': '6-digit order number to pay for'},
+                            'order_id': {'type': 'integer', 'description': 'Order ID (alternative to order_number)'},
+                            'customer_name': {'type': 'string', 'description': 'Customer name for verification'},
+                            'phone_number': {'type': 'string', 'description': 'Phone number for SMS receipt (will use caller ID if not provided)'}
+                        },
+                        'required': []
+                    }
+                },
+                'transfer_to_manager': {
+                    'function': 'transfer_to_manager',
+                    'purpose': 'Transfer to manager'
+                },
+                'schedule_callback': {
+                    'function': 'schedule_callback',
+                    'purpose': 'Schedule a callback'
                 }
             }
             
@@ -1336,7 +1595,7 @@ def swaig_receptionist():
                                             },
                                             {
                                                 "function": "get_reservation",
-                                                "purpose": "Get reservation details"
+                                                "purpose": "Look up existing reservations - ALWAYS ask for reservation number first (6-digit number), then fallback to name if needed"
                                             },
                                             {
                                                 "function": "update_reservation",
@@ -1352,7 +1611,7 @@ def swaig_receptionist():
                                             },
                                             {
                                                 "function": "create_order",
-                                                "purpose": "Create a new food order"
+                                                "purpose": "Create a new food order with optional payment processing"
                                             },
                                             {
                                                 "function": "get_order_status",
@@ -1361,6 +1620,14 @@ def swaig_receptionist():
                                             {
                                                 "function": "update_order_status",
                                                 "purpose": "Update order status"
+                                            },
+                                            {
+                                                "function": "pay_reservation",
+                                                "purpose": "Collect payment for a reservation/order using SignalWire Pay and Stripe."
+                                            },
+                                            {
+                                                "function": "pay_order",
+                                                "purpose": "Process payment for an existing order using SignalWire Pay and Stripe."
                                             },
                                             {
                                                 "function": "transfer_to_manager",
@@ -1373,7 +1640,7 @@ def swaig_receptionist():
                                         ]
                                     },
                                     "prompt": {
-                                        "text": "Hi there! I'm Bobby from Bobby's Table. Great to have you call us today! How can I help you out? Whether you're looking to make a reservation, check on an existing one, hear about our menu, or place an order, I'm here to help make it easy for you.\n\nIMPORTANT CONVERSATION GUIDELINES:\n- When making reservations, ALWAYS ask if customers want to pre-order from the menu\n- For parties larger than one person, ask for each person's name and their individual food preferences\n- Always say numbers as words (say 'one' instead of '1', 'two' instead of '2', etc.)\n- Extract food items mentioned during reservation requests and include them in party_orders\n- Be conversational and helpful - guide customers through the pre-ordering process naturally"
+                                        "text": "Hi there! I'm Bobby from Bobby's Table. Great to have you call us today! How can I help you out? Whether you're looking to make a reservation, check on an existing one, hear about our menu, or place an order, I'm here to help make it easy for you.\n\nIMPORTANT CONVERSATION GUIDELINES:\n\n**RESERVATION LOOKUPS - CRITICAL:**\n- When customers want to check their reservation, ALWAYS ask for their reservation number FIRST\n- Say: 'Do you have your reservation number? It's a 6-digit number we sent you when you made the reservation.'\n- Only if they don't have it, then ask for their name as backup\n- Reservation numbers are the fastest and most accurate way to find reservations\n- Handle spoken numbers like 'seven eight nine zero one two' which becomes '789012'\n\n**ORDER CREATION - CRITICAL:**\n- When customers want to place an order, use the create_order function with specific menu items\n- ALWAYS extract exact menu item names and quantities from what customers say\n- If customer says 'I want buffalo wings', extract: items=[{\"name\": \"Buffalo Wings\", \"quantity\": 1}]\n- If customer says 'two burgers', extract: items=[{\"name\": \"Ribeye Steak\", \"quantity\": 2}] (match closest menu item)\n- ALWAYS ask customers if they want to pay now (credit card) or at pickup/delivery\n- Set payment_preference to 'now' if they want to pay immediately, 'pickup' if they'll pay later\n- Get customer name and phone number for the order\n- Ask if it's pickup or delivery (default to pickup)\n- For delivery orders, get the delivery address\n\n**RESERVATION PRE-ORDERING - CRITICAL:**\n- When making reservations, ALWAYS ask if customers want to pre-order from the menu\n- For parties larger than one person, ask for each person's name and their individual food preferences\n- When customers mention food items during reservation requests, use the pre_order parameter\n- Use pre_order format: [{\"name\": \"Menu Item Name\", \"quantity\": 1}]\n- Examples: pre_order=[{\"name\": \"Kraft Lemonade\", \"quantity\": 1}, {\"name\": \"Buffalo Wings\", \"quantity\": 2}]\n- Extract exact menu item names from what customers say\n\n**🚨 PAYMENTS - CRITICAL PAYMENT RULE 🚨:**\n**NEVER EVER call pay_reservation directly! ALWAYS call get_card_details FIRST!**\n\n**MANDATORY PAYMENT FLOW:**\n1. Customer wants to pay → IMMEDIATELY call get_card_details function\n2. get_card_details will collect reservation number and cardholder name\n3. get_card_details will ask: 'Would you like me to proceed with collecting your card details now?'\n4. ONLY after customer confirms 'yes' → THEN call pay_reservation function\n5. pay_reservation will prompt customer to enter card details via phone keypad (card number, expiration, CVV, ZIP)\n\n**EXAMPLES:**\n- Customer: 'I want to pay my bill' → YOU: Call get_card_details function\n- Customer: 'Yes, I want to pay' → YOU: Call get_card_details function\n- Customer: 'Can I pay for my reservation?' → YOU: Call get_card_details function\n\n**NEVER DO THIS:**\n- ❌ NEVER call pay_reservation when customer first asks to pay\n- ❌ NEVER skip get_card_details step\n- ❌ NEVER call pay_reservation directly\n\n**OTHER GUIDELINES:**\n- Always say numbers as words (say 'one' instead of '1', 'two' instead of '2', etc.)\n- Be conversational and helpful - guide customers through the pre-ordering process naturally"
                                     }
                                 }
                             }
@@ -1607,20 +1874,20 @@ def swaig_receptionist_info():
                                 },
                                 {
                                     "function": "get_reservation",
-                                    "purpose": "Look up existing reservations by phone number, first name, last name, full name, date, time, party size, or reservation ID",
+                                    "purpose": "Look up existing reservations - ALWAYS ask for reservation number first (6-digit number), then fallback to name if needed",
                                     "argument": {
                                         "type": "object",
                                         "properties": {
-                                            "phone_number": {"type": "string", "description": "Customer phone number to search by"},
+                                            "reservation_number": {"type": "string", "description": "6-digit reservation number to find (preferred search method)"},
+                                            "reservation_id": {"type": "integer", "description": "Specific reservation ID to find"},
                                             "name": {"type": "string", "description": "Customer full name, first name, or last name to search by (partial matches work)"},
                                             "first_name": {"type": "string", "description": "Customer first name to search by"},
                                             "last_name": {"type": "string", "description": "Customer last name to search by"},
-                                            "reservation_id": {"type": "integer", "description": "Specific reservation ID to find"},
-                                            "reservation_number": {"type": "string", "description": "6-digit reservation number to find"},
                                             "date": {"type": "string", "description": "Reservation date to search by (YYYY-MM-DD)"},
                                             "time": {"type": "string", "description": "Reservation time to search by (HH:MM)"},
                                             "party_size": {"type": "integer", "description": "Number of people to search by"},
-                                            "email": {"type": "string", "description": "Customer email address to search by"}
+                                            "email": {"type": "string", "description": "Customer email address to search by"},
+                                            "phone_number": {"type": "string", "description": "Customer phone number (fallback search method only)"}
                                         }
                                     }
                                 },
@@ -1665,7 +1932,7 @@ def swaig_receptionist_info():
                                 },
                                 {
                                     "function": "create_order",
-                                    "purpose": "Create a new food order. Extract menu items and quantities from natural language. If user says 'I want the salmon' or 'One cheesecake', extract that information. This will generate a unique order ID.",
+                                    "purpose": "Create a new food order. Extract menu items and quantities from natural language. If user says 'I want the salmon' or 'One cheesecake', extract that information. This will generate a unique order ID. Always ask customers if they want to pay now or at pickup/delivery.",
                                     "argument": {
                                         "type": "object",
                                         "properties": {
@@ -1684,6 +1951,7 @@ def swaig_receptionist_info():
                                             "customer_name": {"type": "string", "description": "Customer name for the order"},
                                             "customer_phone": {"type": "string", "description": "Customer phone number"},
                                             "order_type": {"type": "string", "description": "Order type: pickup or delivery (default to pickup)"},
+                                            "payment_preference": {"type": "string", "description": "Payment preference: 'now' to pay immediately with credit card, or 'pickup' to pay at pickup/delivery (default)", "enum": ["now", "pickup"]},
                                             "special_instructions": {"type": "string", "description": "Special cooking instructions or dietary restrictions"},
                                             "customer_address": {"type": "string", "description": "Customer address (required for delivery orders)"}
                                         },
@@ -1712,11 +1980,75 @@ def swaig_receptionist_info():
                                         },
                                         "required": ["order_id", "status"]
                                     }
+                                },
+                                {
+                                    "function": "pay_reservation",
+                                    "purpose": "Collect payment for a reservation/order using SignalWire Pay and Stripe. This function guides customers through the payment process step by step, collecting reservation number and cardholder name as needed.",
+                                    "argument": {
+                                        "type": "object",
+                                        "properties": {
+                                            "reservation_number": {"type": "string", "description": "6-digit reservation number to pay for (will be extracted from conversation if not provided)"},
+                                            "cardholder_name": {"type": "string", "description": "Name on the credit card (will be requested if not provided)"},
+                                            "phone_number": {"type": "string", "description": "SMS number for receipt (will use caller ID if not provided)"}
+                                        },
+                                        "required": []
+                                    }
+                                },
+                                {
+                                    "function": "transfer_to_manager",
+                                    "purpose": "Transfer to manager"
+                                },
+                                {
+                                    "function": "schedule_callback",
+                                    "purpose": "Schedule a callback"
+                                },
+                                {
+                                    "function": "get_card_details",
+                                    "purpose": "Collect payment information and confirm payment details before processing payment. This function should be called first when customers want to pay their bill.",
+                                    "argument": {
+                                        "type": "object",
+                                        "properties": {
+                                            "reservation_number": {"type": "string", "description": "6-digit reservation number to pay for (will be extracted from conversation if not provided)"},
+                                            "cardholder_name": {"type": "string", "description": "Name on the credit card (will be requested if not provided)"},
+                                            "card_number": {"type": "string", "description": "Credit card number (will be collected via secure DTMF)"},
+                                            "expiry_date": {"type": "string", "description": "Card expiration date (will be collected via secure DTMF)"},
+                                            "cvv": {"type": "string", "description": "Card CVV/security code (will be collected via secure DTMF)"},
+                                            "zip_code": {"type": "string", "description": "Billing ZIP code (will be collected via secure DTMF)"}
+                                        },
+                                        "required": []
+                                    }
+                                },
+                                {
+                                    "function": "pay_reservation",
+                                    "purpose": "Process payment for a reservation using SignalWire Pay and Stripe. This function should only be called after get_card_details has collected all necessary information and user has confirmed payment.",
+                                    "argument": {
+                                        "type": "object",
+                                        "properties": {
+                                            "reservation_number": {"type": "string", "description": "6-digit reservation number to pay for (required)"},
+                                            "cardholder_name": {"type": "string", "description": "Name on the credit card (required)"},
+                                            "phone_number": {"type": "string", "description": "SMS number for receipt (will use caller ID if not provided)"}
+                                        },
+                                        "required": ["reservation_number", "cardholder_name"]
+                                    }
+                                },
+                                {
+                                    "function": "pay_order",
+                                    "purpose": "Process payment for an existing order using SignalWire Pay and Stripe. Use this when customers want to pay for their order over the phone.",
+                                    "argument": {
+                                        "type": "object",
+                                        "properties": {
+                                            "order_number": {"type": "string", "description": "6-digit order number to pay for"},
+                                            "order_id": {"type": "integer", "description": "Order ID (alternative to order_number)"},
+                                            "customer_name": {"type": "string", "description": "Customer name for verification"},
+                                            "phone_number": {"type": "string", "description": "Phone number for SMS receipt (will use caller ID if not provided)"}
+                                        },
+                                        "required": []
+                                    }
                                 }
                             ]
                         },
                         "prompt": {
-                            "text": "Hi there! I'm Bobby from Bobby's Table. Great to have you call us today! How can I help you out? Whether you're looking to make a reservation, check on an existing one, hear about our menu, or place an order, I'm here to help make it easy for you.\n\nIMPORTANT CONVERSATION GUIDELINES:\n- When making reservations, ALWAYS ask if customers want to pre-order from the menu\n- For parties larger than one person, ask for each person's name and their individual food preferences\n- Always say numbers as words (say 'one' instead of '1', 'two' instead of '2', etc.)\n- Extract food items mentioned during reservation requests and include them in party_orders\n- Be conversational and helpful - guide customers through the pre-ordering process naturally"
+                            "text": "Hi there! I'm Bobby from Bobby's Table. Great to have you call us today! How can I help you out? Whether you're looking to make a reservation, check on an existing one, hear about our menu, or place an order, I'm here to help make it easy for you.\n\nIMPORTANT CONVERSATION GUIDELINES:\n\n**RESERVATION LOOKUPS - CRITICAL:**\n- When customers want to check their reservation, ALWAYS ask for their reservation number FIRST\n- Say: 'Do you have your reservation number? It's a 6-digit number we sent you when you made the reservation.'\n- Only if they don't have it, then ask for their name as backup\n- Reservation numbers are the fastest and most accurate way to find reservations\n- Handle spoken numbers like 'seven eight nine zero one two' which becomes '789012'\n\n**🚨 PAYMENTS - CRITICAL PAYMENT RULE 🚨:**\n**NEVER EVER call pay_reservation directly! ALWAYS call get_card_details FIRST!**\n\n**MANDATORY PAYMENT FLOW:**\n1. Customer wants to pay → IMMEDIATELY call get_card_details function\n2. get_card_details will collect reservation number and cardholder name\n3. get_card_details will ask: 'Would you like me to proceed with collecting your card details now?'\n4. ONLY after customer confirms 'yes' → THEN call pay_reservation function\n5. pay_reservation will prompt customer to enter card details via phone keypad (card number, expiration, CVV, ZIP)\n\n**EXAMPLES:**\n- Customer: 'I want to pay my bill' → YOU: Call get_card_details function\n- Customer: 'Yes, I want to pay' → YOU: Call get_card_details function\n- Customer: 'Can I pay for my reservation?' → YOU: Call get_card_details function\n\n**NEVER DO THIS:**\n- ❌ NEVER call pay_reservation when customer first asks to pay\n- ❌ NEVER skip get_card_details step\n- ❌ NEVER call pay_reservation directly\n\n**OTHER GUIDELINES:**\n- When making reservations, ALWAYS ask if customers want to pre-order from the menu\n- For parties larger than one person, ask for each person's name and their individual food preferences\n- Always say numbers as words (say 'one' instead of '1', 'two' instead of '2', etc.)\n- Extract food items mentioned during reservation requests and include them in party_orders\n- Be conversational and helpful - guide customers through the pre-ordering process naturally"
                         }
                     }
                 }
@@ -1735,31 +2067,54 @@ def get_stripe_config():
 
 @app.route('/api/stripe/create-payment-intent', methods=['POST'])
 def create_payment_intent():
-    """Create a Stripe payment intent"""
+    """Create a Stripe payment intent for reservations or orders"""
     try:
         data = request.get_json()
         reservation_id = data.get('reservation_id')
+        order_id = data.get('order_id')
         amount = data.get('amount')  # Amount in cents
         currency = data.get('currency', 'usd')
         
-        if not reservation_id or not amount:
-            return jsonify({'error': 'Missing reservation_id or amount'}), 400
+        if not amount:
+            return jsonify({'error': 'Missing amount'}), 400
         
-        # Get reservation details
-        reservation = Reservation.query.get(reservation_id)
-        if not reservation:
-            return jsonify({'error': 'Reservation not found'}), 404
+        if not reservation_id and not order_id:
+            return jsonify({'error': 'Missing reservation_id or order_id'}), 400
         
-        # Create payment intent
-        intent = stripe.PaymentIntent.create(
-            amount=amount,
-            currency=currency,
-            metadata={
+        metadata = {}
+        
+        if reservation_id:
+            # Get reservation details
+            reservation = Reservation.query.get(reservation_id)
+            if not reservation:
+                return jsonify({'error': 'Reservation not found'}), 404
+            
+            metadata = {
+                'type': 'reservation',
                 'reservation_id': reservation_id,
                 'reservation_number': reservation.reservation_number,
                 'customer_name': reservation.name,
                 'customer_phone': reservation.phone_number
             }
+        elif order_id:
+            # Get order details
+            order = Order.query.get(order_id)
+            if not order:
+                return jsonify({'error': 'Order not found'}), 404
+            
+            metadata = {
+                'type': 'order',
+                'order_id': order_id,
+                'order_number': order.order_number,
+                'customer_name': order.person_name,
+                'customer_phone': order.customer_phone
+            }
+        
+        # Create payment intent
+        intent = stripe.PaymentIntent.create(
+            amount=amount,
+            currency=currency,
+            metadata=metadata
         )
         
         return jsonify({
@@ -1771,7 +2126,7 @@ def create_payment_intent():
     except Exception as e:
         return jsonify({'error': 'Internal server error'}), 500
 
-def send_payment_receipt_sms(reservation, payment_amount, phone_number=None):
+def send_payment_receipt_sms(reservation, payment_amount, phone_number=None, confirmation_number=None):
     """Send SMS receipt for payment"""
     try:
         from signalwire_agents.core.function_result import SwaigFunctionResult
@@ -1786,6 +2141,11 @@ def send_payment_receipt_sms(reservation, payment_amount, phone_number=None):
         # Build SMS body
         sms_body = f"💳 Bobby's Table Payment Receipt\n\n"
         sms_body += f"✅ Payment Successful!\n\n"
+        
+        # Add confirmation number if provided
+        if confirmation_number:
+            sms_body += f"🎫 CONFIRMATION: {confirmation_number}\n\n"
+        
         sms_body += f"Reservation Details:\n"
         sms_body += f"• Name: {reservation.name}\n"
         sms_body += f"• Date: {reservation.date}\n"
@@ -1819,6 +2179,70 @@ def send_payment_receipt_sms(reservation, payment_amount, phone_number=None):
         
     except Exception as e:
         print(f"❌ SMS Error: Failed to send payment receipt SMS to {phone_number or reservation.phone_number}: {e}")
+        return {'success': False, 'sms_sent': False, 'error': str(e)}
+
+def send_order_payment_receipt_sms(order, payment_amount, phone_number=None, confirmation_number=None):
+    """Send SMS receipt for order payment"""
+    try:
+        from signalwire_agents.core.function_result import SwaigFunctionResult
+        
+        # Convert time to 12-hour format for SMS
+        try:
+            time_obj = datetime.strptime(str(order.target_time), '%H:%M')
+            time_12hr = time_obj.strftime('%I:%M %p').lstrip('0')
+        except (ValueError, TypeError):
+            time_12hr = str(order.target_time)
+        
+        # Build SMS body
+        sms_body = f"💳 Bobby's Table Payment Receipt\n\n"
+        sms_body += f"✅ Payment Successful!\n\n"
+        
+        # Add confirmation number if provided
+        if confirmation_number:
+            sms_body += f"🎫 CONFIRMATION: {confirmation_number}\n\n"
+        
+        sms_body += f"Order Details:\n"
+        sms_body += f"• Customer: {order.person_name}\n"
+        sms_body += f"• Order #: {order.order_number}\n"
+        sms_body += f"• Type: {order.order_type.title()}\n"
+        sms_body += f"• Ready Time: {time_12hr}\n"
+        sms_body += f"• Date: {order.target_date}\n"
+        if order.order_type == 'delivery' and order.customer_address:
+            sms_body += f"• Delivery Address: {order.customer_address}\n"
+        sms_body += f"\nPayment Information:\n"
+        sms_body += f"• Amount Paid: ${payment_amount:.2f}\n"
+        sms_body += f"• Payment Date: {order.payment_date.strftime('%m/%d/%Y %I:%M %p')}\n"
+        sms_body += f"• Payment ID: {order.payment_intent_id[-8:]}\n\n"
+        
+        if order.order_type == 'pickup':
+            sms_body += f"📍 Please come to Bobby's Table to collect your order at {time_12hr}.\n"
+        else:
+            sms_body += f"🚚 Your order will be delivered to {order.customer_address} around {time_12hr}.\n"
+        
+        sms_body += f"\nThank you for your payment!\n"
+        sms_body += f"We look forward to serving you.\n\n"
+        sms_body += f"Bobby's Table Restaurant\n"
+        sms_body += f"Reply STOP to stop."
+        
+        # Get SignalWire phone number from environment
+        signalwire_from_number = os.getenv('SIGNALWIRE_FROM_NUMBER', '+15551234567')
+        
+        # Use provided phone_number or order.customer_phone
+        to_number = phone_number if phone_number else order.customer_phone
+        
+        # Send SMS using SignalWire
+        from signalwire_agents.core.function_result import SwaigFunctionResult
+        result = SwaigFunctionResult()
+        result = result.send_sms(
+            to_number=to_number,
+            from_number=signalwire_from_number,
+            body=sms_body
+        )
+        
+        return {'success': True, 'sms_sent': True, 'sms_result': 'Order payment receipt SMS sent successfully'}
+        
+    except Exception as e:
+        print(f"❌ SMS Error: Failed to send order payment receipt SMS to {phone_number or order.customer_phone}: {e}")
         return {'success': False, 'sms_sent': False, 'error': str(e)}
 
 @app.route('/api/reservations/payment', methods=['POST'])
@@ -1912,6 +2336,229 @@ def preprocess_reservation_params(params):
     
     print(f"   Final processed params: {processed_params}")
     return processed_params
+
+@app.route('/api/signalwire/payment-callback', methods=['POST'])
+def signalwire_payment_callback():
+    """
+    Handle SignalWire Pay verb webhook. Create Stripe PaymentIntent and update reservation/order status.
+    """
+    try:
+        data = request.get_json()
+        print(f"🔔 Payment callback received: {data}")
+        
+        # SignalWire Pay verb sends data in different formats depending on the result
+        # Success format: {"payment": {"status": "success", "amount": 42.50, ...}}
+        # Error format: {"payment": {"status": "error", "error": "..."}}
+        
+        payment = data.get('payment', {})
+        status = payment.get('status')
+        description = payment.get('description', '')
+        amount = payment.get('amount')
+        payment_intent_id = payment.get('payment_processor_id') or payment.get('transaction_id')
+        
+        # Get parameters that were passed to the Pay verb
+        parameters = payment.get('parameters', {})
+        reservation_number = parameters.get('reservation_number')
+        order_id = parameters.get('order_id')
+        order_number = parameters.get('order_number')
+        cardholder_name = parameters.get('cardholder_name')
+        phone_number = parameters.get('phone_number')
+        email = parameters.get('email')
+        payment_type = parameters.get('payment_type', 'reservation')  # 'reservation' or 'order'
+        
+        # Fallback: Extract reservation/order number from description if not in parameters
+        if not reservation_number and not order_number:
+            import re
+            reservation_match = re.search(r'Reservation #(\d+)', description)
+            order_match = re.search(r'Order #(\d+)', description)
+            
+            if reservation_match:
+                reservation_number = reservation_match.group(1)
+                payment_type = 'reservation'
+            elif order_match:
+                order_number = order_match.group(1)
+                payment_type = 'order'
+
+        print(f"💳 Payment status: {status}, type: {payment_type}, reservation: {reservation_number}, order: {order_number}, amount: {amount}")
+
+        if status == 'success' and (reservation_number or order_number):
+            from models import Reservation, Order
+            from datetime import datetime
+            import uuid
+            
+            # Generate confirmation number like web version
+            confirmation_number = f"CONF-{uuid.uuid4().hex[:8].upper()}"
+            
+            if payment_type == 'reservation' and reservation_number:
+                # Handle reservation payment
+                reservation = Reservation.query.filter_by(reservation_number=reservation_number).first()
+                if reservation:
+                    # Create Stripe PaymentIntent to match web version behavior
+                    try:
+                        stripe_intent = stripe.PaymentIntent.create(
+                            amount=int(amount * 100),  # Convert to cents
+                            currency='usd',
+                            metadata={
+                                'type': 'reservation',
+                                'reservation_id': reservation.id,
+                                'reservation_number': reservation_number,
+                                'customer_name': reservation.name,
+                                'customer_phone': reservation.phone_number,
+                                'confirmation_number': confirmation_number,
+                                'payment_source': 'voice_call'
+                            },
+                            description=f"Bobby's Table Reservation #{reservation_number}",
+                            confirm=True,
+                            payment_method_types=['card'],
+                            return_url='https://bobbystable.com/payment-complete'
+                        )
+                        
+                        print(f"✅ Created Stripe PaymentIntent: {stripe_intent.id}")
+                        stripe_payment_id = stripe_intent.id
+                        
+                    except stripe.error.StripeError as e:
+                        print(f"⚠️ Stripe API error: {e}")
+                        # Fallback to SignalWire payment ID
+                        stripe_payment_id = payment_intent_id or f"sw_pay_{reservation_number}"
+                    
+                    # Update reservation payment status
+                    reservation.payment_status = 'paid'
+                    reservation.payment_intent_id = stripe_payment_id
+                    reservation.payment_amount = amount
+                    reservation.payment_date = datetime.utcnow()
+                    reservation.confirmation_number = confirmation_number
+                    db.session.commit()
+                    
+                    print(f"✅ Updated reservation {reservation_number} payment status to paid")
+                    print(f"✅ Generated confirmation number: {confirmation_number}")
+                    
+                    # Send SMS receipt using the phone number from parameters or reservation
+                    receipt_phone = phone_number or reservation.phone_number
+                    try:
+                        sms_result = send_payment_receipt_sms(reservation, amount, receipt_phone, confirmation_number)
+                        print(f"📱 SMS receipt sent to {receipt_phone}: {sms_result}")
+                        
+                        return jsonify({
+                            'success': True, 
+                            'message': f'Payment successful! Your confirmation number is {confirmation_number}. Bill marked as paid and SMS sent.',
+                            'reservation_number': reservation_number,
+                            'confirmation_number': confirmation_number,
+                            'amount': amount,
+                            'stripe_payment_id': stripe_payment_id,
+                            'sms_result': sms_result,
+                            'voice_response': f"Excellent! Your payment of ${amount:.2f} has been processed successfully. Your confirmation number is {confirmation_number}. I've also sent you an SMS receipt with all the details. Thank you for choosing Bobby's Table!"
+                        })
+                        
+                    except Exception as e:
+                        print(f"❌ SMS Error: {e}")
+                        return jsonify({
+                            'success': True, 
+                            'warning': f'Payment succeeded with confirmation {confirmation_number}, but failed to send SMS: {str(e)}',
+                            'reservation_number': reservation_number,
+                            'confirmation_number': confirmation_number,
+                            'amount': amount,
+                            'stripe_payment_id': stripe_payment_id,
+                            'voice_response': f"Excellent! Your payment of ${amount:.2f} has been processed successfully. Your confirmation number is {confirmation_number}. Please write this down for your records. Thank you for choosing Bobby's Table!"
+                        })
+                else:
+                    print(f"❌ Reservation {reservation_number} not found")
+                    return jsonify({'success': False, 'error': 'Reservation not found.'}), 404
+                    
+            elif payment_type == 'order' and (order_number or order_id):
+                # Handle order payment
+                order = None
+                if order_number:
+                    order = Order.query.filter_by(order_number=order_number).first()
+                elif order_id:
+                    order = Order.query.get(order_id)
+                
+                if order:
+                    # Create Stripe PaymentIntent to match web version behavior
+                    try:
+                        stripe_intent = stripe.PaymentIntent.create(
+                            amount=int(amount * 100),  # Convert to cents
+                            currency='usd',
+                            metadata={
+                                'type': 'order',
+                                'order_id': order.id,
+                                'order_number': order.order_number,
+                                'customer_name': order.person_name,
+                                'customer_phone': order.customer_phone,
+                                'confirmation_number': confirmation_number,
+                                'payment_source': 'voice_call'
+                            },
+                            description=f"Bobby's Table Order #{order.order_number}",
+                            confirm=True,
+                            payment_method_types=['card'],
+                            return_url='https://bobbystable.com/payment-complete'
+                        )
+                        
+                        print(f"✅ Created Stripe PaymentIntent: {stripe_intent.id}")
+                        stripe_payment_id = stripe_intent.id
+                        
+                    except stripe.error.StripeError as e:
+                        print(f"⚠️ Stripe API error: {e}")
+                        # Fallback to SignalWire payment ID
+                        stripe_payment_id = payment_intent_id or f"sw_pay_{order_number or order_id}"
+                    
+                    # Update order payment status
+                    order.payment_status = 'paid'
+                    order.payment_intent_id = stripe_payment_id
+                    order.payment_amount = amount
+                    order.payment_date = datetime.utcnow()
+                    order.confirmation_number = confirmation_number
+                    db.session.commit()
+                    
+                    print(f"✅ Updated order {order.order_number} payment status to paid")
+                    print(f"✅ Generated confirmation number: {confirmation_number}")
+                    
+                    # Send SMS receipt using the phone number from parameters or order
+                    receipt_phone = phone_number or order.customer_phone
+                    try:
+                        sms_result = send_order_payment_receipt_sms(order, amount, receipt_phone, confirmation_number)
+                        print(f"📱 SMS receipt sent to {receipt_phone}: {sms_result}")
+                        
+                        return jsonify({
+                            'success': True, 
+                            'message': f'Payment successful! Your confirmation number is {confirmation_number}. Order marked as paid and SMS sent.',
+                            'order_number': order.order_number,
+                            'confirmation_number': confirmation_number,
+                            'amount': amount,
+                            'stripe_payment_id': stripe_payment_id,
+                            'sms_result': sms_result,
+                            'voice_response': f"Excellent! Your payment of ${amount:.2f} has been processed successfully. Your confirmation number is {confirmation_number}. I've also sent you an SMS receipt with all the details. Thank you for choosing Bobby's Table!"
+                        })
+                        
+                    except Exception as e:
+                        print(f"❌ SMS Error: {e}")
+                        return jsonify({
+                            'success': True, 
+                            'warning': f'Payment succeeded with confirmation {confirmation_number}, but failed to send SMS: {str(e)}',
+                            'order_number': order.order_number,
+                            'confirmation_number': confirmation_number,
+                            'amount': amount,
+                            'stripe_payment_id': stripe_payment_id,
+                            'voice_response': f"Excellent! Your payment of ${amount:.2f} has been processed successfully. Your confirmation number is {confirmation_number}. Please write this down for your records. Thank you for choosing Bobby's Table!"
+                        })
+                else:
+                    print(f"❌ Order {order_number or order_id} not found")
+                    return jsonify({'success': False, 'error': 'Order not found.'}), 404
+            else:
+                print(f"❌ Invalid payment type or missing identifiers")
+                return jsonify({'success': False, 'error': 'Invalid payment type or missing order/reservation identifiers.'}), 400
+                
+        elif status == 'error':
+            error_msg = payment.get('error', 'Payment processing failed')
+            print(f"❌ Payment failed: {error_msg}")
+            return jsonify({'success': False, 'error': error_msg}), 400
+            
+        else:
+            print(f"❌ Invalid payment data: status={status}, reservation={reservation_number}")
+            return jsonify({'success': False, 'error': 'Payment failed or reservation number not found.'}), 400
+            
+    except Exception as e:
+        print(f"❌ Payment callback error: {e}")
+        return jsonify({'success': False, 'error': 'Internal server error processing payment callback'}), 500
 
 if __name__ == '__main__':
     print("🍽️  Starting Bobby's Table Restaurant System")

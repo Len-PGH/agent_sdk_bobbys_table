@@ -41,6 +41,157 @@ class RestaurantMenuSkill(SkillBase):
         """Setup the menu skill"""
         return True
 
+    def _generate_order_number(self):
+        """Generate a unique 6-digit order number"""
+        import random
+        import sys
+        import os
+        
+        # Add the parent directory to sys.path to import app
+        parent_dir = os.path.dirname(os.path.dirname(__file__))
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+        
+        from models import Order
+        
+        while True:
+            # Generate a 6-digit number (100000 to 999999)
+            number = str(random.randint(100000, 999999))
+            
+            # Check if this number already exists
+            existing = Order.query.filter_by(order_number=number).first()
+            if not existing:
+                return number
+
+    def _find_menu_item_fuzzy(self, item_name):
+        """
+        Find menu item using fuzzy matching to handle common misspellings
+        
+        Args:
+            item_name: The item name to search for (potentially misspelled)
+            
+        Returns:
+            MenuItem object if found, None otherwise
+        """
+        from models import MenuItem
+        import re
+        
+        if not item_name:
+            return None
+        
+        # Normalize the search term
+        search_term = item_name.lower().strip()
+        
+        # First try exact match (case-insensitive)
+        menu_item = MenuItem.query.filter(
+            MenuItem.name.ilike(search_term)
+        ).filter_by(is_available=True).first()
+        if menu_item:
+            return menu_item
+        
+        # Try partial match
+        menu_item = MenuItem.query.filter(
+            MenuItem.name.ilike(f'%{search_term}%')
+        ).filter_by(is_available=True).first()
+        if menu_item:
+            return menu_item
+        
+        # Get all available menu items for fuzzy matching
+        all_items = MenuItem.query.filter_by(is_available=True).all()
+        
+        # Common spelling corrections and variations
+        spelling_corrections = {
+            'kraft': 'craft',
+            'coke': 'coca-cola',
+            'pepsi': 'coca-cola',
+            'soda': 'coca-cola',
+            'pop': 'coca-cola',
+            'burger': 'ribeye steak',  # Common misname for main dish
+            'chicken': 'buffalo wings',
+            'wings': 'buffalo wings',
+            'lemonade': 'lemonade',
+            'tea': 'iced tea',
+            'coffee': 'coffee',
+            'water': 'water',
+            'beer': 'beer',
+            'wine': 'wine'
+        }
+        
+        # Apply spelling corrections
+        corrected_term = search_term
+        for wrong, correct in spelling_corrections.items():
+            if wrong in search_term:
+                corrected_term = search_term.replace(wrong, correct)
+                break
+        
+        # Try corrected term
+        if corrected_term != search_term:
+            menu_item = MenuItem.query.filter(
+                MenuItem.name.ilike(f'%{corrected_term}%')
+            ).filter_by(is_available=True).first()
+            if menu_item:
+                return menu_item
+        
+        # Fuzzy matching using simple similarity
+        best_match = None
+        best_score = 0
+        
+        for item in all_items:
+            item_name_lower = item.name.lower()
+            
+            # Calculate similarity score
+            score = 0
+            
+            # Exact word matches get high score
+            search_words = search_term.split()
+            item_words = item_name_lower.split()
+            
+            for search_word in search_words:
+                for item_word in item_words:
+                    if search_word == item_word:
+                        score += 10
+                    elif search_word in item_word or item_word in search_word:
+                        score += 5
+                    elif self._levenshtein_distance(search_word, item_word) <= 2:
+                        score += 3
+            
+            # Bonus for containing the search term
+            if search_term in item_name_lower:
+                score += 8
+            elif corrected_term in item_name_lower:
+                score += 6
+            
+            # Length penalty for very different lengths
+            length_diff = abs(len(search_term) - len(item_name_lower))
+            if length_diff > 5:
+                score -= 2
+            
+            if score > best_score and score >= 3:  # Minimum threshold
+                best_score = score
+                best_match = item
+        
+        return best_match
+    
+    def _levenshtein_distance(self, s1, s2):
+        """Calculate Levenshtein distance between two strings"""
+        if len(s1) < len(s2):
+            return self._levenshtein_distance(s2, s1)
+        
+        if len(s2) == 0:
+            return len(s1)
+        
+        previous_row = list(range(len(s2) + 1))
+        for i, c1 in enumerate(s1):
+            current_row = [i + 1]
+            for j, c2 in enumerate(s2):
+                insertions = previous_row[j + 1] + 1
+                deletions = current_row[j] + 1
+                substitutions = previous_row[j] + (c1 != c2)
+                current_row.append(min(insertions, deletions, substitutions))
+            previous_row = current_row
+        
+        return previous_row[-1]
+
     def _normalize_phone_number(self, phone_number, caller_id=None):
         """
         Normalize phone number to E.164 format (+1XXXXXXXXXX)
@@ -137,101 +288,6 @@ class RestaurantMenuSkill(SkillBase):
         return None
 
     def register_tools(self) -> None:
-        """
-        Normalize phone number to E.164 format (+1XXXXXXXXXX)
-        
-        Args:
-            phone_number: Phone number provided by user (can be None)
-            caller_id: Caller ID from the call (fallback if phone_number is None)
-            
-        Returns:
-            Normalized phone number in E.164 format
-        """
-        # If no phone number provided, use caller ID
-        if not phone_number and caller_id:
-            phone_number = caller_id
-            print(f"🔄 Using caller ID as phone number: {caller_id}")
-        
-        if not phone_number:
-            return None
-        
-        # If already in E.164 format, return as-is
-        if phone_number.startswith('+1') and len(phone_number) == 12:
-            return phone_number
-        
-        # Extract only digits
-        digits = re.sub(r'\D', '', phone_number)
-        
-        # Handle different digit lengths
-        if len(digits) == 10:
-            # 10 digits: add +1 prefix
-            normalized = f"+1{digits}"
-            print(f"🔄 Normalized 10-digit number {digits} to {normalized}")
-            return normalized
-        elif len(digits) == 11 and digits.startswith('1'):
-            # 11 digits starting with 1: add + prefix
-            normalized = f"+{digits}"
-            print(f"🔄 Normalized 11-digit number {digits} to {normalized}")
-            return normalized
-        elif len(digits) == 7:
-            # 7 digits: assume local number, add area code 555 and +1
-            normalized = f"+1555{digits}"
-            print(f"🔄 Normalized 7-digit number {digits} to {normalized} (added 555 area code)")
-            return normalized
-        else:
-            # Return original if we can't normalize
-            print(f"⚠️  Could not normalize phone number: {phone_number} (digits: {digits})")
-            return phone_number
-
-    def _extract_phone_from_conversation(self, call_log):
-        """
-        Extract phone number from conversation using spoken number conversion
-        
-        Args:
-            call_log: List of conversation entries
-            
-        Returns:
-            Extracted phone number in E.164 format or None
-        """
-        if not call_log:
-            return None
-        
-        for entry in call_log:
-            if entry.get('role') == 'user' and entry.get('content'):
-                content = entry['content'].lower()
-                
-                # Look for phone number mentions
-                if any(phrase in content for phrase in ['phone number', 'my number', 'use number', 'different number']):
-                    # Convert spoken numbers to digits
-                    number_words = {
-                        'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
-                        'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9'
-                    }
-                    
-                    # Use word boundaries to avoid replacing parts of other words
-                    phone_part = content
-                    for word, digit in number_words.items():
-                        phone_part = re.sub(r'\b' + word + r'\b', digit, phone_part)
-                    
-                    # Extract digits and format as phone number
-                    phone_digits = re.findall(r'\d', phone_part)
-                    if len(phone_digits) >= 7:  # At least 7 digits for a phone number
-                        if len(phone_digits) >= 10:
-                            # Take first 10 digits
-                            extracted_phone = ''.join(phone_digits[:10])
-                            normalized = self._normalize_phone_number(extracted_phone)
-                            print(f"🔄 Extracted phone number from conversation: {normalized}")
-                            return normalized
-                        else:
-                            # Take available digits and normalize
-                            extracted_phone = ''.join(phone_digits)
-                            normalized = self._normalize_phone_number(extracted_phone)
-                            print(f"🔄 Extracted partial phone number from conversation: {normalized}")
-                            return normalized
-        
-        return None
-        
-    def register_tools(self) -> None:
         """Register menu and ordering tools with the agent"""
         
         # Get menu tool
@@ -262,7 +318,7 @@ class RestaurantMenuSkill(SkillBase):
         # Create order tool
         self.agent.define_tool(
             name="create_order",
-            description="Create a pickup or delivery order. Extract menu items and quantities from natural language. If user says 'I want the salmon' or 'One cheesecake', extract that information. This will generate a unique order ID.",
+            description="Create a pickup or delivery order. Extract menu items and quantities from natural language. If user says 'I want the salmon' or 'One cheesecake', extract that information. This will generate a unique order ID. Always ask customers if they want to pay now or at pickup/delivery.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -281,6 +337,7 @@ class RestaurantMenuSkill(SkillBase):
                     "customer_name": {"type": "string", "description": "Customer name for the order"},
                     "customer_phone": {"type": "string", "description": "Customer phone number"},
                     "order_type": {"type": "string", "description": "Order type: pickup or delivery (default to pickup)", "default": "pickup"},
+                    "payment_preference": {"type": "string", "description": "Payment preference: 'now' to pay immediately with credit card, or 'pickup' to pay at pickup/delivery (default)", "enum": ["now", "pickup"], "default": "pickup"},
                     "special_instructions": {"type": "string", "description": "Special cooking instructions or dietary restrictions"},
                     "customer_address": {"type": "string", "description": "Customer address (required for delivery orders)"},
                     "skip_suggestions": {"type": "boolean", "description": "Skip drink suggestions and additional items (for internal use)", "default": False}
@@ -493,6 +550,24 @@ class RestaurantMenuSkill(SkillBase):
             handler=self._get_kitchen_summary_handler,
             **self.swaig_fields
         )
+        
+        # Pay order tool
+        self.agent.define_tool(
+            name="pay_order",
+            description="Process payment for an existing order using SignalWire Pay and Stripe. Use this when customers want to pay for their order over the phone.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "order_number": {"type": "string", "description": "6-digit order number to pay for"},
+                    "order_id": {"type": "integer", "description": "Order ID (alternative to order_number)"},
+                    "customer_name": {"type": "string", "description": "Customer name for verification"},
+                    "phone_number": {"type": "string", "description": "Phone number for SMS receipt (will use caller ID if not provided)"}
+                },
+                "required": []
+            },
+            handler=self._pay_order_handler,
+            **self.swaig_fields
+        )
     
     def _get_menu_handler(self, args, raw_data):
         """Handler for get_menu tool"""
@@ -511,6 +586,63 @@ class RestaurantMenuSkill(SkillBase):
             from models import MenuItem
             
             with app.app_context():
+                # Check if user is asking for specific items from conversation
+                call_log = raw_data.get('call_log', []) if raw_data else []
+                specific_item_request = None
+                
+                # Look for specific item requests in recent conversation
+                for entry in reversed(call_log[-5:]):  # Check last 5 entries
+                    if entry.get('role') == 'user' and entry.get('content'):
+                        content = entry['content'].lower()
+                        
+                        # Check for specific item requests
+                        if 'lemonade' in content:
+                            specific_item_request = 'lemonade'
+                            break
+                        elif 'wings' in content:
+                            specific_item_request = 'wings'
+                            break
+                        elif 'burger' in content:
+                            specific_item_request = 'burger'
+                            break
+                        elif 'steak' in content:
+                            specific_item_request = 'steak'
+                            break
+                
+                # If user asked for a specific item, provide detailed info about that item
+                if specific_item_request:
+                    if specific_item_request == 'lemonade':
+                        lemonade_items = MenuItem.query.filter(
+                            MenuItem.name.ilike('%lemonade%'),
+                            MenuItem.is_available == True
+                        ).all()
+                        
+                        if lemonade_items:
+                            message = "Here are our lemonade options: "
+                            item_list = []
+                            for item in lemonade_items:
+                                item_list.append(f"{item.name} for ${item.price:.2f}")
+                            message += ", ".join(item_list) + ". "
+                            message += "Would you like to add any of these to your order?"
+                            return SwaigFunctionResult(message)
+                        else:
+                            return SwaigFunctionResult("I'm sorry, we don't currently have lemonade available on our menu. Would you like to hear about our other drink options?")
+                    
+                    elif specific_item_request == 'wings':
+                        wing_items = MenuItem.query.filter(
+                            MenuItem.name.ilike('%wing%'),
+                            MenuItem.is_available == True
+                        ).all()
+                        
+                        if wing_items:
+                            message = "Here are our wing options: "
+                            item_list = []
+                            for item in wing_items:
+                                item_list.append(f"{item.name} for ${item.price:.2f}")
+                            message += ", ".join(item_list) + ". "
+                            message += "Would you like to add any of these to your order?"
+                            return SwaigFunctionResult(message)
+                
                 # Detect if this is a SignalWire call and default to text format for voice
                 # SignalWire calls include specific metadata in raw_data
                 is_signalwire_call = (
@@ -626,20 +758,42 @@ class RestaurantMenuSkill(SkillBase):
                         return result
                     else:
                         # Return formatted text for voice - more concise for phone calls
-                        message = "Here's our complete menu. "
+                        # Get all available items across all categories
+                        all_items = MenuItem.query.filter_by(is_available=True).all()
                         
-                        for category in categories:
-                            items = MenuItem.query.filter_by(category=category, is_available=True).all()
-                            if items:
-                                display_name = category_display_names[category]
-                                message += f"For {display_name}, we have: "
-                                item_list = []
-                                for item in items:
-                                    item_list.append(f"{item.name} for ${item.price:.2f}")
-                                message += ", ".join(item_list) + ". "
+                        if not all_items:
+                            return SwaigFunctionResult("I'm sorry, our menu is currently unavailable. Please try again later.")
+                        
+                        # Group items by category for organized presentation
+                        categories_with_items = {}
+                        for item in all_items:
+                            if item.category not in categories_with_items:
+                                categories_with_items[item.category] = []
+                            categories_with_items[item.category].append(item)
+                        
+                        # Build comprehensive menu response
+                        message = f"Here's our complete menu with {len(all_items)} items available. "
+                        
+                        # List items by category
+                        for category, items in categories_with_items.items():
+                            category_display = category.replace('-', ' ').title()
+                            message += f"For {category_display}, we have: "
+                            item_list = []
+                            for item in items:
+                                item_list.append(f"{item.name} for ${item.price:.2f}")
+                            message += ", ".join(item_list) + ". "
                         
                         message += "Would you like to hear more details about any category or specific item?"
-                        return SwaigFunctionResult(message)
+                        
+                        # Also include the menu data in the result for programmatic access
+                        result = SwaigFunctionResult(message)
+                        result.add_action("menu_data", {
+                            "success": True,
+                            "total_items": len(all_items),
+                            "categories": list(categories_with_items.keys()),
+                            "items": [item.to_dict() for item in all_items]
+                        })
+                        return result
                 
         except Exception as e:
             if args.get('format', 'text').lower() == 'json':
@@ -769,29 +923,55 @@ class RestaurantMenuSkill(SkillBase):
                             # Remove this item from conversation to avoid double-counting
                             conversation_text = conversation_text.replace(item_name, '', 1)
                 
-                # Also check for partial matches (e.g., "cheesecake" matches "New York Cheesecake")
+                # Also check for fuzzy matches to handle misspellings
                 if not extracted_items:
-                    for menu_item in menu_items:
-                        item_words = menu_item.name.lower().split()
-                        for word in item_words:
-                            if len(word) > 3 and word in conversation_text:  # Only check significant words
-                                # Found a partial match
-                                quantity = 1
+                    # Extract potential food words from conversation
+                    words = conversation_text.lower().split()
+                    
+                    # Look for food-related words and phrases
+                    for i, word in enumerate(words):
+                        # Skip common non-food words
+                        if word in ['i', 'want', 'like', 'get', 'have', 'order', 'the', 'a', 'an', 'some', 'please', 'would', 'could', 'can']:
+                            continue
+                        
+                        # Try single words and two-word combinations
+                        potential_items = [word]
+                        if i < len(words) - 1:
+                            two_word = f"{word} {words[i+1]}"
+                            potential_items.append(two_word)
+                        
+                        # Try to match each potential food word with menu items using fuzzy matching
+                        for potential_item in potential_items:
+                            menu_item = self._find_menu_item_fuzzy(potential_item)
+                            if menu_item:
+                                quantity = 1  # Default quantity
                                 
-                                # Look for quantity near this word
-                                word_pattern = rf'(\w+)\s*{re.escape(word)}'
-                                match = re.search(word_pattern, conversation_text)
-                                if match:
-                                    qty_text = match.group(1).lower()
-                                    if qty_text.isdigit():
-                                        quantity = int(qty_text)
-                                    elif qty_text in quantity_patterns:
-                                        quantity = quantity_patterns[qty_text]
+                                # Try to find quantity near the food word
+                                patterns_to_check = [
+                                    rf'(\d+)\s*{re.escape(potential_item)}',
+                                    rf'{re.escape(potential_item)}\s*(\d+)',
+                                    rf'(\w+)\s*{re.escape(potential_item)}',
+                                    rf'{re.escape(potential_item)}\s*(\w+)',
+                                ]
+                                
+                                for qty_pattern in patterns_to_check:
+                                    match = re.search(qty_pattern, conversation_text)
+                                    if match:
+                                        qty_text = match.group(1).lower()
+                                        if qty_text.isdigit():
+                                            quantity = int(qty_text)
+                                        elif qty_text in quantity_patterns:
+                                            quantity = quantity_patterns[qty_text]
+                                        break
                                 
                                 extracted_items.append({
-                                    'name': menu_item.name,
+                                    'name': menu_item.name,  # Use corrected name
                                     'quantity': quantity
                                 })
+                                if menu_item.name.lower() != potential_item.lower():
+                                    print(f"🔍 Found menu item via fuzzy match: '{potential_item}' -> '{menu_item.name}' x{quantity}")
+                                else:
+                                    print(f"🔍 Found menu item '{menu_item.name}' x{quantity}")
                                 break
                         
                         if extracted_items:  # Stop after finding first match
@@ -1202,6 +1382,8 @@ class RestaurantMenuSkill(SkillBase):
                     missing_info.append("your name")
                 if not args.get('customer_phone'):
                     missing_info.append("your phone number")
+                if not args.get('items') or len(args.get('items', [])) == 0:
+                    missing_info.append("items to order")
                 
                 # Check if delivery address is needed
                 order_type = args.get('order_type', 'pickup').lower()
@@ -1236,6 +1418,7 @@ class RestaurantMenuSkill(SkillBase):
                 
                 # Create the order without requiring a reservation (matching Flask route structure)
                 order = Order(
+                    order_number=self._generate_order_number(),
                     person_name=args['customer_name'],
                     status='pending',
                     target_date=str(now.date()),
@@ -1255,10 +1438,14 @@ class RestaurantMenuSkill(SkillBase):
                 
                 # Add order items
                 for item_data in args['items']:
-                    # Find menu item by name
-                    menu_item = MenuItem.query.filter_by(name=item_data['name'], is_available=True).first()
+                    # Find menu item by name with fuzzy matching
+                    menu_item = self._find_menu_item_fuzzy(item_data['name'])
                     if not menu_item:
                         return SwaigFunctionResult(f"Sorry, '{item_data['name']}' is not available on our menu.")
+                    
+                    # Log if we corrected the spelling
+                    if menu_item.name.lower() != item_data['name'].lower():
+                        print(f"🔄 Corrected '{item_data['name']}' to '{menu_item.name}'")
                     
                     quantity = item_data.get('quantity', 1)
                     
@@ -1271,7 +1458,7 @@ class RestaurantMenuSkill(SkillBase):
                     
                     db.session.add(order_item)
                     total_amount += menu_item.price * quantity
-                    order_summary.append(f"{quantity}x {menu_item.name}")
+                    order_summary.append(f"{quantity}x {menu_item.name}")  # Use corrected name
                 
                 order.total_amount = total_amount
                 db.session.commit()
@@ -1294,9 +1481,20 @@ class RestaurantMenuSkill(SkillBase):
                 # Send SMS confirmation
                 sms_result = self._send_order_sms(order_data, args['customer_phone'])
                 
+                # Check if payment preference was specified
+                payment_preference = args.get('payment_preference', 'pickup')  # Default to pay at pickup
+                
+                # Update order payment status based on preference
+                if payment_preference == 'now':
+                    order.payment_status = 'pending'  # Will be updated after payment processing
+                else:
+                    order.payment_status = 'unpaid'  # Pay at pickup/delivery
+                
+                db.session.commit()
+                
                 # Create comprehensive order confirmation
                 message = f"🍽️ ORDER CONFIRMED! 🍽️\n\n"
-                message += f"Order #{order.id} for {args['customer_name']}\n"
+                message += f"Order #{order.order_number} for {args['customer_name']}\n"
                 message += f"📱 Phone: {args['customer_phone']}\n\n"
                 message += f"📋 Items Ordered:\n"
                 for item in order_summary:
@@ -1319,10 +1517,82 @@ class RestaurantMenuSkill(SkillBase):
                 if sms_result.get('sms_sent'):
                     message += f"\n📱 A confirmation SMS has been sent to your phone. "
                 
-                message += f"\nThank you for choosing Bobby's Table! We'll have your delicious order ready right on time. "
-                message += f"You can call us anytime to check on your order status using order #{order.id}."
-                
-                return SwaigFunctionResult(message)
+                # Handle payment preference
+                if payment_preference == 'now':
+                    message += f"\n💳 You chose to pay now. I'll collect your payment information next."
+                    message += f"\nThank you for choosing Bobby's Table! We'll have your delicious order ready right on time. "
+                    message += f"You can call us anytime to check on your order status using order #{order.order_number}."
+                    
+                    # Return result with payment action
+                    result = SwaigFunctionResult(message)
+                    
+                    # Add payment collection using the pay verb
+                    import os
+                    
+                    # Get payment connector URL - try to auto-detect ngrok URL
+                    payment_connector_url = os.getenv('SIGNALWIRE_PAYMENT_CONNECTOR_URL')
+                    if payment_connector_url:
+                        # If environment variable is set, ensure it has the correct endpoint path
+                        if not payment_connector_url.endswith('/api/signalwire/payment-callback'):
+                            if payment_connector_url.endswith('/'):
+                                payment_connector_url = payment_connector_url + 'api/signalwire/payment-callback'
+                            else:
+                                payment_connector_url = payment_connector_url + '/api/signalwire/payment-callback'
+                    else:
+                        # Try to auto-detect ngrok URL from request headers
+                        try:
+                            from flask import request
+                            if request and request.headers.get('Host'):
+                                host = request.headers.get('Host')
+                                if 'ngrok' in host or 'tunnel' in host:
+                                    payment_connector_url = f"https://{host}/api/signalwire/payment-callback"
+                                else:
+                                    payment_connector_url = 'http://localhost:8080/api/signalwire/payment-callback'
+                            else:
+                                payment_connector_url = 'http://localhost:8080/api/signalwire/payment-callback'
+                        except:
+                            payment_connector_url = 'http://localhost:8080/api/signalwire/payment-callback'
+                    
+                    print(f"🔗 Using payment connector URL: {payment_connector_url}")
+                    
+                    # Check if URL is localhost (will cause issues with SignalWire)
+                    if 'localhost' in payment_connector_url or '127.0.0.1' in payment_connector_url:
+                        print("⚠️  WARNING: Payment connector URL is localhost - SignalWire won't be able to reach this!")
+                        print("   Make sure SIGNALWIRE_PAYMENT_CONNECTOR_URL is set to your ngrok URL")
+                    
+                    # Add payment collection
+                    result = result.pay(
+                        payment_connector_url=payment_connector_url,
+                        input_method="dtmf",
+                        payment_method="credit-card",
+                        timeout=10,
+                        max_attempts=3,
+                        security_code=True,
+                        postal_code=True,
+                        min_postal_code_length=5,
+                        token_type="one-time",
+                        charge_amount=str(total_amount),
+                        currency="usd",
+                        language="en-US",
+                        voice="woman",
+                        description=f"Bobby's Table Order #{order.order_number}",
+                        valid_card_types="visa mastercard amex discover",
+                        parameters=[
+                            {"name": "order_id", "value": str(order.id)},
+                            {"name": "order_number", "value": order.order_number},
+                            {"name": "customer_name", "value": args['customer_name']},
+                            {"name": "phone_number", "value": args['customer_phone']},
+                            {"name": "payment_type", "value": "order"}
+                        ]
+                    )
+                    
+                    return result
+                else:
+                    message += f"\n💰 Payment: You'll pay when you {order_type} your order."
+                    message += f"\nThank you for choosing Bobby's Table! We'll have your delicious order ready right on time. "
+                    message += f"You can call us anytime to check on your order status using order #{order.order_number}."
+                    
+                    return SwaigFunctionResult(message)
                 
         except Exception as e:
             return SwaigFunctionResult(f"Sorry, there was an error creating your order: {str(e)}")
@@ -1343,44 +1613,85 @@ class RestaurantMenuSkill(SkillBase):
             from models import Order
             
             with app.app_context():
-                # Try to extract order ID from conversation if not provided in args
-                if not args.get('order_id') and not args.get('reservation_id'):
+                # First check if order_number is provided directly
+                if args.get('order_number'):
+                    order = Order.query.filter_by(order_number=args['order_number']).first()
+                    if order:
+                        args['order_id'] = order.id
+                        print(f"🔍 Found order by number {args['order_number']}: ID {order.id}")
+                    else:
+                        return SwaigFunctionResult(f"Order number {args['order_number']} not found.")
+                
+                # Try to extract order number/ID from conversation if not provided in args
+                elif not args.get('order_id') and not args.get('reservation_id'):
                     call_log = raw_data.get('call_log', []) if raw_data else []
                     
-                    # Extract order ID from conversation
+                    # Extract order number/ID from conversation
                     import re
+                    order_number = None
+                    order_id = None
+                    
                     for entry in call_log:
                         if entry.get('content'):
                             content = entry['content'].lower()
-                            # Look for order number mentions in both user and assistant messages
-                            order_patterns = [
-                                r'order\s+(?:number\s+)?(\d+)',
-                                r'order\s+(?:number\s+)?(nineteen|eighteen|seventeen|sixteen|fifteen|fourteen|thirteen|twelve|eleven|ten|nine|eight|seven|six|five|four|three|two|one)',
-                                r'(?:check\s+)?(?:my\s+)?order\s+(?:number\s+)?(\d+)',
-                                r'(?:check\s+)?(?:my\s+)?order\s+(?:number\s+)?(nineteen|eighteen|seventeen|sixteen|fifteen|fourteen|thirteen|twelve|eleven|ten|nine|eight|seven|six|five|four|three|two|one)',
-                                r'#(\d+)'
+                            
+                            # First try to find 6-digit order numbers
+                            order_number_patterns = [
+                                r'order number\s+is\s+(\d{6})',  # "order number is 123456"
+                                r'order\s+(\d{6})',              # "order 123456"
+                                r'number\s+is\s+(\d{6})',        # "number is 123456"
+                                r'(\d{6})',                      # Any 6-digit number
                             ]
                             
-                            for pattern in order_patterns:
-                                order_match = re.search(pattern, content)
-                                if order_match:
-                                    order_num = order_match.group(1)
-                                    # Convert word numbers to digits
-                                    word_to_num = {
-                                        'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
-                                        'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
-                                        'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14,
-                                        'fifteen': 15, 'sixteen': 16, 'seventeen': 17, 'eighteen': 18,
-                                        'nineteen': 19, 'twenty': 20
-                                    }
-                                    if order_num in word_to_num:
-                                        args['order_id'] = word_to_num[order_num]
-                                    else:
-                                        args['order_id'] = int(order_num)
-                                    print(f"🔍 Found order ID {args['order_id']} from: '{content}'")
+                            for pattern in order_number_patterns:
+                                match = re.search(pattern, content)
+                                if match:
+                                    order_number = match.group(1)
+                                    print(f"🔍 Extracted order number from conversation: {order_number}")
                                     break
-                            if args.get('order_id'):
+                            
+                            # If no 6-digit number found, try shorter order IDs
+                            if not order_number:
+                                order_id_patterns = [
+                                    r'order\s+(?:number\s+)?(\d+)',
+                                    r'order\s+(?:number\s+)?(nineteen|eighteen|seventeen|sixteen|fifteen|fourteen|thirteen|twelve|eleven|ten|nine|eight|seven|six|five|four|three|two|one)',
+                                    r'(?:check\s+)?(?:my\s+)?order\s+(?:number\s+)?(\d+)',
+                                    r'(?:check\s+)?(?:my\s+)?order\s+(?:number\s+)?(nineteen|eighteen|seventeen|sixteen|fifteen|fourteen|thirteen|twelve|eleven|ten|nine|eight|seven|six|five|four|three|two|one)',
+                                    r'#(\d+)'
+                                ]
+                                
+                                for pattern in order_id_patterns:
+                                    order_match = re.search(pattern, content)
+                                    if order_match:
+                                        order_num = order_match.group(1)
+                                        # Convert word numbers to digits
+                                        word_to_num = {
+                                            'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+                                            'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
+                                            'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14,
+                                            'fifteen': 15, 'sixteen': 16, 'seventeen': 17, 'eighteen': 18,
+                                            'nineteen': 19, 'twenty': 20
+                                        }
+                                        if order_num in word_to_num:
+                                            order_id = word_to_num[order_num]
+                                        else:
+                                            order_id = int(order_num)
+                                        print(f"🔍 Found order ID {order_id} from: '{content}'")
+                                        break
+                            
+                            if order_number or order_id:
                                 break
+                    
+                    # Try to find by order number first (preferred)
+                    if order_number:
+                        order = Order.query.filter_by(order_number=order_number).first()
+                        if order:
+                            args['order_id'] = order.id
+                            print(f"🔍 Found order by extracted number {order_number}: ID {order.id}")
+                        else:
+                            return SwaigFunctionResult(f"Order number {order_number} not found.")
+                    elif order_id:
+                        args['order_id'] = order_id
                 
                 # If still no order ID found and no reservation ID, try to find by caller phone
                 if not args.get('order_id') and not args.get('reservation_id'):
@@ -1418,7 +1729,7 @@ class RestaurantMenuSkill(SkillBase):
                     
                     message = f"Here are the {len(recent_orders)} most recent orders:\n"
                     for order in recent_orders:
-                        message += f"• Order #{order.id} - {order.person_name} - Status: {order.status}\n"
+                        message += f"• Order #{order.order_number} - {order.person_name} - Status: {order.status}\n"
                     return SwaigFunctionResult(message)
                 
                 if args.get('order_id'):
@@ -1442,7 +1753,7 @@ class RestaurantMenuSkill(SkillBase):
                     'completed': 'Your order has been completed.'
                 }
                 
-                message = f"Order #{order.id} for {order.person_name}\n"
+                message = f"Order #{order.order_number} for {order.person_name}\n"
                 message += f"Status: {order.status.title()}\n"
                 message += f"{status_messages.get(order.status, 'Status unknown')}\n"
                 message += f"Scheduled for: {time_12hr} on {order.target_date}\n"
@@ -1473,13 +1784,71 @@ class RestaurantMenuSkill(SkillBase):
             from models import db, Order
             
             with app.app_context():
-                # Check for required parameters
-                required_fields = ['order_id', 'status']
-                missing_fields = [field for field in required_fields if not args.get(field)]
+                # First check if order_number is provided
+                if args.get('order_number'):
+                    order = Order.query.filter_by(order_number=args['order_number']).first()
+                    if order:
+                        args['order_id'] = order.id
+                        print(f"🔍 Found order by number {args['order_number']}: ID {order.id}")
+                    else:
+                        return SwaigFunctionResult(f"Order number {args['order_number']} not found.")
+                elif not args.get('order_id'):
+                    # Try to extract from conversation
+                    call_log = raw_data.get('call_log', []) if raw_data else []
+                    
+                    import re
+                    order_number = None
+                    order_id = None
+                    
+                    for entry in call_log:
+                        if entry.get('content'):
+                            content = entry['content'].lower()
+                            
+                            # Look for 6-digit order numbers first
+                            order_number_patterns = [
+                                r'order number\s+is\s+(\d{6})',
+                                r'order\s+(\d{6})',
+                                r'number\s+is\s+(\d{6})',
+                                r'(\d{6})',
+                            ]
+                            
+                            for pattern in order_number_patterns:
+                                match = re.search(pattern, content)
+                                if match:
+                                    order_number = match.group(1)
+                                    break
+                            
+                            # If no 6-digit number, try order IDs
+                            if not order_number:
+                                order_id_patterns = [
+                                    r'order\s+(?:number\s+)?(\d+)',
+                                    r'update\s+order\s+(\d+)',
+                                    r'#(\d+)'
+                                ]
+                                
+                                for pattern in order_id_patterns:
+                                    match = re.search(pattern, content)
+                                    if match:
+                                        order_id = int(match.group(1))
+                                        break
+                            
+                            if order_number or order_id:
+                                break
+                    
+                    if order_number:
+                        order = Order.query.filter_by(order_number=order_number).first()
+                        if order:
+                            args['order_id'] = order.id
+                        else:
+                            return SwaigFunctionResult(f"Order number {order_number} not found.")
+                    elif order_id:
+                        args['order_id'] = order_id
+                    else:
+                        return SwaigFunctionResult("I need an order number or order ID to update the status. Please provide the order number or say something like 'Update order 123456 status to ready'.")
                 
-                if missing_fields:
-                    missing_text = ", ".join(missing_fields)
-                    return SwaigFunctionResult(f"I need some more information to update the order status. Please provide: {missing_text}. For example, say 'Update order 5 status to ready'.")
+                # Check for status parameter
+                if not args.get('status'):
+                    return SwaigFunctionResult("I need to know what status to update the order to. Please specify the new status (pending, preparing, ready, completed, cancelled).")
                 
                 order = Order.query.get(args['order_id'])
                 
@@ -1515,7 +1884,7 @@ class RestaurantMenuSkill(SkillBase):
                 order.status = new_status
                 db.session.commit()
                 
-                return SwaigFunctionResult(f"Order #{order.id} status updated from {old_status} to {new_status}.")
+                return SwaigFunctionResult(f"Order #{order.order_number} status updated from {old_status} to {new_status}.")
                 
         except Exception as e:
             return SwaigFunctionResult(f"Sorry, there was an error updating the order status: {str(e)}")
@@ -2165,4 +2534,237 @@ class RestaurantMenuSkill(SkillBase):
                     return SwaigFunctionResult(response.strip())
                 
         except Exception as e:
-            return SwaigFunctionResult(f"Error generating kitchen summary: {str(e)}") 
+            return SwaigFunctionResult(f"Error generating kitchen summary: {str(e)}")
+    
+    def _pay_order_handler(self, args, raw_data):
+        """Handler for pay_order tool"""
+        try:
+            # Import Flask app and models locally to avoid circular import
+            import sys
+            import os
+            
+            # Add the parent directory to sys.path to import app
+            parent_dir = os.path.dirname(os.path.dirname(__file__))
+            if parent_dir not in sys.path:
+                sys.path.insert(0, parent_dir)
+            
+            from app import app
+            from models import db, Order
+            
+            with app.app_context():
+                # Get caller phone number from raw_data
+                caller_phone = None
+                if raw_data and isinstance(raw_data, dict):
+                    caller_phone = (
+                        raw_data.get('caller_id_num') or 
+                        raw_data.get('caller_id_number') or
+                        raw_data.get('from') or
+                        raw_data.get('from_number')
+                    )
+                    # Also check in global_data
+                    global_data = raw_data.get('global_data', {})
+                    if not caller_phone and global_data:
+                        caller_phone = (
+                            global_data.get('caller_id_number') or
+                            global_data.get('caller_id_num')
+                        )
+                
+                # Find the order
+                order = None
+                
+                # Try to find by order number first (preferred)
+                if args.get('order_number'):
+                    order = Order.query.filter_by(order_number=args['order_number']).first()
+                    if order:
+                        print(f"🔍 Found order by number {args['order_number']}: ID {order.id}")
+                    else:
+                        return SwaigFunctionResult(f"Order number {args['order_number']} not found.")
+                
+                # Try to find by order ID
+                elif args.get('order_id'):
+                    order = Order.query.get(args['order_id'])
+                    if order:
+                        print(f"🔍 Found order by ID {args['order_id']}")
+                    else:
+                        return SwaigFunctionResult(f"Order ID {args['order_id']} not found.")
+                
+                # Try to extract order info from conversation
+                elif not order:
+                    call_log = raw_data.get('call_log', []) if raw_data else []
+                    
+                    # Extract order number/ID from conversation
+                    import re
+                    order_number = None
+                    order_id = None
+                    
+                    for entry in call_log:
+                        if entry.get('content'):
+                            content = entry['content'].lower()
+                            
+                            # First try to find 6-digit order numbers
+                            order_number_patterns = [
+                                r'order number\s+is\s+(\d{6})',  # "order number is 123456"
+                                r'order\s+(\d{6})',              # "order 123456"
+                                r'number\s+is\s+(\d{6})',        # "number is 123456"
+                                r'(\d{6})',                      # Any 6-digit number
+                            ]
+                            
+                            for pattern in order_number_patterns:
+                                match = re.search(pattern, content)
+                                if match:
+                                    order_number = match.group(1)
+                                    print(f"🔍 Extracted order number from conversation: {order_number}")
+                                    break
+                            
+                            if order_number:
+                                break
+                    
+                    # Try to find by extracted order number
+                    if order_number:
+                        order = Order.query.filter_by(order_number=order_number).first()
+                        if order:
+                            print(f"🔍 Found order by extracted number {order_number}: ID {order.id}")
+                        else:
+                            return SwaigFunctionResult(f"Order number {order_number} not found.")
+                
+                # If still no order found, try to find by caller phone
+                if not order and caller_phone:
+                    # Find the most recent unpaid order for this phone number
+                    recent_orders = Order.query.filter(
+                        Order.customer_phone.like(f"%{caller_phone}%"),
+                        Order.payment_status.in_(['unpaid', 'pending'])
+                    ).order_by(Order.created_at.desc()).limit(3).all()
+                    
+                    if len(recent_orders) == 1:
+                        order = recent_orders[0]
+                        print(f"🔍 Found single unpaid order for caller: Order #{order.order_number}")
+                    elif len(recent_orders) > 1:
+                        # Multiple orders found, ask user to specify
+                        order_list = []
+                        for o in recent_orders:
+                            order_list.append(f"Order #{o.order_number} for ${o.total_amount:.2f}")
+                        
+                        return SwaigFunctionResult(
+                            f"I found {len(recent_orders)} unpaid orders for your phone number: {', '.join(order_list)}. "
+                            f"Which order would you like to pay for? Please tell me the order number."
+                        )
+                    else:
+                        return SwaigFunctionResult(
+                            "I couldn't find any unpaid orders for your phone number. "
+                            "Could you please provide your order number?"
+                        )
+                
+                if not order:
+                    return SwaigFunctionResult(
+                        "I need your order number to process payment. "
+                        "Could you please provide your 6-digit order number?"
+                    )
+                
+                # Verify customer name if provided
+                if args.get('customer_name'):
+                    if order.person_name and order.person_name.lower() != args['customer_name'].lower():
+                        return SwaigFunctionResult(
+                            f"The name '{args['customer_name']}' doesn't match our records for order #{order.order_number}. "
+                            f"Please verify the order number and customer name."
+                        )
+                
+                # Check if order is already paid
+                if order.payment_status == 'paid':
+                    return SwaigFunctionResult(
+                        f"Order #{order.order_number} has already been paid. "
+                        f"The payment amount was ${order.payment_amount:.2f}."
+                    )
+                
+                # Check if order can be paid (not cancelled)
+                if order.status == 'cancelled':
+                    return SwaigFunctionResult(
+                        f"Order #{order.order_number} has been cancelled and cannot be paid."
+                    )
+                
+                # Get payment amount
+                payment_amount = order.total_amount or 0.0
+                if payment_amount <= 0:
+                    return SwaigFunctionResult(
+                        f"Order #{order.order_number} has no amount due. Please contact the restaurant for assistance."
+                    )
+                
+                # Update order payment status to pending
+                order.payment_status = 'pending'
+                db.session.commit()
+                
+                # Use phone number from args or caller ID
+                phone_number = args.get('phone_number') or caller_phone or order.customer_phone
+                
+                # Create payment confirmation message
+                message = f"💳 Processing payment for Order #{order.order_number}\n"
+                message += f"Customer: {order.person_name}\n"
+                message += f"Amount: ${payment_amount:.2f}\n\n"
+                message += f"I'll now collect your credit card information securely."
+                
+                # Create result with payment action
+                result = SwaigFunctionResult(message)
+                
+                # Add payment collection using the pay verb
+                import os
+                
+                # Get payment connector URL - try to auto-detect ngrok URL
+                payment_connector_url = os.getenv('SIGNALWIRE_PAYMENT_CONNECTOR_URL')
+                if payment_connector_url:
+                    # If environment variable is set, ensure it has the correct endpoint path
+                    if not payment_connector_url.endswith('/api/signalwire/payment-callback'):
+                        if payment_connector_url.endswith('/'):
+                            payment_connector_url = payment_connector_url + 'api/signalwire/payment-callback'
+                        else:
+                            payment_connector_url = payment_connector_url + '/api/signalwire/payment-callback'
+                else:
+                    # Try to auto-detect ngrok URL from request headers
+                    try:
+                        from flask import request
+                        if request and request.headers.get('Host'):
+                            host = request.headers.get('Host')
+                            if 'ngrok' in host or 'tunnel' in host:
+                                payment_connector_url = f"https://{host}/api/signalwire/payment-callback"
+                            else:
+                                payment_connector_url = 'http://localhost:8080/api/signalwire/payment-callback'
+                        else:
+                            payment_connector_url = 'http://localhost:8080/api/signalwire/payment-callback'
+                    except:
+                        payment_connector_url = 'http://localhost:8080/api/signalwire/payment-callback'
+                
+                print(f"🔗 Using payment connector URL: {payment_connector_url}")
+                
+                # Check if URL is localhost (will cause issues with SignalWire)
+                if 'localhost' in payment_connector_url or '127.0.0.1' in payment_connector_url:
+                    print("⚠️  WARNING: Payment connector URL is localhost - SignalWire won't be able to reach this!")
+                    print("   Make sure SIGNALWIRE_PAYMENT_CONNECTOR_URL is set to your ngrok URL")
+                
+                # Add payment collection
+                result = result.pay(
+                    payment_connector_url=payment_connector_url,
+                    input_method="dtmf",
+                    payment_method="credit-card",
+                    timeout=10,
+                    max_attempts=3,
+                    security_code=True,
+                    postal_code=True,
+                    min_postal_code_length=5,
+                    token_type="one-time",
+                    charge_amount=str(payment_amount),
+                    currency="usd",
+                    language="en-US",
+                    voice="woman",
+                    description=f"Bobby's Table Order #{order.order_number}",
+                    valid_card_types="visa mastercard amex discover",
+                    parameters=[
+                        {"name": "order_id", "value": str(order.id)},
+                        {"name": "order_number", "value": order.order_number},
+                        {"name": "customer_name", "value": order.person_name or ""},
+                        {"name": "phone_number", "value": phone_number or ""},
+                        {"name": "payment_type", "value": "order"}
+                    ]
+                )
+                
+                return result
+                
+        except Exception as e:
+            return SwaigFunctionResult(f"Sorry, there was an error processing your payment request: {str(e)}") 

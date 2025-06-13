@@ -12,6 +12,30 @@
         <div class="alert alert-info mb-4">
             <i class="fas fa-info-circle me-2"></i>
             <strong>Reservation Number:</strong> <span class="badge bg-primary">{{ reservation.reservation_number }}</span>
+            
+            <!-- Payment Status Information -->
+            <div class="mt-2">
+                <strong>Payment Status:</strong>
+                {% if reservation.payment_status == 'paid' %}
+                    <span class="badge bg-success ms-2">
+                        <i class="fas fa-check-circle me-1"></i>Paid
+                    </span>
+                    {% if reservation.payment_amount %}
+                        <span class="text-muted ms-2">Amount: ${{ "%.2f"|format(reservation.payment_amount) }}</span>
+                    {% endif %}
+                    {% if reservation.payment_date %}
+                        <span class="text-muted ms-2">Date: {{ reservation.payment_date.strftime('%b %d, %Y at %I:%M %p') }}</span>
+                    {% endif %}
+                {% elif reservation.payment_status == 'refunded' %}
+                    <span class="badge bg-info ms-2">
+                        <i class="fas fa-undo me-1"></i>Refunded
+                    </span>
+                {% else %}
+                    <span class="badge bg-warning ms-2">
+                        <i class="fas fa-clock me-1"></i>Unpaid
+                    </span>
+                {% endif %}
+            </div>
         </div>
         {% endif %}
         <form method="post" class="reservation-form">

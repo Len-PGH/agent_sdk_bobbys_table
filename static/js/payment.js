@@ -1,12 +1,40 @@
 // Payment functionality for Bobby's Table
-let stripe;
-let elements;
-let cardElement;
-let currentTotalAmount;
+(function() {
+    'use strict';
+    
+    // Prevent multiple initializations
+    if (window.paymentSystemInitialized) {
+        return;
+    }
+    window.paymentSystemInitialized = true;
 
-// Initialize Stripe when the page loads
+    // Global payment system namespace
+    if (typeof window.paymentSystem === 'undefined') {
+        window.paymentSystem = {
+            stripe: null,
+            elements: null,
+            cardElement: null,
+            currentTotalAmount: null
+        };
+    }
+
+    // Local references (no redeclaration issues in IIFE)
+    let stripe = window.paymentSystem.stripe;
+    let elements = window.paymentSystem.elements;
+    let cardElement = window.paymentSystem.cardElement;
+    let currentTotalAmount = window.paymentSystem.currentTotalAmount;
+
+// Function to set current total amount from external context
+window.setCurrentTotalAmount = function(amount) {
+    currentTotalAmount = amount;
+    window.paymentSystem.currentTotalAmount = amount;
+};
+
+// Initialize Stripe when the page loads (only once)
 document.addEventListener('DOMContentLoaded', function() {
-    initializeStripe();
+    if (!window.paymentSystem.stripe) {
+        initializeStripe();
+    }
 });
 
 async function initializeStripe() {
@@ -16,6 +44,7 @@ async function initializeStripe() {
         const config = await response.json();
         
         stripe = Stripe(config.publishable_key);
+        window.paymentSystem.stripe = stripe;
         elements = stripe.elements({
             appearance: {
                 theme: 'night',
@@ -31,6 +60,8 @@ async function initializeStripe() {
             }
         });
 
+        window.paymentSystem.elements = elements;
+        
         // Create card element
         cardElement = elements.create('card', {
             style: {
@@ -47,6 +78,8 @@ async function initializeStripe() {
                 }
             }
         });
+        
+        window.paymentSystem.cardElement = cardElement;
 
         // Wait for DOM to be ready before mounting
         if (document.readyState === 'loading') {
@@ -204,17 +237,26 @@ async function handlePayment(event) {
     setPaymentProcessing(true);
 
     try {
+        // Determine payment type and create appropriate payment intent
+        const isOrderPayment = window.paymentType === 'order';
+        const paymentData = {
+            amount: Math.round(currentTotalAmount * 100), // Convert to cents
+            currency: 'usd'
+        };
+        
+        if (isOrderPayment) {
+            paymentData.order_id = window.currentOrderId;
+        } else {
+            paymentData.reservation_id = window.currentReservationId;
+        }
+
         // Create payment intent
         const response = await fetch('/api/stripe/create-payment-intent', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({
-                reservation_id: window.currentReservationId,
-                amount: Math.round(currentTotalAmount * 100), // Convert to cents
-                currency: 'usd'
-            })
+            body: JSON.stringify(paymentData)
         });
 
         const { client_secret, error } = await response.json();
@@ -240,26 +282,63 @@ async function handlePayment(event) {
         }
 
         if (paymentIntent.status === 'succeeded') {
-            // Payment successful, update the reservation
-            const updateResult = await updatePaymentStatus(window.currentReservationId, paymentIntent.id, currentTotalAmount);
+            // Payment successful, update the appropriate record
+            let updateResult;
+            if (isOrderPayment) {
+                updateResult = await updateOrderPaymentStatus(window.currentOrderId, paymentIntent.id, currentTotalAmount);
+            } else {
+                updateResult = await updatePaymentStatus(window.currentReservationId, paymentIntent.id, currentTotalAmount);
+            }
             
-            // Close payment modal
+            // Close payment modal and clean up backdrops
             const paymentModal = bootstrap.Modal.getInstance(document.getElementById('paymentModal'));
             paymentModal.hide();
             
-            // Update the reservation details modal
-            updatePaymentButtons('paid');
+            // Clean up any lingering backdrops after modal closes
+            setTimeout(() => {
+                const backdrops = document.querySelectorAll('.modal-backdrop');
+                backdrops.forEach(backdrop => backdrop.remove());
+            }, 300);
             
-            // Show success message with SMS info
-            let successMessage = 'Payment successful! Your bill has been paid.';
-            if (updateResult && updateResult.sms_result && updateResult.sms_result.sms_sent) {
-                successMessage += ' A receipt has been sent to your phone via SMS.';
-            }
-            showPaymentSuccess(successMessage);
-            
-            // Refresh the calendar to show updated status
-            if (typeof calendar !== 'undefined') {
-                calendar.refetchEvents();
+            // Handle post-payment actions based on type
+            if (isOrderPayment) {
+                // For orders, clear cart and close cart modal
+                if (typeof window.cart !== 'undefined' && window.cart && window.cart.clearCart) {
+                    window.cart.clearCart();
+                }
+                const cartModal = bootstrap.Modal.getInstance(document.getElementById('cartModal'));
+                if (cartModal) {
+                    cartModal.hide();
+                }
+                
+                // Show success message
+                let successMessage = `Payment successful! Your order #${window.currentOrderId} has been paid.`;
+                if (updateResult && updateResult.sms_result && updateResult.sms_result.sms_sent) {
+                    successMessage += ' A receipt has been sent to your phone via SMS.';
+                }
+                showPaymentSuccess(successMessage);
+            } else {
+                // For reservations, update the reservation details modal if it exists
+                if (typeof updatePaymentButtons === 'function') {
+                    updatePaymentButtons('paid');
+                }
+                
+                // Show success message with SMS info
+                let successMessage = 'Payment successful! Your bill has been paid.';
+                if (updateResult && updateResult.sms_result && updateResult.sms_result.sms_sent) {
+                    successMessage += ' A receipt has been sent to your phone via SMS.';
+                }
+                showPaymentSuccess(successMessage);
+                
+                // Call global success handler if available (for index page)
+                if (typeof window.handlePaymentSuccess === 'function') {
+                    window.handlePaymentSuccess(paymentIntent.id, currentTotalAmount);
+                }
+                
+                // Refresh the calendar to show updated status
+                if (typeof calendar !== 'undefined') {
+                    calendar.refetchEvents();
+                }
             }
         }
 
@@ -346,6 +425,28 @@ async function updatePaymentStatus(reservationId, paymentIntentId, amount) {
     }
 }
 
+async function updateOrderPaymentStatus(orderId, paymentIntentId, amount) {
+    try {
+        const smsField = document.getElementById('billing-sms');
+        const smsNumber = smsField ? smsField.value : '';
+        const response = await fetch(`/api/orders/${orderId}/payment`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                payment_status: 'paid',
+                payment_intent_id: paymentIntentId,
+                payment_amount: amount,
+                sms_number: smsNumber
+            })
+        });
+        return await response.json();
+    } catch (error) {
+        return { success: false, error: error.message };
+    }
+}
+
 function setPaymentProcessing(processing) {
     const submitButton = document.getElementById('submit-payment');
     const processingDiv = document.getElementById('payment-processing');
@@ -366,10 +467,26 @@ function setPaymentProcessing(processing) {
 
 function getCurrentReservationData() {
     // This function should return the current reservation data
-    // It will be called from the reservation details modal context
+    // It will be called from the reservation details modal context or index page
     if (window.currentReservationData) {
         return window.currentReservationData;
     }
+    
+    // For index page context, we need to fetch the data
+    if (window.currentReservationId && !window.currentReservationData) {
+        // Return a promise-like structure for async loading
+        return {
+            id: window.currentReservationId,
+            name: 'Loading...',
+            totalBill: currentTotalAmount || 0,
+            date: 'Loading...',
+            time: 'Loading...',
+            party_size: 1,
+            phone_number: '',
+            orders: []
+        };
+    }
+    
     return null;
 }
 
@@ -412,3 +529,12 @@ function showPaymentSuccess(message) {
         }
     }, 5000);
 }
+
+// Expose functions to global scope
+window.initializeStripe = initializeStripe;
+window.openPaymentModal = openPaymentModal;
+window.handlePayment = handlePayment;
+window.showPaymentSuccess = showPaymentSuccess;
+window.showPaymentError = showPaymentError;
+
+})(); // Close IIFE

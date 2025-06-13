@@ -256,14 +256,21 @@
 
 <!-- Floating Cart Button -->
 <div class="floating-cart" style="position: fixed; bottom: 20px; right: 20px; z-index: 1000;">
-    <button id="cart-button" class="btn btn-accent btn-lg rounded-circle shadow-lg" onclick="cart.showCart()" style="display: none; width: 60px; height: 60px;">
+    <button id="cart-button" class="btn btn-accent btn-lg rounded-circle shadow-lg" onclick="window.cleanupModalBackdrops(); window.cart && window.cart.showCart()" style="display: none; width: 60px; height: 60px;">
         <i class="fas fa-shopping-cart"></i>
         <span id="cart-badge" class="badge bg-danger position-absolute top-0 start-100 translate-middle rounded-pill" style="display: none;">0</span>
     </button>
 </div>
 
+<!-- Include Payment Modal -->
+{% include 'modals/payment_modal.html' %}
+
+{% endblock %}
+
 {% block scripts %}
+<!-- Stripe JavaScript Library -->
+<script src="https://js.stripe.com/v3/"></script>
 <script src="{{ url_for('serve_static', filename='js/cart.js') }}"></script>
 <script src="{{ url_for('serve_static', filename='js/menu.js') }}"></script>
-{% endblock %}
+<script src="{{ url_for('serve_static', filename='js/payment.js') }}"></script>
 {% endblock %} 

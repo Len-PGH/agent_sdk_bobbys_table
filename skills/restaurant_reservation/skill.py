@@ -11,6 +11,7 @@ import os
 
 from signalwire_agents.core.skill_base import SkillBase
 from signalwire_agents.core.function_result import SwaigFunctionResult
+from signalwire_agents.core.swaig_function import SWAIGFunction
 
 class RestaurantReservationSkill(SkillBase):
     """Provides restaurant reservation management capabilities"""
@@ -21,6 +22,17 @@ class RestaurantReservationSkill(SkillBase):
     REQUIRED_PACKAGES = []
     REQUIRED_ENV_VARS = []
     
+    # SWAIG fields for all tools
+    swaig_fields = {
+        "meta_data": {
+            "type": "object",
+            "properties": {
+                "call_id": {"type": "string", "description": "Call ID for tracking"},
+                "caller_id": {"type": "string", "description": "Caller ID number"}
+            }
+        }
+    }
+    
     def __init__(self, agent, params=None):
         super().__init__(agent, params)
         # SignalWire configuration for SMS
@@ -29,6 +41,135 @@ class RestaurantReservationSkill(SkillBase):
     def setup(self) -> bool:
         """Setup the reservation skill"""
         return True
+
+    def _find_menu_item_fuzzy(self, item_name):
+        """
+        Find menu item using fuzzy matching to handle common misspellings
+        
+        Args:
+            item_name: The item name to search for (potentially misspelled)
+            
+        Returns:
+            MenuItem object if found, None otherwise
+        """
+        from models import MenuItem
+        import re
+        
+        if not item_name:
+            return None
+        
+        # Normalize the search term
+        search_term = item_name.lower().strip()
+        
+        # First try exact match (case-insensitive)
+        menu_item = MenuItem.query.filter(
+            MenuItem.name.ilike(search_term)
+        ).first()
+        if menu_item:
+            return menu_item
+        
+        # Try partial match
+        menu_item = MenuItem.query.filter(
+            MenuItem.name.ilike(f'%{search_term}%')
+        ).first()
+        if menu_item:
+            return menu_item
+        
+        # Get all menu items for fuzzy matching
+        all_items = MenuItem.query.all()
+        
+        # Common spelling corrections and variations
+        spelling_corrections = {
+            'kraft': 'craft',
+            'coke': 'coca-cola',
+            'pepsi': 'coca-cola',
+            'soda': 'coca-cola',
+            'pop': 'coca-cola',
+            'burger': 'ribeye steak',  # Common misname for main dish
+            'chicken': 'buffalo wings',
+            'wings': 'buffalo wings',
+            'lemonade': 'lemonade',
+            'tea': 'iced tea',
+            'coffee': 'coffee',
+            'water': 'water',
+            'beer': 'beer',
+            'wine': 'wine'
+        }
+        
+        # Apply spelling corrections
+        corrected_term = search_term
+        for wrong, correct in spelling_corrections.items():
+            if wrong in search_term:
+                corrected_term = search_term.replace(wrong, correct)
+                break
+        
+        # Try corrected term
+        if corrected_term != search_term:
+            menu_item = MenuItem.query.filter(
+                MenuItem.name.ilike(f'%{corrected_term}%')
+            ).first()
+            if menu_item:
+                return menu_item
+        
+        # Fuzzy matching using simple similarity
+        best_match = None
+        best_score = 0
+        
+        for item in all_items:
+            item_name_lower = item.name.lower()
+            
+            # Calculate similarity score
+            score = 0
+            
+            # Exact word matches get high score
+            search_words = search_term.split()
+            item_words = item_name_lower.split()
+            
+            for search_word in search_words:
+                for item_word in item_words:
+                    if search_word == item_word:
+                        score += 10
+                    elif search_word in item_word or item_word in search_word:
+                        score += 5
+                    elif self._levenshtein_distance(search_word, item_word) <= 2:
+                        score += 3
+            
+            # Bonus for containing the search term
+            if search_term in item_name_lower:
+                score += 8
+            elif corrected_term in item_name_lower:
+                score += 6
+            
+            # Length penalty for very different lengths
+            length_diff = abs(len(search_term) - len(item_name_lower))
+            if length_diff > 5:
+                score -= 2
+            
+            if score > best_score and score >= 3:  # Minimum threshold
+                best_score = score
+                best_match = item
+        
+        return best_match
+    
+    def _levenshtein_distance(self, s1, s2):
+        """Calculate Levenshtein distance between two strings"""
+        if len(s1) < len(s2):
+            return self._levenshtein_distance(s2, s1)
+        
+        if len(s2) == 0:
+            return len(s1)
+        
+        previous_row = list(range(len(s2) + 1))
+        for i, c1 in enumerate(s1):
+            current_row = [i + 1]
+            for j, c2 in enumerate(s2):
+                insertions = previous_row[j + 1] + 1
+                deletions = current_row[j] + 1
+                substitutions = previous_row[j] + (c1 != c2)
+                current_row.append(min(insertions, deletions, substitutions))
+            previous_row = current_row
+        
+        return previous_row[-1]
 
     def _normalize_phone_number(self, phone_number, caller_id=None):
         """
@@ -307,73 +448,448 @@ class RestaurantReservationSkill(SkillBase):
             **self.swaig_fields
         )
 
-        # Register the payment tool
-        def _pay_reservation_handler(args, raw_data):
-            from swaig_agents import pay_reservation_by_phone
-            reservation_number = args.get('reservation_number')
-            cardholder_name = args.get('cardholder_name')
-            phone_number = args.get('phone_number')
-            email = args.get('email')
-            result = pay_reservation_by_phone(
-                reservation_number=reservation_number,
-                cardholder_name=cardholder_name,
-                phone_number=phone_number,
-                email=email
-            )
-            return SwaigFunctionResult(result.get('message', 'Payment processed.'), data=result)
-
+        # Add to reservation tool
         self.agent.define_tool(
-            name="pay_reservation",
-            description="Collect payment for a reservation/order using SignalWire Pay and Stripe.",
+            name="add_to_reservation",
+            description="Add food or drink items to an existing reservation for pre-ordering",
             parameters={
                 "type": "object",
                 "properties": {
-                    "reservation_number": {"type": "string", "description": "Reservation number to pay for"},
-                    "cardholder_name": {"type": "string", "description": "Name on the credit card"},
-                    "phone_number": {"type": "string", "description": "SMS number for receipt"},
-                    "email": {"type": "string", "description": "Optional email for receipt"}
+                    "reservation_number": {"type": "string", "description": "6-digit reservation number"},
+                    "reservation_id": {"type": "integer", "description": "Internal reservation ID"},
+                    "items": {
+                        "type": "array",
+                        "description": "List of items to add with name and quantity",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string", "description": "Menu item name"},
+                                "quantity": {"type": "integer", "description": "Quantity to add", "default": 1}
+                            },
+                            "required": ["name"]
+                        }
+                    },
+                    "person_name": {"type": "string", "description": "Name of person ordering (defaults to reservation holder)"}
                 },
-                "required": ["reservation_number", "cardholder_name", "phone_number"]
+                "required": []
             },
-            handler=_pay_reservation_handler,
+            handler=self._add_to_reservation_handler,
             **self.swaig_fields
         )
-        
-    def _send_reservation_sms(self, reservation_data, phone_number):
-        """Send SMS confirmation for reservation"""
-        try:
-            # Convert time to 12-hour format for SMS
+
+        # Register the card details collection tool
+        def _get_card_details_handler(args, raw_data):
+            """Interactive card details collection handler"""
+            
+            # Extract what we have from the conversation
+            reservation_number = args.get('reservation_number')
+            cardholder_name = args.get('cardholder_name')
+            card_number = args.get('card_number')
+            expiry_date = args.get('expiry_date')
+            cvv = args.get('cvv')
+            zip_code = args.get('zip_code')
+            
+            # Try to extract information from conversation if not provided
+            if not reservation_number or not cardholder_name:
+                call_log = raw_data.get('call_log', []) if raw_data else []
+                
+                # Extract reservation number from conversation (prioritize recent messages)
+                if not reservation_number:
+                    from number_utils import extract_reservation_number_from_text
+                    
+                    # First, try to extract from the most recent user messages (last 5 messages)
+                    # This helps prioritize the reservation number the user just mentioned
+                    recent_user_messages = []
+                    for entry in reversed(call_log):
+                        if entry.get('role') == 'user' and entry.get('content'):
+                            recent_user_messages.append(entry.get('content', ''))
+                            if len(recent_user_messages) >= 5:  # Look at last 5 user messages
+                                break
+                    
+                    # Try each recent message individually, starting with the most recent
+                    # But skip messages that are clearly about credit card information
+                    for message in recent_user_messages:
+                        # Skip messages that are clearly credit card related
+                        message_lower = message.lower()
+                        if any(phrase in message_lower for phrase in [
+                            'card number', 'credit card', 'expiration', 'expiry', 'cvv', 'security code',
+                            'zip code', 'postal code', 'billing', 'four two four', 'zero four three'
+                        ]):
+                            print(f"🔍 Skipping credit card related message: '{message}'")
+                            continue
+                        
+                        # Skip very short messages that are likely responses to prompts
+                        if len(message.strip()) < 10:
+                            print(f"🔍 Skipping short message: '{message}'")
+                            continue
+                        
+                        reservation_number = extract_reservation_number_from_text(message)
+                        if reservation_number:
+                            print(f"🔍 Extracted reservation number from recent message: {reservation_number}")
+                            print(f"🔍 Message: '{message}'")
+                            break
+                    
+                    # If not found in individual recent messages, try combined recent text (excluding card info)
+                    if not reservation_number:
+                        # Filter out credit card related messages
+                        filtered_messages = []
+                        for message in recent_user_messages:
+                            message_lower = message.lower()
+                            if not any(phrase in message_lower for phrase in [
+                                'card number', 'credit card', 'expiration', 'expiry', 'cvv', 'security code',
+                                'zip code', 'postal code', 'billing', 'four two four', 'zero four three'
+                            ]):
+                                filtered_messages.append(message)
+                        
+                        if filtered_messages:
+                            recent_text = ' '.join(filtered_messages)
+                            reservation_number = extract_reservation_number_from_text(recent_text)
+                            if reservation_number:
+                                print(f"🔍 Extracted reservation number from filtered recent text: {reservation_number}")
+                    
+                    # If still not found, try the full conversation as last resort (also filtered)
+                    if not reservation_number:
+                        all_user_messages = [entry.get('content', '') for entry in call_log if entry.get('role') == 'user']
+                        # Filter out credit card related messages
+                        filtered_all_messages = []
+                        for message in all_user_messages:
+                            message_lower = message.lower()
+                            if not any(phrase in message_lower for phrase in [
+                                'card number', 'credit card', 'expiration', 'expiry', 'cvv', 'security code',
+                                'zip code', 'postal code', 'billing', 'four two four', 'zero four three'
+                            ]):
+                                filtered_all_messages.append(message)
+                        
+                        if filtered_all_messages:
+                            conversation_text = ' '.join(filtered_all_messages)
+                            reservation_number = extract_reservation_number_from_text(conversation_text)
+                            if reservation_number:
+                                print(f"🔍 Extracted reservation number from filtered full conversation: {reservation_number}")
+                    
+                    if reservation_number:
+                        print(f"🔍 Final extracted reservation number: {reservation_number}")
+                
+                # Extract cardholder name from conversation - improved logic
+                if not cardholder_name:
+                    # Look for cardholder name in recent conversation
+                    for entry in reversed(call_log):
+                        if entry.get('role') == 'user':
+                            content = entry.get('content', '').strip()
+                            # Check if this looks like a name response (not a reservation number or other info)
+                            if (content and 
+                                not content.lower().startswith(('reservation', 'my reservation', 'number', 'yes', 'no', 'can i', 'i want', 'i need', 'i just', 'i already', 'i told')) and
+                                not re.match(r'^[\d\s]+$', content) and  # Not just numbers
+                                len(content.split()) >= 2 and  # At least first and last name
+                                len(content) < 50 and  # Reasonable name length
+                                not any(word in content.lower() for word in ['payment', 'pay', 'bill', 'card', 'credit', 'gave', 'told', 'said']) and  # Not payment-related keywords or references
+                                not any(word in content.lower() for word in ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'zero']) and  # Not spoken numbers
+                                # Must look like an actual name (contains alphabetic characters and common name patterns)
+                                re.search(r'^[A-Za-z]+ [A-Za-z]+', content) and  # First Last name pattern
+                                not any(phrase in content.lower() for phrase in ['you', 'it', 'that', 'this', 'already', 'before'])):  # Not references to previous statements
+                                cardholder_name = content
+                                print(f"🔍 Extracted cardholder name from conversation: {cardholder_name}")
+                                break
+            
+            # Step 1: Check if we have reservation number
+            if not reservation_number:
+                message = (
+                    "I'd be happy to help you pay your bill! First, I'll need your reservation number. "
+                    "It's a 6-digit number that was provided when you made your reservation. "
+                    "What's your reservation number?"
+                )
+                from number_utils import numbers_to_words
+                message = numbers_to_words(message)
+                return SwaigFunctionResult(message)
+            
+            # Step 2: Look up the reservation to get bill amount
+            total_bill = 0.0  # Initialize outside try block
+            reservation = None  # Initialize outside try block
+            
             try:
-                time_obj = datetime.strptime(str(reservation_data['time']), '%H:%M')
-                time_12hr = time_obj.strftime('%I:%M %p').lstrip('0')
-            except (ValueError, TypeError):
-                time_12hr = str(reservation_data['time'])
+                import sys
+                import os
+                parent_dir = os.path.dirname(os.path.dirname(__file__))
+                if parent_dir not in sys.path:
+                    sys.path.insert(0, parent_dir)
+                
+                from app import app
+                from models import Reservation, Order
+                
+                with app.app_context():
+                    reservation = Reservation.query.filter_by(reservation_number=reservation_number).first()
+                    if not reservation:
+                        message = (
+                            f"I couldn't find a reservation with number {reservation_number}. "
+                            "Could you please double-check the reservation number? "
+                            "It should be a 6-digit number."
+                        )
+                        from number_utils import numbers_to_words
+                        message = numbers_to_words(message)
+                        return SwaigFunctionResult(message)
+                    
+                    # Calculate total bill amount
+                    orders = Order.query.filter_by(reservation_id=reservation.id).all()
+                    for order in orders:
+                        total_bill += order.total_amount or 0.0
+                    
+                    # Check if already paid
+                    if reservation.payment_status == 'paid':
+                        message = (
+                            f"Great news! Your bill for reservation {reservation_number} has already been paid. "
+                            f"The total was ${total_bill:.2f}. Is there anything else I can help you with?"
+                        )
+                        from number_utils import numbers_to_words
+                        message = numbers_to_words(message)
+                        return SwaigFunctionResult(message)
+                    
+                    # If no bill amount, inform customer
+                    if total_bill <= 0:
+                        message = (
+                            f"I found your reservation for {reservation.name}, but there's no bill to pay yet. "
+                            "This might be because you haven't placed any orders, or your orders are still being prepared. "
+                            "Would you like me to check your order status instead?"
+                        )
+                        from number_utils import numbers_to_words
+                        message = numbers_to_words(message)
+                        return SwaigFunctionResult(message)
             
-            sms_body = f"🍽️ Bobby's Table Reservation Confirmed!\n\n"
-            sms_body += f"Name: {reservation_data['name']}\n"
-            sms_body += f"Date: {reservation_data['date']}\n"
-            sms_body += f"Time: {time_12hr}\n"
-            party_text = "person" if reservation_data['party_size'] == 1 else "people"
-            sms_body += f"Party Size: {reservation_data['party_size']} {party_text}\n"
-            sms_body += f"Reservation Number: {reservation_data.get('reservation_number', reservation_data['id'])}\n"
+            except Exception as e:
+                print(f"❌ Error looking up reservation: {e}")
+                message = (
+                    "I'm having trouble accessing the reservation system right now. "
+                    "Please try again in a moment, or I can transfer you to our manager for assistance."
+                )
+                from number_utils import numbers_to_words
+                message = numbers_to_words(message)
+                return SwaigFunctionResult(message)
             
-            if reservation_data.get('special_requests'):
-                sms_body += f"Special Requests: {reservation_data['special_requests']}\n"
+            # Step 3: Check if we have cardholder name
+            if not cardholder_name:
+                message = (
+                    f"Perfect! I found your reservation for {reservation.name}. "
+                    f"Your total bill is ${total_bill:.2f}. "
+                    "To process your payment, I'll need the name exactly as it appears on your credit card. "
+                    "Please tell me the full name on the card - first and last name."
+                )
+                from number_utils import numbers_to_words
+                message = numbers_to_words(message)
+                return SwaigFunctionResult(message)
             
-            sms_body += f"\nWe look forward to serving you!\nBobby's Table Restaurant"
-            sms_body += f"\nReply STOP to stop."
-            
-            # Send SMS using SignalWire Agents SDK
-            sms_function_result = SwaigFunctionResult().send_sms(
-                to_number=phone_number,
-                from_number=self.signalwire_from_number,
-                body=sms_body
+            # Step 4: Collect card details conversationally
+            message = (
+                f"Thank you! I have your name as {cardholder_name} for the card. "
+                f"Your total bill is ${total_bill:.2f} for reservation {reservation_number}. "
+                "I'm ready to securely collect your payment information. "
+                "You'll be prompted to enter your card number, expiration date, CVV, and ZIP code using your phone keypad. "
+                "Would you like me to proceed with collecting your card details now?"
             )
+            from number_utils import numbers_to_words
+            message = numbers_to_words(message)
+            return SwaigFunctionResult(message)
+
+        self.agent.define_tool(
+            name="get_card_details",
+            description="🚨 STEP 1 OF PAYMENT PROCESS - ALWAYS CALL THIS FIRST 🚨 Collect credit card details for payment processing. This function guides customers through providing their card information step by step before processing payment. ALWAYS call this function when customer wants to pay - NEVER call pay_reservation directly.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "reservation_number": {"type": "string", "description": "6-digit reservation number to pay for (will be extracted from conversation if not provided)"},
+                    "cardholder_name": {"type": "string", "description": "Name on the credit card (will be requested if not provided)"},
+                    "card_number": {"type": "string", "description": "Credit card number (will be collected via secure DTMF)"},
+                    "expiry_date": {"type": "string", "description": "Card expiration date MM/YY (will be collected via secure DTMF)"},
+                    "cvv": {"type": "string", "description": "Card CVV/security code (will be collected via secure DTMF)"},
+                    "zip_code": {"type": "string", "description": "Billing ZIP code (will be collected via secure DTMF)"}
+                },
+                "required": []  # No required fields - function will collect information step by step
+            },
+            handler=_get_card_details_handler
+        )
+
+        # Register the payment processing tool
+        def _pay_reservation_handler(args, raw_data):
+            """Process payment after card details have been collected via get_card_details"""
             
-            return {'success': True, 'sms_sent': True}
+            # Extract what we have from the conversation
+            reservation_number = args.get('reservation_number')
+            cardholder_name = args.get('cardholder_name')
+            phone_number = args.get('phone_number')
             
-        except Exception as e:
-            return {'success': False, 'sms_sent': False, 'error': str(e)}
+            # Try to extract information from conversation if not provided
+            if not reservation_number or not cardholder_name:
+                call_log = raw_data.get('call_log', []) if raw_data else []
+                
+                # Extract reservation number from conversation (prioritize recent messages)
+                if not reservation_number:
+                    from number_utils import extract_reservation_number_from_text
+                    
+                    # First, try to extract from the most recent user messages (last 5 messages)
+                    # This helps prioritize the reservation number the user just mentioned
+                    recent_user_messages = []
+                    for entry in reversed(call_log):
+                        if entry.get('role') == 'user' and entry.get('content'):
+                            recent_user_messages.append(entry.get('content', ''))
+                            if len(recent_user_messages) >= 5:  # Look at last 5 user messages
+                                break
+                    
+                    # Try each recent message individually, starting with the most recent
+                    for message in recent_user_messages:
+                        reservation_number = extract_reservation_number_from_text(message)
+                        if reservation_number:
+                            print(f"🔍 Extracted reservation number from recent message: {reservation_number}")
+                            print(f"🔍 Message: '{message}'")
+                            break
+                    
+                    # If not found in individual recent messages, try combined recent text
+                    if not reservation_number:
+                        recent_text = ' '.join(recent_user_messages)
+                        reservation_number = extract_reservation_number_from_text(recent_text)
+                        if reservation_number:
+                            print(f"🔍 Extracted reservation number from combined recent text: {reservation_number}")
+                    
+                    # If still not found, try the full conversation as last resort
+                    if not reservation_number:
+                        conversation_text = ' '.join([entry.get('content', '') for entry in call_log if entry.get('role') == 'user'])
+                        reservation_number = extract_reservation_number_from_text(conversation_text)
+                        if reservation_number:
+                            print(f"🔍 Extracted reservation number from full conversation: {reservation_number}")
+                    
+                    if reservation_number:
+                        print(f"🔍 Final extracted reservation number: {reservation_number}")
+                
+                # Extract cardholder name from conversation - improved logic
+                if not cardholder_name:
+                    # Look for cardholder name in recent conversation
+                    for entry in reversed(call_log):
+                        if entry.get('role') == 'user':
+                            content = entry.get('content', '').strip()
+                            # Check if this looks like a name response (not a reservation number or other info)
+                            if (content and 
+                                not content.lower().startswith(('reservation', 'my reservation', 'number', 'yes', 'no', 'can i', 'i want', 'i need', 'i just', 'i already', 'i told')) and
+                                not re.match(r'^[\d\s]+$', content) and  # Not just numbers
+                                len(content.split()) >= 2 and  # At least first and last name
+                                len(content) < 50 and  # Reasonable name length
+                                not any(word in content.lower() for word in ['payment', 'pay', 'bill', 'card', 'credit', 'gave', 'told', 'said']) and  # Not payment-related keywords or references
+                                not any(word in content.lower() for word in ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'zero']) and  # Not spoken numbers
+                                # Must look like an actual name (contains alphabetic characters and common name patterns)
+                                re.search(r'^[A-Za-z]+ [A-Za-z]+', content) and  # First Last name pattern
+                                not any(phrase in content.lower() for phrase in ['you', 'it', 'that', 'this', 'already', 'before'])):  # Not references to previous statements
+                                cardholder_name = content
+                                print(f"🔍 Extracted cardholder name from conversation: {cardholder_name}")
+                                break
+            
+            # Get caller's phone number if not provided
+            if not phone_number:
+                caller_phone = None
+                if raw_data and isinstance(raw_data, dict):
+                    caller_phone = (
+                        raw_data.get('caller_id_num') or 
+                        raw_data.get('caller_id_number') or
+                        raw_data.get('from') or
+                        raw_data.get('from_number')
+                    )
+                if caller_phone:
+                    phone_number = self._normalize_phone_number(caller_phone)
+                    print(f"🔍 Using caller ID for SMS receipt: {phone_number}")
+            
+            # Check if we have the required information
+            if not reservation_number:
+                message = (
+                    "I need your reservation number to process the payment. "
+                    "Could you please provide your 6-digit reservation number?"
+                )
+                from number_utils import numbers_to_words
+                message = numbers_to_words(message)
+                return SwaigFunctionResult(message)
+            
+            if not cardholder_name:
+                message = (
+                    "I need the cardholder name to process the payment. "
+                    "What name is on the credit card you'll be using for payment?"
+                )
+                from number_utils import numbers_to_words
+                message = numbers_to_words(message)
+                return SwaigFunctionResult(message)
+            
+            # Process the payment using SignalWire Pay
+            try:
+                # Use the SignalWire Pay integration
+                from swaig_agents import pay_reservation_by_phone
+                result = pay_reservation_by_phone(
+                    reservation_number=reservation_number,
+                    cardholder_name=cardholder_name,
+                    phone_number=phone_number
+                )
+                
+                if result.get('success'):
+                    # Check if we have a SWML result to execute
+                    swml_result = result.get('swml_result')
+                    if swml_result:
+                        # Return the SWML result to execute payment collection
+                        return swml_result
+                    else:
+                        # Fallback message if no SWML result
+                        amount = result.get('amount', 0)
+                        message = (
+                            f"Excellent! I'm now processing your payment for ${amount:.2f} "
+                            f"for reservation {reservation_number}. "
+                            "Please have your credit card ready. You'll be prompted to enter your card details. "
+                            "Once the payment is complete, I'll send a receipt to your phone."
+                        )
+                        from number_utils import numbers_to_words
+                        message = numbers_to_words(message)
+                        return SwaigFunctionResult(message)
+                else:
+                    error_msg = result.get('error', 'Unknown error occurred')
+                    message = (
+                        f"I'm sorry, but there was an issue processing your payment: {error_msg}. "
+                        "Please try again, or I can transfer you to our manager for assistance."
+                    )
+                    from number_utils import numbers_to_words
+                    message = numbers_to_words(message)
+                    return SwaigFunctionResult(message)
+                    
+            except Exception as e:
+                print(f"❌ Error processing payment: {e}")
+                message = (
+                    "I'm having trouble processing payments right now. "
+                    "Please try again in a moment, or I can transfer you to our manager who can help you complete the payment."
+                )
+                from number_utils import numbers_to_words
+                message = numbers_to_words(message)
+                return SwaigFunctionResult(message)
+
+        self.agent.define_tool(
+            name="pay_reservation",
+            description="🚨 STEP 2 OF PAYMENT PROCESS ONLY 🚨 Process payment for a reservation using SignalWire Pay and Stripe. CRITICAL: This function should ONLY be called AFTER get_card_details has been called first and user has confirmed payment. NEVER call this function directly when customer asks to pay - always call get_card_details first.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "reservation_number": {"type": "string", "description": "6-digit reservation number to pay for (required)"},
+                    "cardholder_name": {"type": "string", "description": "Name on the credit card (required)"},
+                    "phone_number": {"type": "string", "description": "SMS number for receipt (will use caller ID if not provided)"}
+                },
+                "required": ["reservation_number", "cardholder_name"]  # These are required for payment processing
+            },
+            handler=_pay_reservation_handler
+        )
+
+        # Register add_to_reservation tool
+        self.agent.register_tool(
+            name="add_to_reservation",
+            description="Add food or drink items to an existing reservation for pre-ordering",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "reservation_number": {"type": "string", "description": "6-digit reservation number"},
+                    "reservation_id": {"type": "integer", "description": "Internal reservation ID"},
+                    "items": {"type": "array", "description": "List of items to add with name and quantity"},
+                    "person_name": {"type": "string", "description": "Name of person ordering (defaults to reservation holder)"}
+                }
+            },
+            handler=self._add_to_reservation_handler
+        )
+
+
     
     def _create_reservation_handler(self, args, raw_data):
         """Handler for create_reservation tool - matches Flask route implementation"""
@@ -592,7 +1108,41 @@ class RestaurantReservationSkill(SkillBase):
                 
                 # Process party orders if provided (matching Flask route logic)
                 party_orders = args.get('party_orders', [])
+                pre_order = args.get('pre_order', [])  # Handle alternative format from AI
                 total_reservation_amount = 0.0
+                
+                # Convert pre_order format to party_orders format if needed
+                if pre_order and not party_orders:
+                    print(f"🔄 Converting pre_order format to party_orders format")
+                    from models import MenuItem
+                    
+                    # Convert pre_order items to party_orders format
+                    converted_items = []
+                    for item in pre_order:
+                        item_name = item.get('name', '')
+                        quantity = item.get('quantity', 1)
+                        
+                        # Find menu item by name with fuzzy matching
+                        menu_item = self._find_menu_item_fuzzy(item_name)
+                        
+                        if menu_item:
+                            converted_items.append({
+                                'menu_item_id': menu_item.id,
+                                'quantity': quantity
+                            })
+                            if menu_item.name.lower() != item_name.lower():
+                                print(f"   Converted '{item_name}' to '{menu_item.name}' (menu item ID {menu_item.id})")
+                            else:
+                                print(f"   Converted '{item_name}' to menu item ID {menu_item.id}")
+                        else:
+                            print(f"   ⚠️ Could not find menu item for '{item_name}'")
+                    
+                    if converted_items:
+                        party_orders = [{
+                            'person_name': args.get('name', 'Customer'),
+                            'items': converted_items
+                        }]
+                        print(f"   Created party_orders: {party_orders}")
                 
                 # Only process orders if not an old school reservation
                 if not args.get('old_school', False) and party_orders:
@@ -689,7 +1239,12 @@ class RestaurantReservationSkill(SkillBase):
                 
                 # Add order information if orders were placed
                 if total_reservation_amount > 0:
-                    message += f"\n🍽️ Pre-Order Total: ${total_reservation_amount:.2f}\n"
+                    message += f"\n🍽️ Pre-Order Details:\n"
+                    # Show the pre-ordered items
+                    if pre_order:
+                        for item in pre_order:
+                            message += f"   • {item.get('quantity', 1)}x {item.get('name', 'Unknown Item')}\n"
+                    message += f"Pre-Order Total: ${total_reservation_amount:.2f}\n"
                     message += f"Your food will be prepared and ready when you arrive!\n"
                 elif args.get('old_school', False):
                     message += f"\n📞 Old School Reservation - Just the table reserved!\n"
@@ -1051,86 +1606,24 @@ class RestaurantReservationSkill(SkillBase):
                 response_format = args.get('format', 'text').lower()
                 
                 # Auto-fill search criteria from caller information if not provided
-                if not any(args.get(key) for key in ['phone_number', 'name', 'first_name', 'last_name', 'reservation_id', 'reservation_number', 'date', 'time', 'party_size', 'email']):
-                    # Try to get caller's phone number and extract name from conversation
-                    caller_phone = None
-                    customer_name = None
-                    
-                    if raw_data and isinstance(raw_data, dict):
-                        caller_phone = (
-                            raw_data.get('caller_id_num') or 
-                            raw_data.get('caller_id_number') or
-                            raw_data.get('from') or
-                            raw_data.get('from_number')
-                        )
-                        # Also check in global_data
-                        global_data = raw_data.get('global_data', {})
-                        if not caller_phone and global_data:
-                            caller_phone = (
-                                global_data.get('caller_id_number') or
-                                global_data.get('caller_id_num')
-                            )
-                    
-                    # Look for customer name and reservation number mentioned in conversation
+                if not any(args.get(key) for key in ['name', 'first_name', 'last_name', 'reservation_id', 'reservation_number', 'date', 'time', 'party_size', 'email']):
+                    # Extract reservation number from conversation (highest priority)
                     call_log = raw_data.get('call_log', []) if raw_data else []
                     reservation_number = None
+                    customer_name = None
                     
-                    for entry in call_log:
+                    # Process call log in reverse order to prioritize recent messages
+                    for entry in reversed(call_log):
                         if entry.get('role') == 'user' and entry.get('content'):
                             content = entry['content'].lower()
                             
-                            # Look for reservation number patterns first (highest priority)
-                            if 'reservation number' in content or 'reservation' in content:
-                                import re
-                                # Extract the part after "reservation number" or "reservation"
-                                if 'reservation number' in content:
-                                    number_part = content.split('reservation number')[-1].strip()
-                                else:
-                                    number_part = content.split('reservation')[-1].strip()
-                                
-                                # Convert spoken numbers to digits
-                                number_words = {
-                                    'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
-                                    'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9'
-                                }
-                                
-                                # Replace word numbers with digits
-                                for word, digit in number_words.items():
-                                    number_part = re.sub(r'\b' + word + r'\b', digit, number_part)
-                                
-                                # Extract digits from the processed string
-                                digits = re.findall(r'\d', number_part)
-                                if len(digits) >= 6:  # Reservation numbers are 6 digits
-                                    reservation_number = ''.join(digits[:6])
-                                    print(f"🔄 Extracted reservation number from conversation: {reservation_number}")
-                                    break
-                            
-                            # Look for manually provided phone numbers
-                            if any(phrase in content for phrase in ['phone number', 'check with phone number', 'use the number']):
-                                import re
-                                # Extract phone number from spoken format
-                                phone_part = content
-                                
-                                # Convert spoken numbers to digits for phone numbers
-                                number_words = {
-                                    'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
-                                    'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9'
-                                }
-                                
-                                # Use word boundaries to avoid replacing parts of other words
-                                for word, digit in number_words.items():
-                                    phone_part = re.sub(r'\b' + word + r'\b', digit, phone_part)
-                                
-                                # Extract digits and format as E.164 phone number
-                                phone_digits = re.findall(r'\d', phone_part)
-                                if len(phone_digits) >= 10:  # At least 10 digits for a phone number
-                                    # Take exactly 10 digits for the phone number (area code + number)
-                                    extracted_phone = ''.join(phone_digits[:10])
-                                    # Format as E.164 (+1XXXXXXXXXX for US numbers)
-                                    manual_phone = f"+1{extracted_phone}"
-                                    # Override caller phone with manually provided number
-                                    caller_phone = manual_phone
-                                    print(f"🔄 Extracted manual phone number from conversation: {manual_phone}")
+                            # Look for reservation numbers using improved extraction
+                            from number_utils import extract_reservation_number_from_text
+                            extracted_number = extract_reservation_number_from_text(content)
+                            if extracted_number:
+                                reservation_number = extracted_number
+                                print(f"🔄 Extracted reservation number using improved logic: {reservation_number}")
+                                break
                             
                             # Look for names mentioned in conversation
                             if 'rob zombie' in content:
@@ -1142,42 +1635,43 @@ class RestaurantReservationSkill(SkillBase):
                     if reservation_number:
                         args['reservation_number'] = reservation_number
                         print(f"🔄 Auto-filled reservation number from conversation: {reservation_number}")
-                    elif caller_phone:
-                        args['phone_number'] = caller_phone
-                        print(f"🔄 Auto-filled phone number from caller: {caller_phone}")
                     if customer_name:
                         args['name'] = customer_name
                         print(f"🔄 Auto-filled name from conversation: {customer_name}")
                 
-                # Build search criteria
+                # Build search criteria - prioritize reservation ID/number
                 search_criteria = []
                 query = Reservation.query
                 
-                if args.get('phone_number'):
-                    query = query.filter(Reservation.phone_number.like(f"%{args['phone_number']}%"))
-                    search_criteria.append(f"phone number {args['phone_number']}")
+                # Priority 1: Reservation ID or Number (most specific)
+                if args.get('reservation_id'):
+                    query = query.filter(Reservation.id == args['reservation_id'])
+                    search_criteria.append(f"reservation ID {args['reservation_id']}")
+                    print(f"🔍 Searching by reservation ID: {args['reservation_id']}")
                 
-                if args.get('name'):
+                elif args.get('reservation_number'):
+                    query = query.filter(Reservation.reservation_number == args['reservation_number'])
+                    search_criteria.append(f"reservation number {args['reservation_number']}")
+                    print(f"🔍 Searching by reservation number: {args['reservation_number']}")
+                
+                # Priority 2: Name-based search (if no reservation ID/number)
+                elif args.get('name'):
                     # Search in full name
                     query = query.filter(Reservation.name.ilike(f"%{args['name']}%"))
                     search_criteria.append(f"name {args['name']}")
+                    print(f"🔍 Searching by name: {args['name']}")
                 elif args.get('first_name') or args.get('last_name'):
                     # Search by first/last name
                     if args.get('first_name'):
                         query = query.filter(Reservation.name.ilike(f"{args['first_name']}%"))
                         search_criteria.append(f"first name {args['first_name']}")
+                        print(f"🔍 Searching by first name: {args['first_name']}")
                     if args.get('last_name'):
                         query = query.filter(Reservation.name.ilike(f"%{args['last_name']}"))
                         search_criteria.append(f"last name {args['last_name']}")
+                        print(f"🔍 Searching by last name: {args['last_name']}")
                 
-                if args.get('reservation_id'):
-                    query = query.filter(Reservation.id == args['reservation_id'])
-                    search_criteria.append(f"reservation ID {args['reservation_id']}")
-                
-                if args.get('reservation_number'):
-                    query = query.filter(Reservation.reservation_number == args['reservation_number'])
-                    search_criteria.append(f"reservation number {args['reservation_number']}")
-                
+                # Additional filters (can be combined with above)
                 if args.get('date'):
                     query = query.filter(Reservation.date == args['date'])
                     search_criteria.append(f"date {args['date']}")
@@ -1193,6 +1687,33 @@ class RestaurantReservationSkill(SkillBase):
                 if args.get('email'):
                     query = query.filter(Reservation.email.ilike(f"%{args['email']}%"))
                     search_criteria.append(f"email {args['email']}")
+                
+                # Phone number search only as fallback (not primary method)
+                if args.get('phone_number') and not any(args.get(key) for key in ['reservation_id', 'reservation_number', 'name', 'first_name', 'last_name']):
+                    # Normalize the search phone number and try multiple formats
+                    search_phone = args['phone_number']
+                    
+                    # Try exact match first
+                    phone_query = Reservation.phone_number == search_phone
+                    
+                    # Also try partial matches for different formats
+                    if search_phone.startswith('+1'):
+                        # If search phone has +1, also try without it
+                        phone_without_plus = search_phone[2:]  # Remove +1
+                        phone_query = phone_query | (Reservation.phone_number.like(f"%{phone_without_plus}%"))
+                    elif search_phone.startswith('1') and len(search_phone) == 11:
+                        # If search phone starts with 1, try with +1 prefix
+                        phone_with_plus = f"+{search_phone}"
+                        phone_query = phone_query | (Reservation.phone_number == phone_with_plus)
+                    elif len(search_phone) == 10:
+                        # If 10-digit number, try with +1 prefix
+                        phone_with_plus = f"+1{search_phone}"
+                        phone_query = phone_query | (Reservation.phone_number == phone_with_plus)
+                    
+                    # Apply the phone query with OR conditions
+                    query = query.filter(phone_query)
+                    search_criteria.append(f"phone number {search_phone}")
+                    print(f"🔍 Fallback search by phone number: {search_phone} (with format variations)")
                 
                 # If no search criteria provided, show recent reservations
                 if not search_criteria:
@@ -1233,10 +1754,190 @@ class RestaurantReservationSkill(SkillBase):
                         return SwaigFunctionResult(message)
                 
                 # Execute search
+                print(f"🔍 Final search criteria: {search_criteria}")
+                print(f"🔍 Query filters applied: {len(search_criteria)} filters")
+                
                 reservations = query.all()
+                print(f"🔍 Database query returned {len(reservations)} reservations")
+                
+                # Debug: Show what we're actually searching for
+                if args:
+                    print(f"🔍 Search parameters provided:")
+                    for key, value in args.items():
+                        if value:
+                            print(f"   {key}: {value}")
+                else:
+                    print(f"🔍 No search parameters provided")
                 
                 if not reservations:
                     criteria_text = " and ".join(search_criteria)
+                    
+                    # Try backup phone number search if no reservations found
+                    backup_reservations = []
+                    backup_search_attempted = False
+                    
+                    # Get caller ID and user-provided phone numbers for backup search
+                    backup_phones = []
+                    
+                    # 1. Get caller ID from raw_data
+                    if raw_data and isinstance(raw_data, dict):
+                        caller_phone = (
+                            raw_data.get('caller_id_num') or 
+                            raw_data.get('caller_id_number') or
+                            raw_data.get('from') or
+                            raw_data.get('from_number')
+                        )
+                        # Also check in global_data
+                        global_data = raw_data.get('global_data', {})
+                        if not caller_phone and global_data:
+                            caller_phone = (
+                                global_data.get('caller_id_number') or
+                                global_data.get('caller_id_num')
+                            )
+                        
+                        if caller_phone:
+                            backup_phones.append(caller_phone)
+                            print(f"🔄 Found caller ID for backup search: {caller_phone}")
+                    
+                    # 2. Extract phone numbers from conversation
+                    call_log = raw_data.get('call_log', []) if raw_data else []
+                    for entry in call_log:
+                        if entry.get('role') == 'user' and entry.get('content'):
+                            content = entry['content'].lower()
+                            
+                            # Look for phone number mentions
+                            if any(phrase in content for phrase in ['phone number', 'my number', 'use the number']):
+                                import re
+                                # Extract phone number from spoken format
+                                phone_part = content
+                                
+                                # Convert spoken numbers to digits for phone numbers
+                                number_words = {
+                                    'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
+                                    'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9'
+                                }
+                                
+                                # Use word boundaries to avoid replacing parts of other words
+                                for word, digit in number_words.items():
+                                    phone_part = re.sub(r'\b' + word + r'\b', digit, phone_part)
+                                
+                                # Extract digits and format as E.164 phone number
+                                phone_digits = re.findall(r'\d', phone_part)
+                                if len(phone_digits) >= 10:  # At least 10 digits for a phone number
+                                    # Take exactly 10 digits for the phone number (area code + number)
+                                    extracted_phone = ''.join(phone_digits[:10])
+                                    # Format as E.164 (+1XXXXXXXXXX for US numbers)
+                                    manual_phone = f"+1{extracted_phone}"
+                                    backup_phones.append(manual_phone)
+                                    print(f"🔄 Extracted phone number from conversation for backup search: {manual_phone}")
+                    
+                    # 3. Use provided phone_number argument if available
+                    if args.get('phone_number'):
+                        backup_phones.append(args['phone_number'])
+                        print(f"🔄 Using provided phone number for backup search: {args['phone_number']}")
+                    
+                    # Perform backup phone number search if we have phone numbers and haven't already searched by phone
+                    if backup_phones and not any(args.get(key) for key in ['phone_number']):
+                        print(f"🔄 Attempting backup phone number search with {len(backup_phones)} phone numbers...")
+                        backup_search_attempted = True
+                        
+                        for backup_phone in backup_phones:
+                            # Normalize the search phone number and try multiple formats
+                            search_phone = backup_phone
+                            
+                            # Try exact match first
+                            phone_query = Reservation.phone_number == search_phone
+                            
+                            # Also try partial matches for different formats
+                            if search_phone.startswith('+1'):
+                                # If search phone has +1, also try without it
+                                phone_without_plus = search_phone[2:]  # Remove +1
+                                phone_query = phone_query | (Reservation.phone_number.like(f"%{phone_without_plus}%"))
+                            elif search_phone.startswith('1') and len(search_phone) == 11:
+                                # If search phone starts with 1, try with +1 prefix
+                                phone_with_plus = f"+{search_phone}"
+                                phone_query = phone_query | (Reservation.phone_number == phone_with_plus)
+                            elif len(search_phone) == 10:
+                                # If 10-digit number, try with +1 prefix
+                                phone_with_plus = f"+1{search_phone}"
+                                phone_query = phone_query | (Reservation.phone_number == phone_with_plus)
+                            
+                            # Execute backup search
+                            backup_query = Reservation.query.filter(phone_query)
+                            phone_reservations = backup_query.all()
+                            
+                            if phone_reservations:
+                                backup_reservations.extend(phone_reservations)
+                                print(f"🔄 Backup search found {len(phone_reservations)} reservations for phone {search_phone}")
+                        
+                        # Remove duplicates from backup results
+                        seen_ids = set()
+                        unique_backup_reservations = []
+                        for res in backup_reservations:
+                            if res.id not in seen_ids:
+                                unique_backup_reservations.append(res)
+                                seen_ids.add(res.id)
+                        backup_reservations = unique_backup_reservations
+                    
+                    # If backup search found reservations, return them
+                    if backup_reservations:
+                        print(f"✅ Backup phone search found {len(backup_reservations)} reservations")
+                        
+                        if len(backup_reservations) == 1:
+                            reservation = backup_reservations[0]
+                            time_obj = datetime.strptime(reservation.time, '%H:%M')
+                            time_12hr = time_obj.strftime('%I:%M %p').lstrip('0')
+                            party_text = "person" if reservation.party_size == 1 else "people"
+                            
+                            if response_format == 'json':
+                                return (
+                                    SwaigFunctionResult("Found reservation using phone number")
+                                    .add_action("reservation_data", {
+                                        "success": True,
+                                        "message": "Found reservation using phone number",
+                                        "reservation": reservation.to_dict(),
+                                        "search_method": "backup_phone_search"
+                                    })
+                                )
+                            else:
+                                message = f"I found a reservation using your phone number: {reservation.name} on {reservation.date} at {time_12hr} for {reservation.party_size} {party_text}. "
+                                message += f"Reservation number: {reservation.reservation_number}. Is this the reservation you're looking for?"
+                                return SwaigFunctionResult(message)
+                        else:
+                            # Multiple reservations found via phone backup
+                            if response_format == 'json':
+                                return (
+                                    SwaigFunctionResult(f"Found {len(backup_reservations)} reservations using phone number")
+                                    .add_action("reservation_data", {
+                                        "success": True,
+                                        "message": f"Found {len(backup_reservations)} reservations using phone number",
+                                        "reservations": [res.to_dict() for res in backup_reservations],
+                                        "search_method": "backup_phone_search"
+                                    })
+                                )
+                            else:
+                                message = f"I found {len(backup_reservations)} reservations using your phone number: "
+                                reservation_list = []
+                                for res in backup_reservations:
+                                    time_obj = datetime.strptime(res.time, '%H:%M')
+                                    time_12hr = time_obj.strftime('%I:%M %p').lstrip('0')
+                                    party_text = "person" if res.party_size == 1 else "people"
+                                    reservation_list.append(f"{res.name} on {res.date} at {time_12hr} for {res.party_size} {party_text}")
+                                
+                                message += ", ".join(reservation_list) + ". Which reservation are you asking about?"
+                                return SwaigFunctionResult(message)
+                    
+                    # No reservations found even with backup search
+                    debug_info = ""
+                    if args.get('reservation_number'):
+                        debug_info = f" I searched for reservation number {args['reservation_number']}."
+                    elif args.get('phone_number'):
+                        debug_info = f" I searched for phone number {args['phone_number']}."
+                    elif args.get('name'):
+                        debug_info = f" I searched for name {args['name']}."
+                    
+                    if backup_search_attempted:
+                        debug_info += f" I also tried searching using your phone number but didn't find any matches."
                     
                     if response_format == 'json':
                         return (
@@ -1245,15 +1946,43 @@ class RestaurantReservationSkill(SkillBase):
                                 "success": False,
                                 "message": f"No reservations found matching {criteria_text}",
                                 "reservations": [],
-                                "search_criteria": search_criteria
+                                "search_criteria": search_criteria,
+                                "debug_info": debug_info,
+                                "backup_search_attempted": backup_search_attempted
                             })
                         )
                     else:
-                        return SwaigFunctionResult(f"I couldn't find any reservations matching {criteria_text}. Would you like to make a new reservation?")
+                        # Provide more helpful response for voice calls
+                        response_msg = f"I couldn't find any reservations matching {criteria_text}.{debug_info}"
+                        
+                        # Suggest alternatives
+                        if args.get('reservation_number'):
+                            response_msg += " Could you please double-check the reservation number? It should be a 6-digit number."
+                        elif args.get('phone_number'):
+                            response_msg += " Let me try searching by your name instead. What name is the reservation under?"
+                        else:
+                            response_msg += " Could you provide your reservation number or the name the reservation is under?"
+                        
+                        return SwaigFunctionResult(response_msg)
                 
                 if len(reservations) == 1:
-                    # Single reservation found
+                    # Single reservation found - provide full details immediately
                     reservation = reservations[0]
+                    
+                    # Note: Removed confirmation logic for reservation number/ID searches
+                    # Users expect immediate details when they provide their reservation number
+                    # Reservation numbers are unique identifiers, so no confirmation needed
+                    
+                    # If confirmation not needed or JSON format, provide full details
+                    party_orders = []
+                    for order in reservation.orders:
+                        party_orders.append({
+                            'person_name': order.person_name,
+                            'items': [item.menu_item.name for item in order.items],
+                            'total': order.total_amount
+                        })
+                    total_bill = sum(order.total_amount or 0 for order in reservation.orders)
+                    paid = reservation.payment_status == 'paid'
                     
                     if response_format == 'json':
                         return (
@@ -1262,19 +1991,31 @@ class RestaurantReservationSkill(SkillBase):
                                 "success": True,
                                 "message": "Found matching reservation",
                                 "reservation": reservation.to_dict(),
+                                "party_orders": party_orders,
+                                "total_bill": total_bill,
+                                "bill_paid": paid,
                                 "search_criteria": search_criteria
                             })
                         )
                     else:
                         time_obj = datetime.strptime(reservation.time, '%H:%M')
                         time_12hr = time_obj.strftime('%I:%M %p').lstrip('0')
-                        
                         party_text = "person" if reservation.party_size == 1 else "people"
                         message = f"I found your reservation for {reservation.name} on {reservation.date} at {time_12hr} for {reservation.party_size} {party_text}. "
-                        message += f"Status: {reservation.status}. Reservation number: {reservation.reservation_number}."
-                        
+                        message += f"Status: {reservation.status}. Reservation number: {reservation.reservation_number}. "
+                        message += f"Total bill: ${total_bill:.2f}. "
+                        message += f"Bill paid: {'Yes' if paid else 'No'}. "
+                        if party_orders:
+                            message += "Party orders: "
+                            for po in party_orders:
+                                items = ', '.join(po['items'])
+                                message += f"{po['person_name']} ordered {items} (${po['total']:.2f}). "
                         if reservation.special_requests:
                             message += f" Special requests: {reservation.special_requests}"
+                        
+                        # Convert numbers to words for better TTS pronunciation
+                        from number_utils import numbers_to_words
+                        message = numbers_to_words(message)
                         
                         return SwaigFunctionResult(message)
                 else:
@@ -1331,140 +2072,209 @@ class RestaurantReservationSkill(SkillBase):
                 sys.path.insert(0, parent_dir)
             
             from app import app
-            from models import db, Reservation
+            from models import db, Reservation, Order, OrderItem, MenuItem
             
             with app.app_context():
-                # If reservation_id is missing, try to extract from conversation context
+                # If reservation_id is missing, try to find by reservation_number or extract from conversation context
                 if not args.get('reservation_id'):
-                    # Try to find reservation from conversation context
-                    call_log = raw_data.get('call_log', []) if raw_data else []
-                    caller_phone = None
-                    customer_name = None
-                    reservation_number = None
-                    
-                    # Get caller's phone number
-                    if raw_data and isinstance(raw_data, dict):
-                        caller_phone = (
-                            raw_data.get('caller_id_num') or 
-                            raw_data.get('caller_id_number') or
-                            raw_data.get('from') or
-                            raw_data.get('from_number')
-                        )
-                        # Also check in global_data
-                        global_data = raw_data.get('global_data', {})
-                        if not caller_phone and global_data:
-                            caller_phone = (
-                                global_data.get('caller_id_number') or
-                                global_data.get('caller_id_num')
-                            )
-                    
-                    # Look for reservation number and customer name mentioned in conversation
-                    for entry in call_log:
-                        if entry.get('role') == 'user' and entry.get('content'):
-                            content = entry['content'].lower()
-                            
-                            # Look for reservation number patterns
-                            # Handle spoken numbers like "one one one two two two" -> "111222"
-                            if 'reservation number' in content or 'reservation' in content:
-                                # Extract the part after "reservation number" or "reservation"
-                                if 'reservation number' in content:
-                                    number_part = content.split('reservation number')[-1].strip()
-                                else:
-                                    number_part = content.split('reservation')[-1].strip()
-                                
-                                # Convert spoken numbers to digits
-                                number_words = {
-                                    'zero': '0', 'one': '1', 'two': '2', 'three': '3', 'four': '4',
-                                    'five': '5', 'six': '6', 'seven': '7', 'eight': '8', 'nine': '9'
-                                }
-                                
-                                # Replace word numbers with digits
-                                for word, digit in number_words.items():
-                                    number_part = number_part.replace(word, digit)
-                                
-                                # Extract digits from the processed string
-                                digits = re.findall(r'\d', number_part)
-                                if len(digits) >= 6:  # Reservation numbers are 6 digits
-                                    reservation_number = ''.join(digits[:6])
-                                    print(f"🔄 Extracted reservation number from conversation: {reservation_number}")
-                                    break
-                            
-                            # Look for phone numbers mentioned in conversation
-                            if any(word in content for word in ['five five five', 'phone number', 'my number']):
-                                # Extract phone number from spoken format
-                                phone_part = content
-                                
-                                # Convert spoken numbers to digits for phone numbers
-                                for word, digit in number_words.items():
-                                    phone_part = phone_part.replace(word, digit)
-                                
-                                # Extract digits and format as E.164 phone number
-                                phone_digits = re.findall(r'\d', phone_part)
-                                if len(phone_digits) >= 7:  # At least 7 digits for a phone number
-                                    # Take first 10 digits if available, otherwise first 7
-                                    if len(phone_digits) >= 10:
-                                        extracted_phone = ''.join(phone_digits[:10])
-                                        # Format as E.164 (+1XXXXXXXXXX for US numbers)
-                                        formatted_phone = f"+1{extracted_phone}"
-                                    else:
-                                        extracted_phone = ''.join(phone_digits[:7])
-                                        # Format as E.164 with area code assumption (+1555XXXXXXX)
-                                        # Pad with zeros if needed to make 10 digits
-                                        padded_phone = extracted_phone.ljust(7, '0')
-                                        formatted_phone = f"+1555{padded_phone}"
-                                    
-                                    # Store the phone number for later use
-                                    if not caller_phone:
-                                        caller_phone = formatted_phone
-                                        print(f"🔄 Extracted phone number from conversation: {formatted_phone}")
-                            
-                            # Look for names mentioned in conversation
-                            if 'rob zombie' in content:
-                                customer_name = 'Rob Zombie'
-                            elif 'smith family' in content or 'smith' in content:
-                                customer_name = 'Smith Family'
-                        elif entry.get('role') == 'tool' and ('Rob Zombie' in entry.get('content', '') or 'Smith' in entry.get('content', '')):
-                            if 'Rob Zombie' in entry.get('content', ''):
-                                customer_name = 'Rob Zombie'
-                            elif 'Smith' in entry.get('content', ''):
-                                customer_name = 'Smith Family'
-                    
-                    # Try to find the reservation using available information
-                    reservation = None
-                    
-                    # First try by reservation number if found
-                    if reservation_number:
-                        reservation = Reservation.query.filter(
-                            Reservation.reservation_number == reservation_number
+                    # First check if reservation_number is provided
+                    if args.get('reservation_number'):
+                        reservation = Reservation.query.filter_by(
+                            reservation_number=args['reservation_number']
                         ).first()
                         if reservation:
-                            print(f"🔄 Found reservation by number {reservation_number}: {reservation.name}")
-                    
-                    # Then try by customer name
-                    if not reservation and customer_name:
-                        reservation = Reservation.query.filter(
-                            Reservation.name.ilike(f"%{customer_name}%")
-                        ).order_by(Reservation.date.desc()).first()
-                        if reservation:
-                            print(f"🔄 Found reservation by name {customer_name}: ID {reservation.id}")
-                    
-                    # Finally try by phone number
-                    if not reservation and caller_phone:
-                        reservation = Reservation.query.filter(
-                            Reservation.phone_number.like(f"%{caller_phone}%")
-                        ).order_by(Reservation.date.desc()).first()
-                        if reservation:
-                            print(f"🔄 Found reservation by phone {caller_phone}: {reservation.name}")
-                    
-                    if not reservation:
-                        return SwaigFunctionResult("I need to know which reservation you'd like to update. Could you please provide the reservation ID, your name, or your phone number?")
-                    
-                    args['reservation_id'] = reservation.id
-                    print(f"🔄 Auto-found reservation ID {reservation.id} for {reservation.name}")
+                            args['reservation_id'] = reservation.id
+                            print(f"🔄 Found reservation by number {args['reservation_number']}: ID {reservation.id}")
+                        else:
+                            return SwaigFunctionResult(f"Reservation number {args['reservation_number']} not found.")
+                    else:
+                        # Try to find reservation from conversation context
+                        call_log = raw_data.get('call_log', []) if raw_data else []
+                        caller_phone = None
+                        customer_name = None
+                        reservation_number = None
+                        
+                        # Get caller's phone number
+                        if raw_data and isinstance(raw_data, dict):
+                            caller_phone = (
+                                raw_data.get('caller_id_num') or 
+                                raw_data.get('caller_id_number') or
+                                raw_data.get('from') or
+                                raw_data.get('from_number')
+                            )
+                            # Also check in global_data
+                            global_data = raw_data.get('global_data', {})
+                            if not caller_phone and global_data:
+                                caller_phone = (
+                                    global_data.get('caller_id_number') or
+                                    global_data.get('caller_id_num')
+                                )
+                        
+                        # Look for reservation number mentioned in conversation (prioritize recent messages)
+                        for entry in reversed(call_log):
+                            if entry.get('role') == 'user' and entry.get('content'):
+                                content = entry['content'].lower()
+                                
+                                # Look for reservation numbers using improved extraction
+                                from number_utils import extract_reservation_number_from_text
+                                extracted_number = extract_reservation_number_from_text(content)
+                                if extracted_number:
+                                    reservation_number = extracted_number
+                                    print(f"🔄 Extracted reservation number from conversation: {reservation_number}")
+                                    break
+                        
+                        # Try to find by reservation number first
+                        if reservation_number:
+                            reservation = Reservation.query.filter_by(
+                                reservation_number=reservation_number
+                            ).first()
+                            if reservation:
+                                args['reservation_id'] = reservation.id
+                                print(f"🔄 Found reservation by extracted number {reservation_number}: ID {reservation.id}")
+                            else:
+                                return SwaigFunctionResult(f"Reservation number {reservation_number} not found.")
+                        else:
+                            # Fallback to phone/name search
+                            reservation = None
+                            # Try by name and phone
+                            if caller_phone:
+                                reservation = Reservation.query.filter_by(
+                                    phone_number=caller_phone
+                                ).order_by(Reservation.date.desc()).first()
+                                if reservation:
+                                    print(f"🔄 Found reservation by phone {caller_phone}: {reservation.name}")
+                            
+                            # Try by name if mentioned in conversation
+                            if not reservation:
+                                for entry in call_log:
+                                    if entry.get('role') == 'user' and entry.get('content'):
+                                        content = entry['content'].lower()
+                                        if 'smith' in content:
+                                            customer_name = 'Smith Family'
+                                            break
+                                
+                                if customer_name:
+                                    reservation = Reservation.query.filter(
+                                        Reservation.name.ilike(f"%{customer_name}%")
+                                    ).order_by(Reservation.date.desc()).first()
+                                    if reservation:
+                                        print(f"🔄 Found reservation by name {customer_name}: ID {reservation.id}")
+                            
+                            if not reservation:
+                                return SwaigFunctionResult("I need to know which reservation you'd like to update. Could you please provide the reservation number, your name, or your phone number?")
+                            
+                            args['reservation_id'] = reservation.id
+                            print(f"🔄 Auto-found reservation ID {reservation.id} for {reservation.name}")
                 
                 reservation = Reservation.query.get(args['reservation_id'])
                 if not reservation:
                     return SwaigFunctionResult(f"Reservation {args['reservation_id']} not found.")
+                
+                # Check for pre-order additions from conversation
+                call_log = raw_data.get('call_log', []) if raw_data else []
+                pre_order_items = []
+                
+                # Look for food items mentioned in recent conversation
+                for entry in reversed(call_log[-10:]):  # Check last 10 entries
+                    if entry.get('role') == 'user' and entry.get('content'):
+                        content = entry['content'].lower()
+                        
+                        # Look for specific food/drink items
+                        if 'craft lemonade' in content or 'lemonade' in content:
+                            # Find lemonade menu item
+                            lemonade_item = MenuItem.query.filter(
+                                MenuItem.name.ilike('%lemonade%')
+                            ).first()
+                            if lemonade_item:
+                                quantity = 1
+                                # Look for quantity in the same message
+                                if 'one' in content or '1' in content:
+                                    quantity = 1
+                                elif 'two' in content or '2' in content:
+                                    quantity = 2
+                                
+                                pre_order_items.append({
+                                    'name': lemonade_item.name,
+                                    'menu_item_id': lemonade_item.id,
+                                    'quantity': quantity,
+                                    'price': lemonade_item.price
+                                })
+                                print(f"🍋 Found lemonade pre-order request: {quantity}x {lemonade_item.name}")
+                                break
+                
+                # Handle pre-order additions
+                if pre_order_items:
+                    # Check if customer already has an order for this reservation
+                    existing_order = Order.query.filter_by(
+                        reservation_id=reservation.id,
+                        person_name=reservation.name
+                    ).first()
+                    
+                    if existing_order:
+                        # Add items to existing order
+                        for item_data in pre_order_items:
+                            # Check if item already exists in order
+                            existing_item = OrderItem.query.filter_by(
+                                order_id=existing_order.id,
+                                menu_item_id=item_data['menu_item_id']
+                            ).first()
+                            
+                            if existing_item:
+                                existing_item.quantity += item_data['quantity']
+                            else:
+                                new_order_item = OrderItem(
+                                    order_id=existing_order.id,
+                                    menu_item_id=item_data['menu_item_id'],
+                                    quantity=item_data['quantity'],
+                                    price_at_time=item_data['price']
+                                )
+                                db.session.add(new_order_item)
+                        
+                        # Recalculate order total
+                        order_items = OrderItem.query.filter_by(order_id=existing_order.id).all()
+                        existing_order.total_amount = sum(item.quantity * item.price_at_time for item in order_items)
+                        
+                    else:
+                        # Create new order for this reservation
+                        new_order = Order(
+                            order_number=self._generate_order_number(),
+                            reservation_id=reservation.id,
+                            person_name=reservation.name,
+                            status='pending',
+                            total_amount=0.0
+                        )
+                        db.session.add(new_order)
+                        db.session.flush()  # Get order ID
+                        
+                        order_total = 0.0
+                        for item_data in pre_order_items:
+                            order_item = OrderItem(
+                                order_id=new_order.id,
+                                menu_item_id=item_data['menu_item_id'],
+                                quantity=item_data['quantity'],
+                                price_at_time=item_data['price']
+                            )
+                            db.session.add(order_item)
+                            order_total += item_data['price'] * item_data['quantity']
+                        
+                        new_order.total_amount = order_total
+                    
+                    db.session.commit()
+                    
+                    # Calculate new total bill
+                    total_bill = sum(order.total_amount or 0 for order in reservation.orders)
+                    
+                    # Create response message
+                    added_items = []
+                    for item in pre_order_items:
+                        added_items.append(f"{item['quantity']}x {item['name']}")
+                    
+                    message = f"Perfect! I've added {', '.join(added_items)} to your reservation. "
+                    message += f"Your pre-order total is now ${total_bill:.2f}. "
+                    message += f"The {', '.join([item['name'] for item in pre_order_items])} will be ready when you arrive! "
+                    message += f"Would you like to pay for your pre-order now or when you arrive?"
+                    
+                    return SwaigFunctionResult(message)
                 
                 # Extract update information from conversation if not provided in args
                 if not any(key in args for key in ['name', 'party_size', 'date', 'time', 'phone_number', 'special_requests']):
@@ -1527,9 +2337,8 @@ class RestaurantReservationSkill(SkillBase):
                                 "%m/%d/%Y",       # "06/09/2025"
                                 "%m-%d-%Y",       # "06-09-2025"
                                 "%d/%m/%Y",       # "09/06/2025"
-                                "%d-%m-%Y",       # "09-06-2025"
                                 "%Y/%m/%d",       # "2025/06/09"
-                                "%Y-%m-%d"        # "2025-06-09" (fallback)
+                                "%Y-%m-%d",       # "2025-06-09" (fallback)
                             ]
                             
                             parsed_date = None
@@ -1604,6 +2413,12 @@ class RestaurantReservationSkill(SkillBase):
         except Exception as e:
             return SwaigFunctionResult(f"Error updating reservation: {str(e)}")
     
+    def _generate_order_number(self):
+        """Generate a unique order number"""
+        import random
+        import string
+        return ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+    
     def _cancel_reservation_handler(self, args, raw_data):
         """Handler for cancel_reservation tool"""
         try:
@@ -1621,64 +2436,104 @@ class RestaurantReservationSkill(SkillBase):
             
             print(f"🔍 Received args: {args}")
             
-            # Handle case where args is empty - extract from conversation
+            # Handle case where args is empty or missing reservation_id - extract from conversation
             if not args or 'reservation_id' not in args:
                 print("🔍 No reservation_id provided, extracting from conversation...")
                 
-                # Get caller phone number
-                caller_phone = raw_data.get('caller_id', '')
-                if caller_phone:
-                    caller_phone = self._normalize_phone_number(caller_phone)
-                    print(f"🔍 Using caller phone: {caller_phone}")
-                
-                # Try to get call log from raw_data
-                call_log = []
-                if 'call_log' in raw_data:
-                    call_log = raw_data['call_log']
-                elif hasattr(raw_data, 'call_log'):
-                    call_log = raw_data.call_log
-                
-                print(f"🔍 Call log entries: {len(call_log)}")
-                
-                with app.app_context():
-                    reservation = None
-                    
-                    # First try to find by phone number (most recent reservation)
-                    if caller_phone:
+                # First check if reservation_number is provided
+                if args and args.get('reservation_number'):
+                    with app.app_context():
                         reservation = Reservation.query.filter_by(
-                            phone_number=caller_phone
+                            reservation_number=args['reservation_number']
                         ).filter(
                             Reservation.status != 'cancelled'
-                        ).order_by(Reservation.created_at.desc()).first()
-                        
+                        ).first()
                         if reservation:
-                            print(f"🔍 Found reservation by phone: {reservation.id}")
+                            args['reservation_id'] = reservation.id
+                            print(f"🔍 Found reservation by number {args['reservation_number']}: ID {reservation.id}")
+                        else:
+                            return SwaigFunctionResult(f"Reservation number {args['reservation_number']} not found or already cancelled.")
+                else:
+                    # Get caller phone number
+                    caller_phone = raw_data.get('caller_id', '')
+                    if caller_phone:
+                        caller_phone = self._normalize_phone_number(caller_phone)
+                        print(f"🔍 Using caller phone: {caller_phone}")
                     
-                    # If no reservation found by phone, try to extract from conversation
-                    if not reservation and call_log:
-                        print("🔍 Trying to extract reservation info from conversation...")
-                        try:
-                            extracted_info = self._extract_reservation_info_from_conversation(call_log, caller_phone)
-                            if 'name' in extracted_info:
-                                # Try to find by name and phone
+                    # Try to get call log from raw_data
+                    call_log = []
+                    if 'call_log' in raw_data:
+                        call_log = raw_data['call_log']
+                    elif hasattr(raw_data, 'call_log'):
+                        call_log = raw_data.call_log
+                    
+                    print(f"🔍 Call log entries: {len(call_log)}")
+                    
+                    with app.app_context():
+                        reservation = None
+                        reservation_number = None
+                        
+                        # Look for reservation number mentioned in conversation (prioritize recent messages)
+                        for entry in reversed(call_log):
+                            if entry.get('role') == 'user' and entry.get('content'):
+                                content = entry['content'].lower()
+                                
+                                # Look for reservation numbers using improved extraction
+                                from number_utils import extract_reservation_number_from_text
+                                extracted_number = extract_reservation_number_from_text(content)
+                                if extracted_number:
+                                    reservation_number = extracted_number
+                                    print(f"🔍 Extracted reservation number from conversation: {reservation_number}")
+                                    break
+                        
+                        # Try to find by reservation number first
+                        if reservation_number:
+                            reservation = Reservation.query.filter_by(
+                                reservation_number=reservation_number
+                            ).filter(
+                                Reservation.status != 'cancelled'
+                            ).first()
+                            if reservation:
+                                print(f"🔍 Found reservation by extracted number {reservation_number}: ID {reservation.id}")
+                            else:
+                                return SwaigFunctionResult(f"Reservation number {reservation_number} not found or already cancelled.")
+                        else:
+                            # Fallback to phone number search (most recent reservation)
+                            if caller_phone:
                                 reservation = Reservation.query.filter_by(
-                                    name=extracted_info['name'],
                                     phone_number=caller_phone
                                 ).filter(
                                     Reservation.status != 'cancelled'
                                 ).order_by(Reservation.created_at.desc()).first()
                                 
                                 if reservation:
-                                    print(f"🔍 Found reservation by name and phone: {reservation.id}")
-                        except Exception as e:
-                            print(f"🔍 Error extracting from conversation: {e}")
-                    
-                    if not reservation:
-                        return SwaigFunctionResult("I couldn't find an active reservation to cancel. Could you please provide your reservation number or confirm the phone number you used to make the reservation?")
-                    
-                    # Use the found reservation
-                    args = {'reservation_id': reservation.id}
-                    print(f"🔍 Using reservation ID: {reservation.id}")
+                                    print(f"🔍 Found reservation by phone: {reservation.id}")
+                            
+                            # If no reservation found by phone, try to extract from conversation
+                            if not reservation and call_log:
+                                print("🔍 Trying to extract reservation info from conversation...")
+                                try:
+                                    extracted_info = self._extract_reservation_info_from_conversation(call_log, caller_phone)
+                                    if 'name' in extracted_info:
+                                        # Try to find by name and phone
+                                        reservation = Reservation.query.filter_by(
+                                            name=extracted_info['name'],
+                                            phone_number=caller_phone
+                                        ).filter(
+                                            Reservation.status != 'cancelled'
+                                        ).order_by(Reservation.created_at.desc()).first()
+                                        
+                                        if reservation:
+                                            print(f"🔍 Found reservation by name and phone: {reservation.id}")
+                                except Exception as e:
+                                    print(f"🔍 Error extracting from conversation: {e}")
+                        
+                        if not reservation:
+                            return SwaigFunctionResult("I couldn't find an active reservation to cancel. Could you please provide your reservation number or confirm the phone number you used to make the reservation?")
+                        
+                        # Use the found reservation
+                        args = {'reservation_id': reservation.id}
+                        print(f"🔍 Using reservation ID: {reservation.id}")
             
             with app.app_context():
                 reservation = Reservation.query.get(args['reservation_id'])
@@ -1723,6 +2578,10 @@ class RestaurantReservationSkill(SkillBase):
                     message += "A cancellation confirmation has been sent via SMS. "
                 
                 message += "We're sorry to see you cancel and hope to serve you again soon!"
+                
+                # Convert numbers to words for better TTS pronunciation
+                from number_utils import numbers_to_words
+                message = numbers_to_words(message)
                 
                 return SwaigFunctionResult(message)
                 
@@ -2243,42 +3102,329 @@ class RestaurantReservationSkill(SkillBase):
         
         return segments
 
+    def _add_to_reservation_handler(self, args, raw_data):
+        """Handler for add_to_reservation tool"""
+        try:
+            # Import Flask app and models locally to avoid circular import
+            import sys
+            import os
+            
+            # Add the parent directory to sys.path to import app
+            parent_dir = os.path.dirname(os.path.dirname(__file__))
+            if parent_dir not in sys.path:
+                sys.path.insert(0, parent_dir)
+            
+            from app import app
+            from models import db, Reservation, Order, OrderItem, MenuItem
+            
+            with app.app_context():
+                # Find the reservation
+                reservation = None
+                
+                if args.get('reservation_id'):
+                    reservation = Reservation.query.get(args['reservation_id'])
+                elif args.get('reservation_number'):
+                    reservation = Reservation.query.filter_by(
+                        reservation_number=args['reservation_number']
+                    ).first()
+                else:
+                    # Try to find from conversation context
+                    call_log = raw_data.get('call_log', []) if raw_data else []
+                    caller_phone = None
+                    reservation_number = None
+                    
+                    # Get caller's phone number
+                    if raw_data and isinstance(raw_data, dict):
+                        caller_phone = (
+                            raw_data.get('caller_id_num') or 
+                            raw_data.get('caller_id_number') or
+                            raw_data.get('from') or
+                            raw_data.get('from_number')
+                        )
+                        # Also check in global_data
+                        global_data = raw_data.get('global_data', {})
+                        if not caller_phone and global_data:
+                            caller_phone = (
+                                global_data.get('caller_id_number') or
+                                global_data.get('caller_id_num')
+                            )
+                    
+                    # Look for reservation number in conversation
+                    for entry in reversed(call_log):
+                        if entry.get('role') == 'user' and entry.get('content'):
+                            content = entry['content'].lower()
+                            
+                            # Look for reservation numbers
+                            from number_utils import extract_reservation_number_from_text
+                            extracted_number = extract_reservation_number_from_text(content)
+                            if extracted_number:
+                                reservation_number = extracted_number
+                                break
+                    
+                    # Try to find by reservation number first
+                    if reservation_number:
+                        reservation = Reservation.query.filter_by(
+                            reservation_number=reservation_number
+                        ).first()
+                    elif caller_phone:
+                        # Fallback to phone search
+                        reservation = Reservation.query.filter_by(
+                            phone_number=caller_phone
+                        ).order_by(Reservation.date.desc()).first()
+                
+                if not reservation:
+                    return SwaigFunctionResult("I couldn't find your reservation. Could you please provide your reservation number?")
+                
+                # Extract items from conversation if not provided in args
+                items_to_add = args.get('items', [])
+                
+                if not items_to_add:
+                    # Look for food items mentioned in recent conversation
+                    call_log = raw_data.get('call_log', []) if raw_data else []
+                    
+                    for entry in reversed(call_log[-10:]):  # Check last 10 entries
+                        if entry.get('role') == 'user' and entry.get('content'):
+                            content = entry['content'].lower()
+                            
+                            # Look for specific food/drink items
+                            if 'craft lemonade' in content or 'lemonade' in content:
+                                # Find lemonade menu item
+                                lemonade_item = MenuItem.query.filter(
+                                    MenuItem.name.ilike('%lemonade%')
+                                ).first()
+                                if lemonade_item:
+                                    quantity = 1
+                                    # Look for quantity in the same message
+                                    if 'one' in content or '1' in content:
+                                        quantity = 1
+                                    elif 'two' in content or '2' in content:
+                                        quantity = 2
+                                    
+                                    items_to_add.append({
+                                        'name': lemonade_item.name,
+                                        'quantity': quantity
+                                    })
+                                    break
+                            
+                            elif 'buffalo wings' in content or 'wings' in content:
+                                # Find wings menu item
+                                wings_item = MenuItem.query.filter(
+                                    MenuItem.name.ilike('%wing%')
+                                ).first()
+                                if wings_item:
+                                    quantity = 1
+                                    if 'one' in content or '1' in content:
+                                        quantity = 1
+                                    elif 'two' in content or '2' in content:
+                                        quantity = 2
+                                    
+                                    items_to_add.append({
+                                        'name': wings_item.name,
+                                        'quantity': quantity
+                                    })
+                                    break
+                
+                if not items_to_add:
+                    return SwaigFunctionResult("I didn't catch what you'd like to add to your reservation. Could you please tell me which food or drink items you'd like to pre-order?")
+                
+                # Process the items
+                person_name = args.get('person_name', reservation.name)
+                
+                # Check if customer already has an order for this reservation
+                existing_order = Order.query.filter_by(
+                    reservation_id=reservation.id,
+                    person_name=person_name
+                ).first()
+                
+                added_items = []
+                total_added_cost = 0.0
+                
+                if existing_order:
+                    # Add items to existing order
+                    for item_data in items_to_add:
+                        # Find menu item by name with fuzzy matching
+                        menu_item = self._find_menu_item_fuzzy(item_data['name'])
+                        
+                        if not menu_item:
+                            return SwaigFunctionResult(f"Sorry, I couldn't find '{item_data['name']}' on our menu. Could you try a different item?")
+                        
+                        quantity = item_data.get('quantity', 1)
+                        
+                        # Check if item already exists in order
+                        existing_item = OrderItem.query.filter_by(
+                            order_id=existing_order.id,
+                            menu_item_id=menu_item.id
+                        ).first()
+                        
+                        if existing_item:
+                            existing_item.quantity += quantity
+                        else:
+                            new_order_item = OrderItem(
+                                order_id=existing_order.id,
+                                menu_item_id=menu_item.id,
+                                quantity=quantity,
+                                price_at_time=menu_item.price
+                            )
+                            db.session.add(new_order_item)
+                        
+                        added_items.append(f"{quantity}x {menu_item.name}")
+                        total_added_cost += menu_item.price * quantity
+                    
+                    # Recalculate order total
+                    order_items = OrderItem.query.filter_by(order_id=existing_order.id).all()
+                    existing_order.total_amount = sum(item.quantity * item.price_at_time for item in order_items)
+                    
+                else:
+                    # Create new order for this reservation
+                    new_order = Order(
+                        order_number=self._generate_order_number(),
+                        reservation_id=reservation.id,
+                        person_name=person_name,
+                        status='pending',
+                        total_amount=0.0
+                    )
+                    db.session.add(new_order)
+                    db.session.flush()  # Get order ID
+                    
+                    order_total = 0.0
+                    for item_data in items_to_add:
+                        # Find menu item by name with fuzzy matching
+                        menu_item = self._find_menu_item_fuzzy(item_data['name'])
+                        
+                        if not menu_item:
+                            return SwaigFunctionResult(f"Sorry, I couldn't find '{item_data['name']}' on our menu. Could you try a different item?")
+                        
+                        quantity = item_data.get('quantity', 1)
+                        
+                        order_item = OrderItem(
+                            order_id=new_order.id,
+                            menu_item_id=menu_item.id,
+                            quantity=quantity,
+                            price_at_time=menu_item.price
+                        )
+                        db.session.add(order_item)
+                        
+                        added_items.append(f"{quantity}x {menu_item.name}")
+                        order_total += menu_item.price * quantity
+                        total_added_cost += menu_item.price * quantity
+                    
+                    new_order.total_amount = order_total
+                
+                db.session.commit()
+                
+                # Calculate new total bill
+                total_bill = sum(order.total_amount or 0 for order in reservation.orders)
+                
+                # Create response message
+                message = f"Perfect! I've added {', '.join(added_items)} to your reservation. "
+                message += f"Your pre-order total is now ${total_bill:.2f}. "
+                message += f"The items will be ready when you arrive! "
+                message += f"Would you like to pay for your pre-order now or when you arrive?"
+                
+                return SwaigFunctionResult(message)
+                
+        except Exception as e:
+            return SwaigFunctionResult(f"Error adding items to reservation: {str(e)}")
+
+    def _send_reservation_sms(self, reservation_data, phone_number):
+        """Send SMS confirmation for reservation"""
+        try:
+            # Convert time to 12-hour format for SMS
+            try:
+                time_obj = datetime.strptime(str(reservation_data['time']), '%H:%M')
+                time_12hr = time_obj.strftime('%I:%M %p').lstrip('0')
+            except (ValueError, TypeError):
+                time_12hr = str(reservation_data['time'])
+            
+            sms_body = f"🍽️ Bobby's Table Reservation Confirmed!\n\n"
+            sms_body += f"Name: {reservation_data['name']}\n"
+            sms_body += f"Date: {reservation_data['date']}\n"
+            sms_body += f"Time: {time_12hr}\n"
+            party_text = "person" if reservation_data['party_size'] == 1 else "people"
+            sms_body += f"Party Size: {reservation_data['party_size']} {party_text}\n"
+            sms_body += f"Reservation Number: {reservation_data.get('reservation_number', reservation_data['id'])}\n"
+            
+            if reservation_data.get('special_requests'):
+                sms_body += f"Special Requests: {reservation_data['special_requests']}\n"
+            
+            sms_body += f"\nWe look forward to serving you!\nBobby's Table Restaurant"
+            sms_body += f"\nReply STOP to stop."
+            
+            # Send SMS using SignalWire Agents SDK
+            sms_function_result = SwaigFunctionResult().send_sms(
+                to_number=phone_number,
+                from_number=self.signalwire_from_number,
+                body=sms_body
+            )
+            
+            return {'success': True, 'sms_sent': True}
+            
+        except Exception as e:
+            return {'success': False, 'sms_sent': False, 'error': str(e)}
+    
 def pay_reservation_skill(context):
     """
     Voice skill to collect payment for a reservation/order using SignalWire Pay and Stripe.
-    Prompts for reservation number, confirms amount, processes payment, and sends SMS receipt.
+    Prompts for reservation number, cardholder name, SMS number, email, processes payment, and sends SMS receipt.
     """
     # 1. Prompt for reservation number
     reservation_number = context.get('reservation_number')
     if not reservation_number:
         return {
-            'prompt': 'Please enter or say your reservation number to pay your bill.',
+            'prompt': "Let's get your bill paid! Please say or enter your reservation number. You can find this on your confirmation text or email.",
             'expecting_input': True,
             'next': 'pay_reservation_skill'
         }
 
-    # 2. Optionally prompt for phone number for SMS receipt
-    phone_number = context.get('phone_number')
-    if not phone_number:
+    # 2. Prompt for cardholder name
+    cardholder_name = context.get('cardholder_name')
+    if not cardholder_name:
         return {
-            'prompt': 'Please enter the phone number where you want your receipt sent.',
+            'prompt': "What name is on the credit card you'll be using?",
             'expecting_input': True,
             'next': 'pay_reservation_skill',
             'context': {'reservation_number': reservation_number}
         }
 
-    # 3. Call the SWAIG function to process payment
-    from swaig_agents import pay_reservation_by_phone
-    result = pay_reservation_by_phone(reservation_number=reservation_number, phone_number=phone_number)
+    # 3. Prompt for SMS number (required)
+    phone_number = context.get('phone_number')
+    if not phone_number:
+        return {
+            'prompt': "What mobile number should we send your payment receipt to? Please say or enter your SMS number.",
+            'expecting_input': True,
+            'next': 'pay_reservation_skill',
+            'context': {'reservation_number': reservation_number, 'cardholder_name': cardholder_name}
+        }
 
-    # 4. Announce result
+    # 4. Prompt for email (optional)
+    email = context.get('email')
+    if email is None:
+        return {
+            'prompt': "If you'd like an email receipt as well, please say or enter your email address. Or you can say 'skip' to continue.",
+            'expecting_input': True,
+            'next': 'pay_reservation_skill',
+            'context': {'reservation_number': reservation_number, 'cardholder_name': cardholder_name, 'phone_number': phone_number}
+        }
+    if isinstance(email, str) and email.strip().lower() == 'skip':
+        email = ''
+
+    # 5. Call the SWAIG function to process payment
+    from swaig_agents import pay_reservation_by_phone
+    result = pay_reservation_by_phone(
+        reservation_number=reservation_number,
+        phone_number=phone_number,
+        cardholder_name=cardholder_name,
+        email=email
+    )
+
+    # 6. Announce result
     if result.get('success'):
         return {
-            'prompt': 'Thank you! Your payment was successful and your bill is now marked as paid. A receipt has been sent to your phone.',
+            'prompt': "Thank you! Your payment was successful. Your bill is now marked as paid, and we've sent a receipt to your phone. If you need anything else, just let us know!",
             'end': True
         }
     else:
         return {
-            'prompt': f"Sorry, there was a problem processing your payment: {result.get('error', 'Unknown error')}. Please try again or contact the restaurant.",
+            'prompt': f"Sorry, there was a problem processing your payment: {result.get('error', 'Unknown error')}. Please try again or contact Bobby's Table for help.",
             'end': True
         }
