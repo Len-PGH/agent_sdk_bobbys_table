@@ -2723,11 +2723,30 @@ def debug_payment_sessions():
     })
 
 if __name__ == '__main__':
+    import sys
+    host = '0.0.0.0'
+    port = 8080
+    debug = False
+    
+    # Parse command line arguments
+    if '--host' in sys.argv:
+        host_index = sys.argv.index('--host') + 1
+        if host_index < len(sys.argv):
+            host = sys.argv[host_index]
+    
+    if '--port' in sys.argv:
+        port_index = sys.argv.index('--port') + 1
+        if port_index < len(sys.argv):
+            port = int(sys.argv[port_index])
+    
+    if '--debug' in sys.argv:
+        debug = True
+    
     print("🍽️  Starting Bobby's Table Restaurant System")
     print("==================================================")
-    print("🌐 Web Interface: http://localhost:8080")
-    print("📞 Voice Interface: http://localhost:8080/receptionist")
-    print("🍳 Kitchen Dashboard: http://localhost:8080/kitchen")
+    print(f"🌐 Web Interface: http://{host}:{port}")
+    print(f"📞 Voice Interface: http://{host}:{port}/receptionist")
+    print(f"🍳 Kitchen Dashboard: http://{host}:{port}/kitchen")
     print("Press Ctrl+C to stop the service")
     print("--------------------------------------------------")
-    app.run(host='0.0.0.0', port=8080, debug=True)
+    app.run(host=host, port=port, debug=debug)

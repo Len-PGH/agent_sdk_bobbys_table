@@ -17,6 +17,13 @@ def init_db():
     with open('schema.sql', 'r') as f:
         cursor.executescript(f.read())
     
+    # Clear existing data first
+    cursor.execute('DELETE FROM order_items')
+    cursor.execute('DELETE FROM orders')
+    cursor.execute('DELETE FROM reservations')
+    cursor.execute('DELETE FROM tables')
+    cursor.execute('DELETE FROM menu_items')
+    
     # Add sample tables
     tables = [
         (1, 2, 'available', 'Window'),

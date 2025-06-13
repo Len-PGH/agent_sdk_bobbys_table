@@ -465,15 +465,20 @@ def create_additional_demo_reservations():
 
 def clear_existing_data():
     """Clear existing data from all tables"""
-    from models import OrderItem, Order, Reservation, MenuItem, db
+    from models import OrderItem, Order, Reservation, MenuItem, Table, db
     
-    # Delete in order to respect foreign key constraints
-    OrderItem.query.delete()
-    Order.query.delete()
-    Reservation.query.delete()
-    MenuItem.query.delete()
-    db.session.commit()
-    print("Existing data cleared.")
+    try:
+        # Delete in order to respect foreign key constraints
+        OrderItem.query.delete()
+        Order.query.delete()
+        Reservation.query.delete()
+        Table.query.delete()
+        MenuItem.query.delete()
+        db.session.commit()
+        print("Existing data cleared.")
+    except Exception as e:
+        print(f"Error clearing data: {e}")
+        db.session.rollback()
 
 # Call the function to populate the menu items
 def main():
