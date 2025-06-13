@@ -756,13 +756,24 @@ class RestaurantReservationSkill(SkillBase):
                     if reservation_number:
                         print(f"🔍 Final extracted reservation number: {reservation_number}")
                 
-                # Extract cardholder name from conversation - improved logic
+                # Extract cardholder name from conversation - enhanced logic
                 if not cardholder_name:
                     # Look for cardholder name in recent conversation
                     for entry in reversed(call_log):
                         if entry.get('role') == 'user':
                             content = entry.get('content', '').strip()
-                            # Check if this looks like a name response (not a reservation number or other info)
+                            
+                            # First, check for "First name, X. Last name, Y." pattern
+                            first_last_pattern = r'first name[,\s]+([a-zA-Z]+).*?last name[,\s]+([a-zA-Z]+)'
+                            match = re.search(first_last_pattern, content, re.IGNORECASE)
+                            if match:
+                                first_name = match.group(1).strip()
+                                last_name = match.group(2).strip()
+                                cardholder_name = f"{first_name} {last_name}".title()
+                                print(f"🔍 Extracted cardholder name from 'first/last' pattern: {cardholder_name}")
+                                break
+                            
+                            # Check for standard name patterns
                             if (content and 
                                 not content.lower().startswith(('reservation', 'my reservation', 'number', 'yes', 'no', 'can i', 'i want', 'i need', 'i just', 'i already', 'i told')) and
                                 not re.match(r'^[\d\s]+$', content) and  # Not just numbers

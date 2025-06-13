@@ -1227,13 +1227,25 @@ def swaig_receptionist():
             print("❌ Agent not available")
             return jsonify({'error': 'Agent not available'}), 503
         
-        # Get the request data
+        # Enhanced raw data logging
         raw_data = request.get_data(as_text=True)
-        print(f"   Raw request data: {raw_data}")
+        print(f"   Raw request data: {raw_data[:500]}...")  # Truncate for readability
         
-        data = request.get_json()
-        print(f"   Parsed JSON data: {data}")
+        # Better error handling for JSON parsing
+        try:
+            data = request.get_json()
+            if data:
+                import json as json_module
+                print(f"   Parsed JSON data: {json_module.dumps(data, indent=2)[:500]}...")
+            else:
+                print("   Parsed JSON data: None")
+        except Exception as json_error:
+            print(f"❌ JSON parsing error: {json_error}")
+            print(f"   Raw data type: {type(raw_data)}")
+            print(f"   Raw data length: {len(raw_data) if raw_data else 0}")
+            return jsonify({'error': f'Invalid JSON: {str(json_error)}'}), 400
         
+        # Validate required SWAIG fields
         if not data:
             print("❌ No JSON data received")
             # Try to get form data as fallback
@@ -1653,40 +1665,71 @@ def swaig_receptionist():
         # Extract function name and parameters
         function_name = data.get('function')
         ai_session_id = data.get('ai_session_id', 'unknown')
+        call_id = data.get('call_id', 'unknown')
         
-        # Handle different parameter formats
+        # Enhanced session tracking and logging
+        print(f"📞 Session Info:")
+        print(f"   AI Session ID: {ai_session_id}")
+        print(f"   Call ID: {call_id}")
+        print(f"   Function: {function_name}")
+        
+        # Log conversation context if available
+        call_log = data.get('call_log', [])
+        if call_log:
+            print(f"📝 Conversation context ({len(call_log)} messages):")
+            for i, msg in enumerate(call_log[-3:]):  # Show last 3 messages
+                role = msg.get('role', 'unknown')
+                content = msg.get('content', '')[:100]  # Truncate
+                print(f"   {i+1}. {role}: {content}...")
+        
+        # Enhanced request validation
+        if not function_name:
+            print("❌ No function name provided in request")
+            print(f"   Available keys in request: {list(data.keys())}")
+            
+            # Check if this might be a different type of request
+            if 'call' in data:
+                print("📞 Detected call initialization request")
+                # Handle call initialization - this should be handled earlier
+                return jsonify({'error': 'Call initialization should be handled earlier'}), 400
+            else:
+                print("⚠️  Unknown request type")
+                return jsonify({'error': 'No function name provided'}), 400
+        
+        # Handle different parameter formats more robustly
+        params = {}
         if 'params' in data:
-            # Direct params (from test calls)
             params = data['params']
         elif 'argument' in data:
-            # SignalWire format with parsed/raw structure
             argument = data['argument']
-            if isinstance(argument, dict) and 'parsed' in argument:
-                # Extract from parsed field - it's usually a list with one dict
-                parsed = argument['parsed']
-                if isinstance(parsed, list) and len(parsed) > 0:
-                    params = parsed[0]
+            if isinstance(argument, dict):
+                if 'parsed' in argument:
+                    parsed = argument['parsed']
+                    if isinstance(parsed, list) and len(parsed) > 0:
+                        params = parsed[0]
+                    elif isinstance(parsed, dict):
+                        params = parsed
+                elif 'raw' in argument:
+                    try:
+                        import json as json_module
+                        params = json_module.loads(argument['raw'])
+                    except json_module.JSONDecodeError:
+                        print(f"⚠️  Failed to parse raw argument: {argument['raw']}")
+                        params = {}
                 else:
-                    params = {}
+                    params = argument
             else:
-                # Direct argument object
-                params = argument
-        else:
-            params = {}
+                params = argument if argument else {}
+        
+        import json as json_module
+        print(f"📋 Extracted parameters: {json_module.dumps(params, indent=2)[:300]}...")
         
         # Extract meta_data for context
         meta_data = data.get('meta_data', {})
         meta_data_token = data.get('meta_data_token', '')
         
-        print(f"   Function: {function_name}")
-        print(f"   Params: {params}")
-        print(f"   AI Session ID: {ai_session_id}")
         print(f"   Meta Data: {meta_data}")
         print(f"   Meta Data Token: {meta_data_token}")
-        
-        if not function_name:
-            print("❌ No function name provided")
-            return jsonify({'error': 'No function name provided'}), 400
         
         # Check if this function call should be blocked due to repetition
         should_block, block_reason = should_block_function_call(ai_session_id, function_name)
