@@ -152,6 +152,8 @@ body {
     padding: 0.5rem 1rem;
     background: var(--secondary-bg) !important;
     box-shadow: var(--shadow);
+    z-index: 1050 !important;
+    position: relative !important;
 }
 
 .navbar-toggler {
@@ -159,6 +161,8 @@ body {
     background: var(--bg-tertiary) !important;
     padding: 0.5rem !important;
     border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    z-index: 1150 !important;
+    position: relative !important;
 }
 
 .navbar-collapse {
@@ -182,7 +186,7 @@ body {
         transform: translateX(100%) !important;
         transition: transform 0.3s ease-in-out !important;
         overflow-y: auto !important;
-        z-index: 1000 !important;
+        z-index: 1100 !important;
         box-shadow: -5px 0 15px rgba(0, 0, 0, 0.1) !important;
     }
 
@@ -299,14 +303,93 @@ body {
     box-shadow: 0 2px 16px var(--accent-magenta), 0 0 12px var(--accent-cyan);
 }
 .fc-event {
-    background: linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-purple) 100%) !important;
     border: none !important;
-    box-shadow: 0 0 15px var(--glow-blue) !important;
     transition: all 0.3s ease !important;
 }
 .fc-event:hover {
     transform: translateY(-1px) !important;
-    box-shadow: 0 0 20px var(--glow-purple) !important;
+}
+
+/* Active/Confirmed reservations - Purple theme to match site design */
+.fc-daygrid-event.reservation-confirmed,
+.fc-timegrid-event.reservation-confirmed,
+.fc-event.reservation-confirmed {
+    background: linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-purple) 100%) !important; /* Purple gradient matching site theme */
+    background-color: var(--accent-blue) !important; /* Fallback for FullCalendar */
+    border-color: var(--accent-purple) !important;
+    border: 1px solid var(--accent-purple) !important;
+    box-shadow: 0 0 15px var(--glow-purple) !important;
+    color: white !important;
+}
+
+/* Force FullCalendar event background override for confirmed reservations */
+.fc-event.reservation-confirmed .fc-event-main,
+.fc-daygrid-event.reservation-confirmed .fc-event-main,
+.fc-timegrid-event.reservation-confirmed .fc-event-main {
+    background-color: var(--accent-blue) !important;
+    background: linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-purple) 100%) !important;
+    border-color: var(--accent-purple) !important;
+    color: white !important;
+}
+
+.fc-daygrid-event.reservation-confirmed:hover,
+.fc-timegrid-event.reservation-confirmed:hover,
+.fc-event.reservation-confirmed:hover {
+    box-shadow: 0 0 20px var(--glow-purple) !important; /* Purple glow on hover */
+    transform: translateY(-1px) !important;
+}
+
+/* Cancelled reservations - Gray with strikethrough effect */
+.fc-daygrid-event.reservation-cancelled,
+.fc-timegrid-event.reservation-cancelled,
+.fc-event.reservation-cancelled {
+    background: linear-gradient(135deg, #6c757d 0%, #495057 100%) !important; /* Gray gradient */
+    background-color: #6c757d !important; /* Fallback for FullCalendar */
+    border-color: #495057 !important;
+    border: 1px solid #495057 !important;
+    box-shadow: 0 0 15px rgba(108, 117, 125, 0.3) !important;
+    opacity: 0.7 !important;
+    position: relative !important;
+}
+
+/* Force FullCalendar cancelled event background override */
+.fc-event.reservation-cancelled .fc-event-main {
+    background-color: #6c757d !important;
+    background: linear-gradient(135deg, #6c757d 0%, #495057 100%) !important;
+    border-color: #495057 !important;
+    opacity: 0.7 !important;
+}
+
+.fc-daygrid-event.reservation-cancelled:hover,
+.fc-timegrid-event.reservation-cancelled:hover,
+.fc-event.reservation-cancelled:hover {
+    box-shadow: 0 0 20px var(--glow-purple) !important; /* Purple glow on hover */
+    opacity: 0.8 !important;
+    transform: translateY(-1px) !important;
+}
+
+/* Add strikethrough effect for cancelled reservations */
+.fc-event.reservation-cancelled .fc-event-title,
+.fc-event.reservation-cancelled .fc-event-time {
+    text-decoration: line-through !important;
+}
+
+/* Pending reservations - Yellow/Orange */
+.fc-daygrid-event.reservation-pending,
+.fc-timegrid-event.reservation-pending,
+.fc-event.reservation-pending {
+    background: linear-gradient(135deg, #ffc107 0%, #fd7e14 100%) !important; /* Warning yellow to orange */
+    background-color: #ffc107 !important; /* Fallback for FullCalendar */
+    border-color: #fd7e14 !important;
+    box-shadow: 0 0 15px rgba(255, 193, 7, 0.4) !important;
+    color: #212529 !important; /* Dark text for better contrast */
+}
+
+.fc-daygrid-event.reservation-pending:hover,
+.fc-timegrid-event.reservation-pending:hover,
+.fc-event.reservation-pending:hover {
+    box-shadow: 0 0 20px var(--glow-purple) !important; /* Purple glow on hover */
+    transform: translateY(-1px) !important;
 }
 .fc-daygrid-day {
     background: rgba(255,255,255,0.01);
@@ -791,6 +874,66 @@ footer {
     padding: 2px 4px !important;
 }
 
+/* Override FullCalendar's default event styling completely */
+.fc-daygrid-event.reservation-confirmed .fc-event-main,
+.fc-timegrid-event.reservation-confirmed .fc-event-main,
+.fc-event.reservation-confirmed .fc-event-main,
+.fc-daygrid-event:not([class*="reservation-"]) .fc-event-main,
+.fc-timegrid-event:not([class*="reservation-"]) .fc-event-main,
+.fc-event:not([class*="reservation-"]) .fc-event-main {
+    background: transparent !important;
+    border: none !important;
+}
+
+/* Remove any default FullCalendar event indicators/icons */
+.fc-daygrid-event.reservation-confirmed::before,
+.fc-timegrid-event.reservation-confirmed::before,
+.fc-event.reservation-confirmed::before,
+.fc-daygrid-event:not([class*="reservation-"])::before,
+.fc-timegrid-event:not([class*="reservation-"])::before,
+.fc-event:not([class*="reservation-"])::before,
+.fc-daygrid-event.reservation-confirmed .fc-event-time::before,
+.fc-timegrid-event.reservation-confirmed .fc-event-time::before,
+.fc-event.reservation-confirmed .fc-event-time::before,
+.fc-daygrid-event:not([class*="reservation-"]) .fc-event-time::before,
+.fc-timegrid-event:not([class*="reservation-"]) .fc-event-time::before,
+.fc-event:not([class*="reservation-"]) .fc-event-time::before {
+    display: none !important;
+    content: none !important;
+    background: none !important;
+    border: none !important;
+}
+
+/* Override FullCalendar CSS variables for confirmed/active reservations */
+.fc-daygrid-event.reservation-confirmed,
+.fc-timegrid-event.reservation-confirmed,
+.fc-event.reservation-confirmed,
+.fc-daygrid-event:not([class*="reservation-"]),
+.fc-timegrid-event:not([class*="reservation-"]),
+.fc-event:not([class*="reservation-"]) {
+    --fc-event-bg-color: #28a745 !important;
+    --fc-event-border-color: #20c997 !important;
+    --fc-event-text-color: #ffffff !important;
+}
+
+/* Override FullCalendar CSS variables for cancelled reservations */
+.fc-daygrid-event.reservation-cancelled,
+.fc-timegrid-event.reservation-cancelled,
+.fc-event.reservation-cancelled {
+    --fc-event-bg-color: #6c757d !important;
+    --fc-event-border-color: #495057 !important;
+    --fc-event-text-color: #ffffff !important;
+}
+
+/* Override FullCalendar CSS variables for pending reservations */
+.fc-daygrid-event.reservation-pending,
+.fc-timegrid-event.reservation-pending,
+.fc-event.reservation-pending {
+    --fc-event-bg-color: #ffc107 !important;
+    --fc-event-border-color: #fd7e14 !important;
+    --fc-event-text-color: #212529 !important;
+}
+
 /* Add glow to today's button when active */
 .fc-today-button.fc-button-active {
     box-shadow: 0 0 15px var(--glow-blue) !important;
@@ -1095,6 +1238,8 @@ footer {
     padding: 0.5rem !important;
     border: none !important;
     box-shadow: none !important;
+    z-index: 1150 !important;
+    position: relative !important;
 }
 
 .navbar-toggler:focus {
@@ -1395,7 +1540,7 @@ footer {
         top: 100% !important;
         left: 0 !important;
         right: 0 !important;
-        z-index: 1000 !important;
+        z-index: 1100 !important;
         padding: 1rem !important;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
     }
@@ -1476,11 +1621,26 @@ footer {
     }
 
     .fc-event {
-        background: var(--accent-blue) !important;
         border: none !important;
         padding: 2px 4px !important;
         margin: 1px 0 !important;
         font-size: 0.8rem !important;
+    }
+    
+    /* Mobile specific reservation status styling */
+    .fc-event.reservation-confirmed,
+    .fc-event:not([class*="reservation-"]) {
+        background: linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-purple) 100%) !important;
+    }
+    
+    .fc-event.reservation-cancelled {
+        background: linear-gradient(135deg, #6c757d 0%, #495057 100%) !important;
+        opacity: 0.7 !important;
+    }
+    
+    .fc-event.reservation-pending {
+        background: linear-gradient(135deg, #ffc107 0%, #fd7e14 100%) !important;
+        color: #212529 !important;
     }
 
     .fc .fc-button-primary {
@@ -1877,6 +2037,39 @@ main {
     padding: 1px 3px !important;
     border-radius: 2px !important;
     overflow: visible !important;
+}
+
+/* Status-based styling for responsive events */
+.fc-event.reservation-confirmed,
+.fc-event:not([class*="reservation-"]) {
+    background: linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-purple) 100%) !important;
+}
+
+.fc-event.reservation-confirmed:hover,
+.fc-event:not([class*="reservation-"]):hover {
+    box-shadow: 0 0 20px var(--glow-purple) !important;
+    transform: translateY(-1px) !important;
+}
+
+.fc-event.reservation-cancelled {
+    background: linear-gradient(135deg, #6c757d 0%, #495057 100%) !important;
+    opacity: 0.7 !important;
+}
+
+.fc-event.reservation-cancelled:hover {
+    box-shadow: 0 0 20px var(--glow-purple) !important;
+    opacity: 0.8 !important;
+    transform: translateY(-1px) !important;
+}
+
+.fc-event.reservation-pending {
+    background: linear-gradient(135deg, #ffc107 0%, #fd7e14 100%) !important;
+    color: #212529 !important;
+}
+
+.fc-event.reservation-pending:hover {
+    box-shadow: 0 0 20px var(--glow-purple) !important;
+    transform: translateY(-1px) !important;
 }
 
 /* Calendar container flexibility */

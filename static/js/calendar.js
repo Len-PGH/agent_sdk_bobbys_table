@@ -164,6 +164,12 @@ document.addEventListener('DOMContentLoaded', function() {
             // Show event details in the modal
             showReservationDetails(info.event);
         },
+        datesSet: function(info) {
+            // Reset reservation count tracking when view changes (month/week/day or date navigation)
+            console.log('📅 Calendar view/date changed, resetting reservation count tracking');
+            lastReservationCount = 0;
+            initialCountSet = false;
+        },
         events: '/api/reservations/calendar'
     });
 
@@ -276,7 +282,12 @@ document.addEventListener('DOMContentLoaded', function() {
         }).then(resp => resp.json())
           .then(data => {
             if (data.success) {
-                location.reload();
+                // Close the modal
+                bootstrap.Modal.getInstance(document.getElementById('newReservationModal')).hide();
+                // Refresh the calendar to show the new reservation
+                calendar.refetchEvents();
+                // Show success message
+                alert('Reservation created successfully!');
             } else {
                 alert('Error: ' + (data.error || 'Could not create reservation.'));
             }
@@ -307,8 +318,15 @@ function showReservationDetails(event) {
     
     // Fetch reservation and order details from backend
     fetch(`/api/reservations/${reservationId}`)
-        .then(resp => resp.json())
+        .then(resp => {
+            console.log('API Response status:', resp.status);
+            if (!resp.ok) {
+                throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+            }
+            return resp.json();
+        })
         .then(reservation => {
+            console.log('Reservation data received:', reservation);
             // Format time in 12-hour format
             const time12hr = new Date(`1970-01-01T${reservation.time}`).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
             let html = `
@@ -339,9 +357,10 @@ function showReservationDetails(event) {
                     `;
                     if (order.items && order.items.length > 0) {
                         order.items.forEach(item => {
+                            const itemName = item.menu_item ? item.menu_item.name : `Item ID ${item.menu_item_id} (Not Found)`;
                             html += `
                                 <li class="list-group-item bg-dark text-light d-flex justify-content-between align-items-center">
-                                    <span><strong>${item.menu_item.name}</strong> <small class="text-muted">x${item.quantity}</small></span>
+                                    <span><strong>${itemName}</strong> <small class="text-muted">x${item.quantity}</small></span>
                                     <span class="text-accent">$${(item.price_at_time * item.quantity).toFixed(2)}</span>
                                 </li>
                             `;
@@ -366,6 +385,55 @@ function showReservationDetails(event) {
                         <div class="card-body text-center">
                             <h5 class="card-title mb-2"><i class="fas fa-receipt me-2"></i>Total Bill</h5>
                             <h3 class="text-white fw-bold">$${totalBill.toFixed(2)}</h3>
+                `;
+                
+                // Add payment status and reference information if paid
+                if (reservation.payment_status === 'paid') {
+                    html += `
+                        <div class="mt-3 pt-3 border-top border-light">
+                            <div class="d-flex justify-content-center align-items-center mb-2">
+                                <i class="fas fa-check-circle me-2 text-success"></i>
+                                <span class="badge bg-success">PAID</span>
+                            </div>
+                    `;
+                    
+                    // Add payment date if available
+                    if (reservation.payment_date) {
+                        const paymentDate = new Date(reservation.payment_date).toLocaleDateString('en-US', {
+                            year: 'numeric',
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                        });
+                        html += `<div class="small text-light mb-1">Paid on: ${paymentDate}</div>`;
+                    }
+                    
+                    // Add confirmation number if available
+                    if (reservation.confirmation_number) {
+                        html += `
+                            <div class="small text-light mb-1">
+                                <strong>Confirmation #:</strong> ${reservation.confirmation_number}
+                            </div>
+                        `;
+                    }
+                    
+                    // Add payment reference if available
+                    if (reservation.payment_intent_id) {
+                        const paymentId = reservation.payment_intent_id;
+                        // Show only last 8 characters for security
+                        const maskedPaymentId = paymentId.length > 8 ? '...' + paymentId.slice(-8) : paymentId;
+                        html += `
+                            <div class="small text-light">
+                                <strong>Payment Ref:</strong> ${maskedPaymentId}
+                            </div>
+                        `;
+                    }
+                    
+                    html += `</div>`;
+                }
+                
+                html += `
                         </div>
                     </div>
                 `;
@@ -391,11 +459,18 @@ function showReservationDetails(event) {
             // Show appropriate payment button based on payment status
             updatePaymentButtons(reservation.payment_status || 'unpaid');
             
+            // Update button states based on reservation status
+            updateModalButtonStates(reservation.status || 'confirmed');
+            
+            // Start monitoring payment status for this reservation
+            startPaymentStatusMonitoring(reservation.id, reservation.payment_status || 'unpaid');
+            
             new bootstrap.Modal(document.getElementById('reservationModal')).show();
         })
         .catch(error => {
             console.error('Error fetching reservation details:', error);
-            alert('Error loading reservation details. Please try again.');
+            console.error('Error details:', error.message, error.stack);
+            alert(`Error loading reservation details: ${error.message}. Please check the browser console for more details.`);
         });
 }
 
@@ -410,6 +485,189 @@ function updatePaymentButtons(status) {
         payBillBtn.style.display = 'inline-block';
         billPaidBtn.style.display = 'none';
     }
+}
+
+function updateReservationStatusInModal(newStatus) {
+    // Find the status element in the reservation details and update it
+    const detailsDiv = document.getElementById('reservationDetails');
+    if (detailsDiv) {
+        // Look for the status line and update it
+        const statusRegex = /<div><strong>Status:<\/strong>\s*([^<]+)<\/div>/;
+        const currentHTML = detailsDiv.innerHTML;
+        
+        let statusDisplay = newStatus;
+        let statusClass = '';
+        
+        // Format status with appropriate styling
+        switch(newStatus.toLowerCase()) {
+            case 'cancelled':
+                statusDisplay = '<span class="badge bg-danger">Cancelled</span>';
+                break;
+            case 'confirmed':
+                statusDisplay = '<span class="badge bg-success">Confirmed</span>';
+                break;
+            case 'pending':
+                statusDisplay = '<span class="badge bg-warning">Pending</span>';
+                break;
+            default:
+                statusDisplay = `<span class="badge bg-secondary">${newStatus}</span>`;
+        }
+        
+        if (statusRegex.test(currentHTML)) {
+            // Update existing status
+            const updatedHTML = currentHTML.replace(statusRegex, `<div><strong>Status:</strong> ${statusDisplay}</div>`);
+            detailsDiv.innerHTML = updatedHTML;
+        } else {
+            // Status line might not exist, could add it if needed
+            console.log('Status line not found in reservation details');
+        }
+    }
+}
+
+function updateModalButtonStates(reservationStatus) {
+    // Get all the action buttons
+    const cancelBtn = document.getElementById('cancelReservationBtn');
+    const editBtn = document.getElementById('editReservationBtn');
+    const rescheduleBtn = document.getElementById('rescheduleBtn');
+    const payBillBtn = document.getElementById('payBillBtn');
+    
+    if (reservationStatus && reservationStatus.toLowerCase() === 'cancelled') {
+        // Disable all action buttons for cancelled reservations
+        if (cancelBtn) {
+            cancelBtn.innerHTML = '<i class="fas fa-ban me-2"></i>Cancelled';
+            cancelBtn.className = 'btn btn-secondary btn-lg';
+            cancelBtn.disabled = true;
+        }
+        if (editBtn) {
+            editBtn.disabled = true;
+            editBtn.className = 'btn btn-secondary btn-lg';
+            editBtn.innerHTML = '<i class="fas fa-ban me-2"></i>Cannot Edit (Cancelled)';
+        }
+        if (rescheduleBtn) {
+            rescheduleBtn.disabled = true;
+            rescheduleBtn.className = 'btn btn-secondary btn-lg';
+            rescheduleBtn.innerHTML = '<i class="fas fa-ban me-2"></i>Cannot Reschedule (Cancelled)';
+        }
+        if (payBillBtn) {
+            payBillBtn.style.display = 'none'; // Hide payment button for cancelled reservations
+        }
+    } else {
+        // Reset buttons to normal state for active reservations
+        if (cancelBtn) {
+            cancelBtn.innerHTML = '<i class="fas fa-times me-2"></i>Cancel Reservation';
+            cancelBtn.className = 'btn btn-outline-danger btn-lg';
+            cancelBtn.disabled = false;
+        }
+        if (editBtn) {
+            editBtn.disabled = false;
+            editBtn.className = 'btn btn-info btn-lg';
+            editBtn.innerHTML = '<i class="fas fa-edit me-2"></i>Edit & Add Items';
+        }
+        if (rescheduleBtn) {
+            rescheduleBtn.disabled = false;
+            rescheduleBtn.className = 'btn btn-accent btn-lg';
+            rescheduleBtn.innerHTML = '<i class="fas fa-calendar-alt me-2"></i>Reschedule';
+        }
+        // Payment button visibility is handled by updatePaymentButtons()
+    }
+}
+
+// Payment status monitoring variables
+let paymentStatusInterval = null;
+let currentMonitoringReservationId = null;
+
+function startPaymentStatusMonitoring(reservationId, currentStatus) {
+    // Clear any existing monitoring
+    stopPaymentStatusMonitoring();
+    
+    // Only monitor if payment is not already paid
+    if (currentStatus === 'paid') {
+        return;
+    }
+    
+    currentMonitoringReservationId = reservationId;
+    console.log(`🔍 Starting payment status monitoring for reservation ${reservationId}`);
+    
+    // Check payment status every 5 seconds
+    paymentStatusInterval = setInterval(async () => {
+        try {
+            const response = await fetch(`/api/reservations/${reservationId}`);
+            if (response.ok) {
+                const reservation = await response.json();
+                const newStatus = reservation.payment_status || 'unpaid';
+                
+                // If status changed to paid, update the UI
+                if (newStatus === 'paid' && currentStatus !== 'paid') {
+                    console.log(`✅ Payment status changed to paid for reservation ${reservationId}`);
+                    
+                    // Update the payment buttons
+                    updatePaymentButtons('paid');
+                    
+                    // Update the stored reservation data
+                    if (window.currentReservationData) {
+                        window.currentReservationData.payment_status = 'paid';
+                        window.currentReservationData.payment_date = reservation.payment_date;
+                        window.currentReservationData.confirmation_number = reservation.confirmation_number;
+                        window.currentReservationData.payment_intent_id = reservation.payment_intent_id;
+                    }
+                    
+                    // Refresh the reservation details to show payment information
+                    showReservationDetails(reservationId);
+                    
+                    // Show a notification
+                    showPaymentStatusNotification('Payment received! Your bill has been marked as paid.');
+                    
+                    // Refresh the calendar to show updated status
+                    if (typeof calendar !== 'undefined') {
+                        calendar.refetchEvents();
+                    }
+                    
+                    // Stop monitoring since payment is complete
+                    stopPaymentStatusMonitoring();
+                }
+                
+                currentStatus = newStatus;
+            }
+        } catch (error) {
+            console.error('Error checking payment status:', error);
+        }
+    }, 5000); // Check every 5 seconds
+}
+
+function stopPaymentStatusMonitoring() {
+    if (paymentStatusInterval) {
+        console.log(`🛑 Stopping payment status monitoring for reservation ${currentMonitoringReservationId}`);
+        clearInterval(paymentStatusInterval);
+        paymentStatusInterval = null;
+        currentMonitoringReservationId = null;
+    }
+}
+
+function showPaymentStatusNotification(message) {
+    // Create a toast notification
+    const toastHtml = `
+        <div class="toast align-items-center text-white bg-success border-0" role="alert" aria-live="assertive" aria-atomic="true" style="position: fixed; top: 20px; right: 20px; z-index: 9999;">
+            <div class="d-flex">
+                <div class="toast-body">
+                    <i class="fas fa-check-circle me-2"></i>${message}
+                </div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+        </div>
+    `;
+    
+    // Add toast to body
+    document.body.insertAdjacentHTML('beforeend', toastHtml);
+    
+    // Show the toast
+    const toastElement = document.body.lastElementChild;
+    const toast = new bootstrap.Toast(toastElement, { delay: 5000 });
+    toast.show();
+    
+    // Remove toast element after it's hidden
+    toastElement.addEventListener('hidden.bs.toast', () => {
+        toastElement.remove();
+    });
 }
 
 function editCurrentReservation() {
@@ -643,7 +901,6 @@ document.getElementById('editReservationForm').addEventListener('submit', functi
             bootstrap.Modal.getInstance(document.getElementById('editReservationModal')).hide();
             calendar.refetchEvents();
             alert('Reservation updated successfully!');
-            location.reload();
         } else {
             alert('Error: ' + (data.error || 'Could not update reservation.'));
         }
@@ -680,23 +937,67 @@ function cancelReservation() {
     }
     
     if (confirm('Are you sure you want to cancel this reservation? This action cannot be undone.')) {
+        // Get the cancel button to update its state
+        const cancelBtn = document.getElementById('cancelReservationBtn');
+        const originalBtnContent = cancelBtn.innerHTML;
+        
+        // Show loading state
+        cancelBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Cancelling...';
+        cancelBtn.disabled = true;
+        
         fetch(`/api/reservations/${currentReservationId}`, {
             method: 'DELETE'
         }).then(response => {
             if (response.ok) {
-                // Close the modal
-                bootstrap.Modal.getInstance(document.getElementById('reservationModal')).hide();
+                // Update button to show cancelled state
+                cancelBtn.innerHTML = '<i class="fas fa-ban me-2"></i>Cancelled';
+                cancelBtn.className = 'btn btn-secondary btn-lg';
+                cancelBtn.disabled = true;
+                
+                // Disable other action buttons since reservation is cancelled
+                const editBtn = document.getElementById('editReservationBtn');
+                const rescheduleBtn = document.getElementById('rescheduleBtn');
+                const payBillBtn = document.getElementById('payBillBtn');
+                
+                if (editBtn) {
+                    editBtn.disabled = true;
+                    editBtn.className = 'btn btn-secondary btn-lg';
+                    editBtn.innerHTML = '<i class="fas fa-ban me-2"></i>Cannot Edit (Cancelled)';
+                }
+                if (rescheduleBtn) {
+                    rescheduleBtn.disabled = true;
+                    rescheduleBtn.className = 'btn btn-secondary btn-lg';
+                    rescheduleBtn.innerHTML = '<i class="fas fa-ban me-2"></i>Cannot Reschedule (Cancelled)';
+                }
+                if (payBillBtn) {
+                    payBillBtn.style.display = 'none'; // Hide payment button for cancelled reservations
+                }
+                
+                // Update the reservation status in the details
+                updateReservationStatusInModal('cancelled');
+                
                 // Refresh the calendar
                 calendar.refetchEvents();
+                
                 // Show success message
-                alert('Reservation cancelled successfully');
-                // Reload the page to update today\'s reservations
-                window.location.reload();
+                showPaymentStatusNotification('Reservation cancelled successfully');
+                
+                // Close the modal after a brief delay to show the status change
+                setTimeout(() => {
+                    bootstrap.Modal.getInstance(document.getElementById('reservationModal')).hide();
+                }, 2000); // 2 second delay
+                
             } else {
+                // Restore button on error
+                cancelBtn.innerHTML = originalBtnContent;
+                cancelBtn.disabled = false;
                 alert('Failed to cancel reservation. Please try again.');
             }
         }).catch(error => {
             console.error('Error:', error);
+            // Restore button on error
+            cancelBtn.innerHTML = originalBtnContent;
+            cancelBtn.disabled = false;
             alert('An error occurred while cancelling the reservation.');
         });
     }
@@ -775,4 +1076,183 @@ function renderEditMenuItems(personIndex, existingOrder) {
         html = '<div class="text-muted">Loading menu items...</div>';
     }
     return html;
-} 
+}
+
+// Add event listener to stop payment monitoring when reservation modal is closed
+document.addEventListener('DOMContentLoaded', function() {
+    const reservationModal = document.getElementById('reservationModal');
+    if (reservationModal) {
+        reservationModal.addEventListener('hidden.bs.modal', function() {
+            stopPaymentStatusMonitoring();
+        });
+    }
+}); 
+
+// Auto-refresh calendar every 30 seconds to catch SWAIG reservations
+let autoRefreshInterval = null;
+let lastReservationCount = 0;
+let initialCountSet = false; // Track if we've set the initial count
+
+function startAutoRefresh() {
+    // Only start auto-refresh if calendar exists and we're on the calendar page
+    if (typeof calendar !== 'undefined' && document.getElementById('calendar')) {
+        console.log('📅 Starting auto-refresh for SWAIG reservations (30s interval)');
+        
+        autoRefreshInterval = setInterval(() => {
+            console.log('🔄 Auto-refreshing calendar for new phone reservations...');
+            calendar.refetchEvents();
+            
+            // Check for new reservations and show notification
+            checkForNewReservations();
+        }, 5000); // 5 seconds for faster updates
+    }
+}
+
+function stopAutoRefresh() {
+    if (autoRefreshInterval) {
+        console.log('⏹️ Stopping calendar auto-refresh');
+        clearInterval(autoRefreshInterval);
+        autoRefreshInterval = null;
+    }
+}
+
+async function checkForNewReservations() {
+    try {
+        // Get current date range from calendar
+        const view = calendar.view;
+        const start = view.activeStart.toISOString();
+        const end = view.activeEnd.toISOString();
+        
+        // Fetch current reservations
+        const response = await fetch(`/api/reservations/calendar?start=${start}&end=${end}`);
+        if (response.ok) {
+            const reservations = await response.json();
+            
+            // If this is the first time, just set the initial count without showing notifications
+            if (!initialCountSet) {
+                lastReservationCount = reservations.length;
+                initialCountSet = true;
+                console.log(`📊 Initial reservation count set: ${lastReservationCount}`);
+                return;
+            }
+            
+            // Check if we have new reservations (only after initial count is set)
+            if (reservations.length > lastReservationCount) {
+                const newCount = reservations.length - lastReservationCount;
+                showNewReservationNotification(newCount);
+                console.log(`📞 ${newCount} new reservations detected!`);
+            }
+            
+            // Update the count
+            lastReservationCount = reservations.length;
+            console.log(`📊 Current reservation count: ${lastReservationCount}`);
+        }
+    } catch (error) {
+        console.error('Error checking for new reservations:', error);
+    }
+}
+
+function showNewReservationNotification(count) {
+    const message = count === 1 
+        ? '📞 New phone reservation received!' 
+        : `📞 ${count} new phone reservations received!`;
+    
+    // Play a subtle notification sound (optional - browser dependent)
+    try {
+        // Create a subtle beep sound
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+        
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        
+        oscillator.frequency.setValueAtTime(800, audioContext.currentTime); // 800 Hz tone
+        gainNode.gain.setValueAtTime(0.1, audioContext.currentTime); // Low volume
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+        
+        oscillator.start(audioContext.currentTime);
+        oscillator.stop(audioContext.currentTime + 0.5);
+    } catch (e) {
+        // Ignore audio errors - not critical
+        console.log('Audio notification not available');
+    }
+    
+    // Create toast notification
+    const toastHtml = `
+        <div class="toast align-items-center text-white bg-success border-0" role="alert" style="position: fixed; top: 20px; right: 20px; z-index: 9999; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+            <div class="d-flex">
+                <div class="toast-body">
+                    <i class="fas fa-phone me-2"></i><strong>${message}</strong>
+                    <small class="d-block text-light opacity-75 mt-1">Calendar updated automatically</small>
+                </div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+            </div>
+        </div>
+    `;
+    
+    document.body.insertAdjacentHTML('beforeend', toastHtml);
+    const toastElement = document.body.lastElementChild;
+    const toast = new bootstrap.Toast(toastElement, { delay: 8000 }); // Longer delay - 8 seconds
+    toast.show();
+    
+    toastElement.addEventListener('hidden.bs.toast', () => {
+        toastElement.remove();
+    });
+}
+
+// Manual refresh function for immediate updates
+function refreshCalendarNow() {
+    if (typeof calendar !== 'undefined') {
+        console.log('🔄 Manual calendar refresh triggered');
+        calendar.refetchEvents();
+        checkForNewReservations();
+    }
+}
+
+// Make it available globally for debugging
+window.refreshCalendarNow = refreshCalendarNow;
+
+// Initialize auto-refresh when calendar is ready
+document.addEventListener('DOMContentLoaded', function() {
+    // Wait for calendar to initialize, then start auto-refresh
+    setTimeout(() => {
+        if (typeof calendar !== 'undefined') {
+            startAutoRefresh();
+            
+            // Initialize reservation count
+            checkForNewReservations();
+            
+            // Do an immediate refresh after 3 seconds to catch any recent reservations
+            setTimeout(() => {
+                console.log('🔄 Initial refresh for recent reservations');
+                refreshCalendarNow();
+            }, 3000);
+            
+            // Also do another check after 10 seconds to catch any reservations that might have been created
+            setTimeout(() => {
+                console.log('🔄 Secondary refresh for recent reservations');
+                refreshCalendarNow();
+            }, 10000);
+        }
+    }, 2000);
+    
+    // Stop auto-refresh when leaving the page
+    window.addEventListener('beforeunload', function() {
+        stopAutoRefresh();
+    });
+    
+    // Pause auto-refresh when page is not visible (tab switching)
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            stopAutoRefresh();
+        } else {
+            // Restart when page becomes visible again
+            setTimeout(() => {
+                if (typeof calendar !== 'undefined') {
+                    startAutoRefresh();
+                }
+            }, 1000);
+        }
+    });
+});

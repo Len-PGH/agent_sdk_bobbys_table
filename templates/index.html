@@ -303,6 +303,80 @@ document.getElementById('editOldSchoolReservation').addEventListener('change', f
 });
 
 // Note: Form submission is handled by calendar.js
+
+// Add periodic refresh for payment status updates
+let paymentStatusRefreshInterval = null;
+
+function startPaymentStatusRefresh() {
+    // Only start if not already running
+    if (paymentStatusRefreshInterval) {
+        return;
+    }
+    
+    console.log('🔍 Starting payment status refresh for index page');
+    
+    // Check for payment status updates every 10 seconds
+    paymentStatusRefreshInterval = setInterval(() => {
+        // Check if there are any unpaid reservations visible
+        const unpaidBadges = document.querySelectorAll('.badge.bg-danger.clickable-payment');
+        
+        if (unpaidBadges.length > 0) {
+            console.log(`🔍 Checking payment status for ${unpaidBadges.length} unpaid reservations`);
+            
+            // Refresh the page to get updated payment statuses
+            // We use a simple page refresh since the index page shows multiple reservations
+            // and it's more efficient than checking each one individually
+            fetch(window.location.href, {
+                method: 'GET',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(response => response.text())
+            .then(html => {
+                // Parse the response to check if any payment statuses have changed
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                const newUnpaidBadges = doc.querySelectorAll('.badge.bg-danger.clickable-payment');
+                
+                // If the number of unpaid reservations has changed, refresh the page
+                if (newUnpaidBadges.length !== unpaidBadges.length) {
+                    console.log('✅ Payment status changed detected, refreshing page');
+                    window.location.reload();
+                }
+            })
+            .catch(error => {
+                console.error('Error checking payment status:', error);
+            });
+        } else {
+            // No unpaid reservations, stop monitoring
+            console.log('🛑 No unpaid reservations found, stopping payment status refresh');
+            stopPaymentStatusRefresh();
+        }
+    }, 10000); // Check every 10 seconds
+}
+
+function stopPaymentStatusRefresh() {
+    if (paymentStatusRefreshInterval) {
+        console.log('🛑 Stopping payment status refresh for index page');
+        clearInterval(paymentStatusRefreshInterval);
+        paymentStatusRefreshInterval = null;
+    }
+}
+
+// Start monitoring when page loads
+document.addEventListener('DOMContentLoaded', function() {
+    // Start payment status monitoring if there are unpaid reservations
+    const unpaidBadges = document.querySelectorAll('.badge.bg-danger.clickable-payment');
+    if (unpaidBadges.length > 0) {
+        startPaymentStatusRefresh();
+    }
+});
+
+// Stop monitoring when page is about to unload
+window.addEventListener('beforeunload', function() {
+    stopPaymentStatusRefresh();
+});
 </script>
 
 <style>

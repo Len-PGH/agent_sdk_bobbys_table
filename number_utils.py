@@ -76,7 +76,7 @@ def is_credit_card_number(text):
     
     return False
 
-def extract_reservation_number_from_text(text):
+def extract_reservation_number_from_text(text, payment_context=False):
     """
     Extract a 6-digit reservation number from text, handling both digits and spoken words.
     Prioritizes the most recent/last occurrence of a 6-digit number.
@@ -84,12 +84,25 @@ def extract_reservation_number_from_text(text):
     
     Args:
         text (str): Text that may contain a reservation number
+        payment_context (bool): If True, indicates we're in a payment flow and should be more cautious
         
     Returns:
         str or None: 6-digit reservation number if found, None otherwise
     """
     if not text:
         return None
+    
+    # If we're in a payment context, be much more cautious about extracting reservation numbers
+    if payment_context:
+        print(f"🔍 Payment context detected - being cautious with number extraction from: {text}")
+        
+        # In payment context, only extract if there are explicit reservation keywords
+        reservation_keywords = ['reservation', 'booking', 'confirmation', 'table']
+        has_reservation_keyword = any(keyword in text.lower() for keyword in reservation_keywords)
+        
+        if not has_reservation_keyword:
+            print(f"🔍 No reservation keywords found in payment context - skipping extraction")
+            return None
     
     # Check if this text contains a credit card number - if so, skip extraction
     if is_credit_card_number(text):

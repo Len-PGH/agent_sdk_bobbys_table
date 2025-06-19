@@ -4,6 +4,7 @@ Provides menu browsing and ordering capabilities
 """
 
 import os
+import json
 from typing import List, Dict, Any
 from datetime import datetime
 from flask import current_app
@@ -29,6 +30,163 @@ class RestaurantMenuSkill(SkillBase):
                 "call_id": {"type": "string", "description": "Call ID for tracking"},
                 "caller_id": {"type": "string", "description": "Caller ID number"}
             }
+        },
+        "get_menu": {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "description": "Menu category to filter by (optional)"
+                }
+            }
+        },
+        "create_order": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "description": "Menu item name"},
+                            "quantity": {"type": "integer", "description": "Quantity to order"}
+                        },
+                        "required": ["name", "quantity"]
+                    },
+                    "description": "List of menu items to order"
+                },
+                "customer_name": {
+                    "type": "string",
+                    "description": "Customer name for the order"
+                },
+                "customer_phone": {
+                    "type": "string",
+                    "description": "Customer phone number"
+                },
+                "order_type": {
+                    "type": "string",
+                    "enum": ["pickup", "delivery"],
+                    "description": "Order type - pickup or delivery"
+                },
+                "customer_address": {
+                    "type": "string",
+                    "description": "Customer address (required for delivery orders)"
+                },
+                "special_instructions": {
+                    "type": "string",
+                    "description": "Special instructions for the order"
+                },
+                "payment_preference": {
+                    "type": "string",
+                    "enum": ["now", "pickup"],
+                    "description": "When customer wants to pay - 'now' for immediate payment, 'pickup' for payment at pickup/delivery"
+                }
+            },
+            "required": ["items", "customer_name", "customer_phone"]
+        },
+        "get_order_status": {
+            "type": "object",
+            "properties": {
+                "order_number": {
+                    "type": "string",
+                    "description": "Order number to check status for"
+                },
+                "customer_phone": {
+                    "type": "string",
+                    "description": "Customer phone number for verification"
+                }
+            }
+        },
+        "update_order_status": {
+            "type": "object",
+            "properties": {
+                "order_id": {
+                    "type": "integer",
+                    "description": "Order ID to update"
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["pending", "preparing", "ready", "completed", "cancelled"],
+                    "description": "New status for the order"
+                }
+            },
+            "required": ["order_id", "status"]
+        },
+        "pay_order": {
+            "type": "object",
+            "properties": {
+                "order_number": {
+                    "type": "string",
+                    "description": "Order number to pay for (optional if using verified order from context)"
+                },
+                "phone_number": {
+                    "type": "string",
+                    "description": "Customer phone number for verification"
+                }
+            }
+        },
+        "send_payment_receipt": {
+            "type": "object",
+            "properties": {
+                "reservation_number": {
+                    "type": "string",
+                    "description": "Reservation number for the payment receipt"
+                },
+                "phone_number": {
+                    "type": "string",
+                    "description": "Phone number to send SMS receipt to"
+                },
+                "amount": {
+                    "type": "number",
+                    "description": "Payment amount"
+                },
+                "confirmation_number": {
+                    "type": "string",
+                    "description": "Payment confirmation number"
+                }
+            },
+            "required": ["reservation_number", "phone_number", "amount", "confirmation_number"]
+        },
+        "payment_completed": {
+            "type": "object",
+            "properties": {
+                "payment_type": {
+                    "type": "string",
+                    "enum": ["reservation", "order"],
+                    "description": "Type of payment that was completed"
+                },
+                "confirmation_number": {
+                    "type": "string",
+                    "description": "Payment confirmation number"
+                },
+                "amount": {
+                    "type": "number",
+                    "description": "Payment amount"
+                },
+                "reservation_number": {
+                    "type": "string",
+                    "description": "Reservation number (if payment_type is reservation)"
+                },
+                "order_number": {
+                    "type": "string",
+                    "description": "Order number (if payment_type is order)"
+                }
+            },
+            "required": ["payment_type", "confirmation_number", "amount"]
+        },
+        "send_test_sms": {
+            "type": "object",
+            "properties": {
+                "phone_number": {
+                    "type": "string",
+                    "description": "Phone number to send test SMS to (in E.164 format like +15551234567)"
+                },
+                "message": {
+                    "type": "string",
+                    "description": "Custom message to send (optional, defaults to a test message)"
+                }
+            },
+            "required": ["phone_number"]
         }
     }
     
@@ -99,22 +257,23 @@ class RestaurantMenuSkill(SkillBase):
         # Get all available menu items for fuzzy matching
         all_items = MenuItem.query.filter_by(is_available=True).all()
         
-        # Common spelling corrections and variations
+        # Common spelling corrections and variations - FIXED to avoid wrong item selection
         spelling_corrections = {
             'kraft': 'craft',
             'coke': 'coca-cola',
-            'pepsi': 'coca-cola',
-            'soda': 'coca-cola',
-            'pop': 'coca-cola',
-            'burger': 'ribeye steak',  # Common misname for main dish
-            'chicken': 'buffalo wings',
-            'wings': 'buffalo wings',
-            'lemonade': 'lemonade',
+            # REMOVED: 'pepsi': 'coca-cola' - this was causing Pepsi orders to get Coca-Cola
+            # REMOVED: 'soda': 'coca-cola' - this was mapping all sodas to Coca-Cola
+            # REMOVED: 'pop': 'coca-cola' - this was mapping all pops to Coca-Cola  
+            # REMOVED: 'burger': 'ribeye steak' - this was mapping burgers to expensive steaks
+            # REMOVED: 'chicken': 'buffalo wings' - this was mapping all chicken to wings
+            # REMOVED: 'wings': 'buffalo wings' - this could map BBQ wings to Buffalo wings
+            'lemonade': 'craft lemonade',  # More specific mapping
             'tea': 'iced tea',
             'coffee': 'coffee',
-            'water': 'water',
-            'beer': 'beer',
-            'wine': 'wine'
+            'sparkling water': 'sparkling water',
+            'water': 'sparkling water',  # Default to sparkling water since it's on menu
+            'beer': 'draft beer',  # More specific
+            'wine': 'house wine'   # More specific
         }
         
         # Apply spelling corrections
@@ -287,6 +446,96 @@ class RestaurantMenuSkill(SkillBase):
         
         return None
 
+    def _detect_affirmative_response(self, call_log, context="payment"):
+        """Detect if user gave an affirmative response in recent conversation"""
+        if not call_log:
+            return False
+        
+        # Common affirmative responses
+        affirmative_patterns = [
+            r'\b(yes|yeah|yep|yup|sure|okay|ok|alright|absolutely|definitely)\b',
+            r'\b(let\'s do it|go ahead|sounds good|that works|perfect)\b',
+            r'\b(i\'d like to|i want to|i would like to)\b.*\b(pay|payment)\b',
+            r'\b(pay|payment|credit card|card)\b',
+            r'\b(proceed|continue|confirm)\b'
+        ]
+        
+        # Check the last few user messages for affirmative responses
+        recent_entries = [entry for entry in reversed(call_log) if entry.get('role') == 'user'][:3]
+        
+        for entry in recent_entries:
+            if entry.get('content'):
+                content = entry.get('content', '').lower().strip()
+                
+                # Check for affirmative patterns
+                for pattern in affirmative_patterns:
+                    if re.search(pattern, content, re.IGNORECASE):
+                        print(f"🔍 Detected affirmative response for {context}: '{content}'")
+                        return True
+                
+                # Also check for simple single-word responses
+                if content in ['yes', 'yeah', 'yep', 'yup', 'sure', 'okay', 'ok', 'alright']:
+                    print(f"🔍 Detected simple affirmative response: '{content}'")
+                    return True
+        
+        return False
+
+    def _extract_order_number_from_conversation(self, call_log):
+        """Extract order number from conversation"""
+        import re
+        
+        for entry in call_log:
+            if entry.get('content'):
+                content = entry['content'].lower()
+                
+                # Look for order number patterns (be specific to avoid reservation numbers)
+                order_number_patterns = [
+                    r'order number\s+is\s+(\d{6})',  # "order number is 123456"
+                    r'order\s+(\d{6})',              # "order 123456"
+                    r'order\s+number\s+(\d{6})',     # "order number 123456"
+                    r'order\s+#\s*(\d{6})',          # "order # 123456"
+                    r'order\s+id\s+(\d{6})',         # "order id 123456"
+                ]
+                
+                for pattern in order_number_patterns:
+                    match = re.search(pattern, content)
+                    if match:
+                        order_number = match.group(1)
+                        print(f"🔍 Extracted order number from conversation: {order_number}")
+                        return order_number
+        
+        return None
+
+    def _build_payment_parameters(self, **kwargs):
+        """Build payment parameters array with proper call_id handling"""
+        parameters = []
+        
+        # Add all non-call_id parameters
+        for key, value in kwargs.items():
+            if key != 'call_id' and value is not None:
+                if key == 'order_id':
+                    parameters.append({"name": "order_id", "value": str(value)})
+                elif key == 'order_number':
+                    parameters.append({"name": "order_number", "value": value})
+                elif key == 'customer_name':
+                    parameters.append({"name": "customer_name", "value": value})
+                elif key == 'phone_number':
+                    parameters.append({"name": "phone_number", "value": value or ""})
+                elif key == 'payment_type':
+                    parameters.append({"name": "payment_type", "value": value})
+                elif key == 'reservation_number':
+                    parameters.append({"name": "reservation_number", "value": value})
+        
+        # Only add call_id if it has a non-empty value (schema requirement)
+        call_id = kwargs.get('call_id')
+        if call_id and call_id.strip():
+            parameters.append({"name": "call_id", "value": call_id})
+            print(f"🔍 Added call_id to parameters: {call_id}")
+        else:
+            print(f"🔍 Skipping call_id parameter (empty or None): {repr(call_id)}")
+        
+        return parameters
+
     def register_tools(self) -> None:
         """Register menu and ordering tools with the agent"""
         
@@ -409,7 +658,7 @@ class RestaurantMenuSkill(SkillBase):
         # Get order status tool
         self.agent.define_tool(
             name="get_order_status",
-            description="Check the status of an order (NOT for payment processing). DO NOT use this function during payment flows when customers are providing card details. Use pay_reservation for payment processing only.",
+            description="Check the status of a PICKUP/DELIVERY ORDER (NOT for reservations or payments). CRITICAL: DO NOT use this function when customers want to pay bills, provide card details, or discuss reservations. For reservation payments, use pay_reservation. For order payments, use pay_order. This function is ONLY for checking order preparation status.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -551,21 +800,46 @@ class RestaurantMenuSkill(SkillBase):
             **self.swaig_fields
         )
         
-        # Pay order tool
+        # Consolidated pay order tool
         self.agent.define_tool(
             name="pay_order",
-            description="Process payment for an existing order using SignalWire Pay and Stripe. Use this when customers want to pay for their order over the phone.",
+            description="Process payment for ANY order (new or existing). Use this when customers want to pay for their order, whether it was just created or already exists. The function automatically detects if this is a new order from the current session or an existing one. Accepts affirmative responses like 'yes', 'sure', 'okay', 'let's do it', 'go ahead', 'I'd like to pay', 'credit card', etc.",
             parameters={
                 "type": "object",
                 "properties": {
-                    "order_number": {"type": "string", "description": "6-digit order number to pay for"},
+                    "order_number": {"type": "string", "description": "6-digit order number (optional for new orders - will be detected from session)"},
                     "order_id": {"type": "integer", "description": "Order ID (alternative to order_number)"},
                     "customer_name": {"type": "string", "description": "Customer name for verification"},
+                    "cardholder_name": {"type": "string", "description": "Name on the credit card (optional, defaults to customer name)"},
                     "phone_number": {"type": "string", "description": "Phone number for SMS receipt (will use caller ID if not provided)"}
                 },
                 "required": []
             },
             handler=self._pay_order_handler,
+            meta_data_token="payment_session",  # Shared token for payment session management
+            **self.swaig_fields
+        )
+        
+        # NOTE: The following functions are kept as internal methods but not exposed to AI:
+        # - send_payment_receipt (internal callback only)
+        # - payment_completed (internal callback only)  
+        # - send_test_sms (testing only, not for production AI use)
+        
+        # Register send_payment_receipt for internal SWAIG callbacks (not for AI use)
+        self.agent.define_tool(
+            name="send_payment_receipt",
+            description="Internal function to send payment receipt SMS (callback only, not for AI use)",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "reservation_number": {"type": "string", "description": "Reservation number"},
+                    "phone_number": {"type": "string", "description": "Phone number to send SMS to"},
+                    "amount": {"type": "number", "description": "Payment amount in dollars"},
+                    "confirmation_number": {"type": "string", "description": "Payment confirmation number"}
+                },
+                "required": ["reservation_number", "phone_number", "amount", "confirmation_number"]
+            },
+            handler=self._send_payment_receipt_handler,
             **self.swaig_fields
         )
     
@@ -660,11 +934,20 @@ class RestaurantMenuSkill(SkillBase):
                     category_map = {
                         'breakfast': 'breakfast',
                         'appetizers': 'appetizers', 
+                        'starters': 'appetizers',
+                        'starter': 'appetizers',
                         'main-courses': 'main-courses',
                         'main courses': 'main-courses',
                         'mains': 'main-courses',
+                        'main': 'main-courses',
                         'desserts': 'desserts',
-                        'drinks': 'drinks'
+                        'dessert': 'desserts',
+                        'drinks': 'drinks',
+                        'non-alcoholic': 'drinks',
+                        'cocktails': 'drinks',
+                        'cocktail': 'drinks',
+                        'wine': 'drinks',
+                        'wines': 'drinks'
                     }
                     
                     category_display_names = {
@@ -1460,6 +1743,8 @@ class RestaurantMenuSkill(SkillBase):
                     total_amount += menu_item.price * quantity
                     order_summary.append(f"{quantity}x {menu_item.name}")  # Use corrected name
                 
+                # Round total amount to 2 decimal places to avoid floating-point precision issues
+                total_amount = round(total_amount, 2)
                 order.total_amount = total_amount
                 db.session.commit()
                 
@@ -1517,41 +1802,60 @@ class RestaurantMenuSkill(SkillBase):
                 if sms_result.get('sms_sent'):
                     message += f"\n📱 A confirmation SMS has been sent to your phone. "
                 
+                # Prepare meta_data for payment processing
+                order_meta_data = {
+                    'order_id': order.id,
+                    'order_number': order.order_number,
+                    'customer_name': args['customer_name'],
+                    'customer_phone': args['customer_phone'],
+                    'order_total': total_amount,
+                    'order_type': order_type,
+                    'payment_needed': True,
+                    'payment_amount': total_amount,
+                    'cardholder_name': args['customer_name'],  # Default cardholder name
+                    'order_items': order_summary,
+                    'special_instructions': args.get('special_instructions', ''),
+                    'customer_address': args.get('customer_address', '')
+                }
+                
+                print(f"🔄 Setting order meta_data: {order_meta_data}")
+                
                 # Handle payment preference
                 if payment_preference == 'now':
                     message += f"\n💳 You chose to pay now. I'll collect your payment information next."
                     message += f"\nThank you for choosing Bobby's Table! We'll have your delicious order ready right on time. "
                     message += f"You can call us anytime to check on your order status using order #{order.order_number}."
                     
-                    # Return result with payment action
+                    # Return result with payment action and meta_data
                     result = SwaigFunctionResult(message)
+                    result = result.set_metadata(order_meta_data)
                     
                     # Add payment collection using the pay verb
                     import os
                     
                     # Get payment connector URL - try to auto-detect ngrok URL
-                    payment_connector_url = os.getenv('SIGNALWIRE_PAYMENT_CONNECTOR_URL')
-                    if payment_connector_url:
-                        # If environment variable is set, ensure it has the correct endpoint path
-                        if not payment_connector_url.endswith('/api/signalwire/payment-callback'):
-                            if payment_connector_url.endswith('/'):
-                                payment_connector_url = payment_connector_url + 'api/signalwire/payment-callback'
-                            else:
-                                payment_connector_url = payment_connector_url + '/api/signalwire/payment-callback'
+                    # Get payment connector URL from environment or auto-detect
+                    base_url = os.getenv('SIGNALWIRE_PAYMENT_CONNECTOR_URL')
+                    
+                    if base_url:
+                        # Use environment variable and ensure it has the correct endpoint
+                        if not base_url.endswith('/api/payment-processor'):
+                            payment_connector_url = f"{base_url.rstrip('/')}/api/payment-processor"
+                        else:
+                            payment_connector_url = base_url
+                        print(f"🔗 Using payment connector URL from environment: {payment_connector_url}")
                     else:
-                        # Try to auto-detect ngrok URL from request headers
+                        print("🔗 SIGNALWIRE_PAYMENT_CONNECTOR_URL not set, using auto-detection")
+                        # Fallback to dynamic URL detection
                         try:
                             from flask import request
                             if request and request.headers.get('Host'):
                                 host = request.headers.get('Host')
-                                if 'ngrok' in host or 'tunnel' in host:
-                                    payment_connector_url = f"https://{host}/api/signalwire/payment-callback"
-                                else:
-                                    payment_connector_url = 'http://localhost:8080/api/signalwire/payment-callback'
+                                payment_connector_url = f"https://{host}/api/payment-processor"
                             else:
-                                payment_connector_url = 'http://localhost:8080/api/signalwire/payment-callback'
+                                payment_connector_url = 'http://localhost:8080/api/payment-processor'
                         except:
-                            payment_connector_url = 'http://localhost:8080/api/signalwire/payment-callback'
+                            payment_connector_url = 'http://localhost:8080/api/payment-processor'
                     
                     print(f"🔗 Using payment connector URL: {payment_connector_url}")
                     
@@ -1560,9 +1864,11 @@ class RestaurantMenuSkill(SkillBase):
                         print("⚠️  WARNING: Payment connector URL is localhost - SignalWire won't be able to reach this!")
                         print("   Make sure SIGNALWIRE_PAYMENT_CONNECTOR_URL is set to your ngrok URL")
                     
-                    # Add payment collection
+                    # Add payment collection with proper prompts and pound key terminators
+                    status_url = payment_connector_url.replace('/api/payment-processor', '/api/signalwire/payment-callback')
                     result = result.pay(
                         payment_connector_url=payment_connector_url,
+                        status_url=status_url,
                         input_method="dtmf",
                         payment_method="credit-card",
                         timeout=10,
@@ -1571,19 +1877,38 @@ class RestaurantMenuSkill(SkillBase):
                         postal_code=True,
                         min_postal_code_length=5,
                         token_type="one-time",
-                        charge_amount=str(total_amount),
+                        charge_amount=f"{total_amount:.2f}",
                         currency="usd",
                         language="en-US",
                         voice="woman",
                         description=f"Bobby's Table Order #{order.order_number}",
                         valid_card_types="visa mastercard amex discover",
-                        parameters=[
-                            {"name": "order_id", "value": str(order.id)},
-                            {"name": "order_number", "value": order.order_number},
-                            {"name": "customer_name", "value": args['customer_name']},
-                            {"name": "phone_number", "value": args['customer_phone']},
-                            {"name": "payment_type", "value": "order"}
-                        ]
+                        prompts=[
+                            {
+                                "name": "card_number",
+                                "text": "Please enter your 16-digit card number followed by the pound key."
+                            },
+                            {
+                                "name": "expiration_date",
+                                "text": "Please enter your card's expiration date as 4 digits, month and year, followed by the pound key."
+                            },
+                            {
+                                "name": "security_code",
+                                "text": "Please enter your 3 or 4 digit security code followed by the pound key."
+                            },
+                            {
+                                "name": "postal_code",
+                                "text": "Please enter your 5-digit ZIP code followed by the pound key."
+                            }
+                        ],
+                        parameters=self._build_payment_parameters(
+                            order_id=str(order.id),
+                            order_number=order.order_number,
+                            customer_name=args['customer_name'],
+                            phone_number=args['customer_phone'],
+                            payment_type="order",
+                            call_id=raw_data.get('call_id') if raw_data else None
+                        )
                     )
                     
                     return result
@@ -1591,8 +1916,13 @@ class RestaurantMenuSkill(SkillBase):
                     message += f"\n💰 Payment: You'll pay when you {order_type} your order."
                     message += f"\nThank you for choosing Bobby's Table! We'll have your delicious order ready right on time. "
                     message += f"You can call us anytime to check on your order status using order #{order.order_number}."
+                    message += f"\n💳 If you'd like to pay now instead, just say 'I want to pay for my order' and I'll help you process the payment."
                     
-                    return SwaigFunctionResult(message)
+                    # Return result with meta_data for future payment
+                    result = SwaigFunctionResult(message)
+                    result = result.set_metadata(order_meta_data)
+                    
+                    return result
                 
         except Exception as e:
             return SwaigFunctionResult(f"Sorry, there was an error creating your order: {str(e)}")
@@ -1611,6 +1941,7 @@ class RestaurantMenuSkill(SkillBase):
             
             from app import app
             from models import Order
+            from datetime import datetime
             
             with app.app_context():
                 # First check if order_number is provided directly
@@ -1635,12 +1966,12 @@ class RestaurantMenuSkill(SkillBase):
                         if entry.get('content'):
                             content = entry['content'].lower()
                             
-                            # First try to find 6-digit order numbers
+                            # First try to find 6-digit order numbers (be more specific to avoid reservation numbers)
                             order_number_patterns = [
                                 r'order number\s+is\s+(\d{6})',  # "order number is 123456"
                                 r'order\s+(\d{6})',              # "order 123456"
-                                r'number\s+is\s+(\d{6})',        # "number is 123456"
-                                r'(\d{6})',                      # Any 6-digit number
+                                r'order\s+number\s+(\d{6})',     # "order number 123456"
+                                # Removed the overly broad r'(\d{6})' pattern that matches any 6-digit number
                             ]
                             
                             for pattern in order_number_patterns:
@@ -1689,7 +2020,43 @@ class RestaurantMenuSkill(SkillBase):
                             args['order_id'] = order.id
                             print(f"🔍 Found order by extracted number {order_number}: ID {order.id}")
                         else:
-                            return SwaigFunctionResult(f"Order number {order_number} not found.")
+                            # If not found as order number, check if it's a reservation number
+                            from models import Reservation
+                            reservation = Reservation.query.filter_by(reservation_number=order_number).first()
+                            if reservation:
+                                print(f"🔍 Number {order_number} is a reservation number, looking for associated orders")
+                                # Find orders associated with this reservation
+                                reservation_orders = Order.query.filter_by(reservation_id=reservation.id).all()
+                                if reservation_orders:
+                                    # Show all orders for this reservation
+                                    message = f"Found {len(reservation_orders)} order(s) for reservation #{order_number} ({reservation.name}):\n\n"
+                                    for order in reservation_orders:
+                                        # Convert target time to 12-hour format
+                                        if order.target_time:
+                                            time_obj = datetime.strptime(order.target_time, '%H:%M')
+                                            time_12hr = time_obj.strftime('%I:%M %p').lstrip('0')
+                                        else:
+                                            time_12hr = "Not specified"
+                                        
+                                        status_messages = {
+                                            'pending': 'Order is pending and will be started soon.',
+                                            'preparing': 'Order is currently being prepared in the kitchen.',
+                                            'ready': f'Order is ready for {order.order_type}!',
+                                            'completed': 'Order has been completed.'
+                                        }
+                                        
+                                        message += f"🍽️ Order #{order.order_number} for {order.person_name}\n"
+                                        message += f"   Status: {order.status.title()}\n"
+                                        message += f"   {status_messages.get(order.status, 'Status unknown')}\n"
+                                        message += f"   Scheduled for: {time_12hr} on {order.target_date}\n"
+                                        message += f"   Total: ${order.total_amount:.2f}\n"
+                                        message += f"   Payment: {order.payment_status.title()}\n\n"
+                                    
+                                    return SwaigFunctionResult(message.strip())
+                                else:
+                                    return SwaigFunctionResult(f"Reservation #{order_number} found for {reservation.name}, but no orders have been placed yet. Would you like to place an order?")
+                            else:
+                                return SwaigFunctionResult(f"Order number {order_number} not found.")
                     elif order_id:
                         args['order_id'] = order_id
                 
@@ -1743,8 +2110,11 @@ class RestaurantMenuSkill(SkillBase):
                     return SwaigFunctionResult("I couldn't find that order. Please check the order ID or phone number.")
                 
                 # Convert target time to 12-hour format
-                time_obj = datetime.strptime(order.target_time, '%H:%M')
-                time_12hr = time_obj.strftime('%I:%M %p').lstrip('0')
+                if order.target_time:
+                    time_obj = datetime.strptime(order.target_time, '%H:%M')
+                    time_12hr = time_obj.strftime('%I:%M %p').lstrip('0')
+                else:
+                    time_12hr = "Not specified"
                 
                 status_messages = {
                     'pending': 'Your order is pending and will be started soon.',
@@ -1758,7 +2128,7 @@ class RestaurantMenuSkill(SkillBase):
                 message += f"{status_messages.get(order.status, 'Status unknown')}\n"
                 message += f"Scheduled for: {time_12hr} on {order.target_date}\n"
                 message += f"Total: ${order.total_amount:.2f}\n"
-                message += f"Type: {order.order_type.title()}"
+                message += f"Type: {order.order_type.title() if order.order_type else 'Not specified'}"
                 
                 if order.order_type == 'delivery' and order.customer_address:
                     message += f"\nDelivery address: {order.customer_address}"
@@ -1804,12 +2174,12 @@ class RestaurantMenuSkill(SkillBase):
                         if entry.get('content'):
                             content = entry['content'].lower()
                             
-                            # Look for 6-digit order numbers first
+                            # Look for 6-digit order numbers first (be more specific)
                             order_number_patterns = [
                                 r'order number\s+is\s+(\d{6})',
                                 r'order\s+(\d{6})',
-                                r'number\s+is\s+(\d{6})',
-                                r'(\d{6})',
+                                r'order\s+number\s+(\d{6})',
+                                # Removed overly broad patterns that match any 6-digit number
                             ]
                             
                             for pattern in order_number_patterns:
@@ -2536,6 +2906,114 @@ class RestaurantMenuSkill(SkillBase):
         except Exception as e:
             return SwaigFunctionResult(f"Error generating kitchen summary: {str(e)}")
     
+    def _process_reservation_payment(self, reservation, total_amount, caller_phone, raw_data):
+        """Process payment for a reservation using SWML pay verb"""
+        try:
+            # Round total amount to 2 decimal places to avoid floating-point precision issues
+            total_amount = round(total_amount, 2)
+            
+            print(f"💳 Processing reservation payment for #{reservation.reservation_number}")
+            print(f"💰 Total amount: ${total_amount:.2f}")
+            
+            # Get payment connector URL from environment or auto-detect
+            base_url = os.getenv('SIGNALWIRE_PAYMENT_CONNECTOR_URL')
+            
+            if base_url:
+                # Use environment variable and ensure it has the correct endpoint
+                if not base_url.endswith('/api/payment-processor'):
+                    payment_connector_url = f"{base_url.rstrip('/')}/api/payment-processor"
+                else:
+                    payment_connector_url = base_url
+            else:
+                # Auto-detect payment connector URL
+                if raw_data and 'global_data' in raw_data:
+                    # Try to get host from request headers or global data
+                    host = None
+                    try:
+                        from flask import request
+                        if hasattr(request, 'headers'):
+                            host = request.headers.get('Host')
+                    except:
+                        pass
+                    
+                    if host and 'ngrok' in host:
+                        payment_connector_url = f"https://{host}/api/payment-processor"
+                    else:
+                        payment_connector_url = 'http://localhost:8080/api/payment-processor'
+                else:
+                    payment_connector_url = 'http://localhost:8080/api/payment-processor'
+            
+            print(f"🔗 Using payment connector URL: {payment_connector_url}")
+            
+            # Check for localhost warning
+            if 'localhost' in payment_connector_url or '127.0.0.1' in payment_connector_url:
+                print("⚠️ Using localhost payment connector URL - this won't work for real calls")
+                print("   Make sure SIGNALWIRE_PAYMENT_CONNECTOR_URL is set to your ngrok URL")
+            
+            # Configure SWML pay verb for reservation payment
+            result = SwaigFunctionResult(
+                f"💳 Processing payment for Reservation #{reservation.reservation_number}\n"
+                f"Customer: {reservation.name}\n"
+                f"Amount: ${total_amount:.2f}\n\n"
+                f"I'll now collect your credit card information securely."
+            )
+            
+            # Configure SWML pay verb - always use payment connector approach
+            # Add status URL for payment result callback
+            status_url = payment_connector_url.replace('/api/payment-processor', '/api/signalwire/payment-callback')
+            
+            result = result.pay(
+                payment_connector_url=payment_connector_url,
+                status_url=status_url,
+                input_method="dtmf",
+                payment_method="credit-card",
+                timeout=10,
+                max_attempts=3,
+                security_code=True,
+                postal_code=True,
+                min_postal_code_length=5,
+                token_type="one-time",
+                currency="usd",
+                language="en-US",
+                voice="woman",
+                valid_card_types="visa mastercard amex discover",
+                charge_amount=f"{total_amount:.2f}",
+                description=f"Bobby's Table Reservation #{reservation.reservation_number}",
+                parameters=[
+                    {"name": "reservation_number", "value": reservation.reservation_number},
+                    {"name": "customer_name", "value": reservation.name},
+                    {"name": "phone_number", "value": caller_phone or reservation.phone_number},
+                    {"name": "payment_type", "value": "reservation"}
+                ] + ([{"name": "call_id", "value": raw_data.get('call_id')}] if raw_data and raw_data.get('call_id') and raw_data.get('call_id').strip() else [])
+            )
+            
+            # Set metadata for payment tracking
+            result.set_metadata({
+                "payment_step": "collecting_payment",
+                "payment_type": "reservation",
+                "reservation_number": reservation.reservation_number,
+                "amount": total_amount,
+                "customer_name": reservation.name,
+                "phone_number": caller_phone or reservation.phone_number
+            })
+            
+            print(f"✅ Payment collection configured for ${total_amount} - Reservation #{reservation.reservation_number}")
+            return result
+            
+        except Exception as e:
+            print(f"❌ Error in _process_reservation_payment: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            
+            result = SwaigFunctionResult(
+                f"Sorry, there was an error processing your payment request: {str(e)}"
+            )
+            result.set_metadata({
+                "payment_step": "error",
+                "error": str(e)
+            })
+            return result
+
     def _pay_order_handler(self, args, raw_data):
         """Handler for pay_order tool"""
         try:
@@ -2549,9 +3027,150 @@ class RestaurantMenuSkill(SkillBase):
                 sys.path.insert(0, parent_dir)
             
             from app import app
-            from models import db, Order
+            from models import db, Order, Reservation
+            from flask import current_app
             
             with app.app_context():
+                # Extract meta_data for session management
+                meta_data = raw_data.get('meta_data', {}) if raw_data else {}
+                print(f"🔍 Current meta_data: {meta_data}")
+                
+                # Get call_id for payment session checking - raw_data is the full SWAIG request
+                call_id = raw_data.get('call_id') if raw_data else None
+                print(f"🔍 Call ID: {call_id}")
+                print(f"🔍 Raw data keys: {list(raw_data.keys()) if raw_data else 'None'}")
+                print(f"🔍 Raw data type: {type(raw_data)}")
+                
+                # Debug: Show first few keys to understand the structure
+                if raw_data and isinstance(raw_data, dict):
+                    print(f"🔍 First 10 raw_data keys: {list(raw_data.keys())[:10]}")
+                    if 'call_id' in raw_data:
+                        print(f"🔍 Found call_id in raw_data: {raw_data['call_id']}")
+                    else:
+                        print(f"🔍 call_id not found in raw_data, checking other possible keys...")
+                        for key in ['ai_session_id', 'session_id', 'id']:
+                            if key in raw_data:
+                                print(f"   Found {key}: {raw_data[key]}")
+                else:
+                    print(f"🔍 raw_data is not a dict or is None")
+                
+                # Check if there's an active payment session - now passed from main app
+                session_data = raw_data.get('_payment_session') if raw_data else None
+                print(f"🔍 Payment session data from main app: {session_data}")
+                
+                if session_data and session_data.get('reservation_number'):
+                    reservation_number = session_data.get('reservation_number')
+                    print(f"🔍 Found active payment session for reservation {reservation_number}")
+                    
+                    # Get reservation details to provide context
+                    reservation = Reservation.query.filter_by(reservation_number=reservation_number).first()
+                    if reservation:
+                        # IMPORTANT: Instead of redirecting, automatically proceed with reservation payment
+                        print(f"✅ Auto-proceeding with reservation payment for #{reservation_number}")
+                        
+                        # Calculate total amount from associated orders
+                        total_bill = sum(order.total_amount or 0 for order in reservation.orders)
+                        
+                        # Check if reservation has amount due
+                        if not total_bill or total_bill <= 0:
+                            result = SwaigFunctionResult(
+                                f"Reservation #{reservation_number} for {reservation.name} has no amount due. "
+                                "Please contact the restaurant if you believe this is an error."
+                            )
+                            result.set_metadata({
+                                "payment_step": "no_amount_due",
+                                "reservation_number": reservation_number
+                            })
+                            return result
+                        
+                        # Check if already paid
+                        if reservation.payment_status == 'paid':
+                            result = SwaigFunctionResult(
+                                f"Reservation #{reservation_number} has already been paid. "
+                                f"Your confirmation number is {reservation.confirmation_number}."
+                            )
+                            result.set_metadata({
+                                "payment_step": "already_paid",
+                                "reservation_number": reservation_number
+                            })
+                            return result
+                        
+                        # Get caller phone for payment processing
+                        caller_phone = None
+                        if raw_data and isinstance(raw_data, dict):
+                            caller_phone = (
+                                raw_data.get('caller_id_num') or 
+                                raw_data.get('caller_id_number') or
+                                raw_data.get('from') or
+                                raw_data.get('from_number')
+                            )
+                            # Also check in global_data
+                            global_data = raw_data.get('global_data', {})
+                            if not caller_phone and global_data:
+                                caller_phone = (
+                                    global_data.get('caller_id_number') or
+                                    global_data.get('caller_id_num')
+                                )
+                        
+                        # Normalize phone number
+                        if caller_phone:
+                            caller_phone = self._normalize_phone_number(caller_phone)
+                            print(f"🔍 Using caller ID: {caller_phone}")
+                        
+                        # Proceed with payment collection for the reservation
+                        return self._process_reservation_payment(
+                            reservation=reservation,
+                            total_amount=total_bill,
+                            caller_phone=caller_phone,
+                            raw_data=raw_data
+                        )
+                    else:
+                        # Reservation not found, clear the session
+                        print(f"🧹 Reservation {reservation_number} not found, continuing with order payment")
+                
+                if not session_data and call_id:
+                    # Fallback: try to access payment sessions directly
+                    try:
+                        print(f"🔍 Fallback: Checking payment session for call_id: {call_id}")
+                        current_app_instance = app._get_current_object() if hasattr(app, '_get_current_object') else app
+                        
+                        if hasattr(current_app_instance, 'payment_sessions'):
+                            payment_sessions = current_app_instance.payment_sessions
+                            print(f"🔍 Found payment_sessions with {len(payment_sessions)} active sessions")
+                            
+                            if call_id in payment_sessions:
+                                session_data = payment_sessions[call_id]
+                                print(f"✅ Found payment session data via fallback: {session_data}")
+                            else:
+                                print(f"❌ Call ID {call_id} not found in payment sessions")
+                        else:
+                            print(f"❌ No payment_sessions attribute found on app instance")
+                            
+                    except Exception as e:
+                        print(f"❌ Error accessing payment session: {e}")
+                        session_data = None
+                    
+
+                
+                # Check if there's an active payment session for a reservation in meta_data (fallback)
+                if meta_data.get('payment_session_active') and meta_data.get('verified_reservation'):
+                    verified_reservation = meta_data.get('verified_reservation')
+                    reservation_number = verified_reservation.get('reservation_number')
+                    print(f"🔍 Found active payment session in meta_data for reservation {reservation_number}")
+                    
+                    # IMPORTANT: If there's an active payment session for a reservation,
+                    # redirect to pay_reservation instead of trying to pay individual orders
+                    result = SwaigFunctionResult(
+                        f"I see you have an active payment session for reservation #{reservation_number}. "
+                        f"Let me help you pay for that reservation instead. "
+                        f"Please say 'pay reservation {reservation_number}' to continue with the reservation payment."
+                    )
+                    result.set_metadata({
+                        "payment_step": "redirect_to_reservation",
+                        "active_reservation_session": verified_reservation
+                    })
+                    return result
+                
                 # Get caller phone number from raw_data
                 caller_phone = None
                 if raw_data and isinstance(raw_data, dict):
@@ -2569,124 +3188,244 @@ class RestaurantMenuSkill(SkillBase):
                             global_data.get('caller_id_num')
                         )
                 
-                # Find the order
-                order = None
+                print(f"🔍 pay_order called with caller_phone: {caller_phone}")
+                print(f"🔍 pay_order args: {args}")
                 
-                # Try to find by order number first (preferred)
-                if args.get('order_number'):
-                    order = Order.query.filter_by(order_number=args['order_number']).first()
-                    if order:
-                        print(f"🔍 Found order by number {args['order_number']}: ID {order.id}")
-                    else:
-                        return SwaigFunctionResult(f"Order number {args['order_number']} not found.")
-                
-                # Try to find by order ID
-                elif args.get('order_id'):
-                    order = Order.query.get(args['order_id'])
-                    if order:
-                        print(f"🔍 Found order by ID {args['order_id']}")
-                    else:
-                        return SwaigFunctionResult(f"Order ID {args['order_id']} not found.")
-                
-                # Try to extract order info from conversation
-                elif not order:
-                    call_log = raw_data.get('call_log', []) if raw_data else []
+                # AUTO-DETECT: Check if this is for a newly created order from session metadata
+                order_number = args.get('order_number')
+                if not order_number:
+                    # Check meta_data for recently created order
+                    order_created = meta_data.get('order_created')
+                    session_order_number = meta_data.get('order_number')
                     
-                    # Extract order number/ID from conversation
-                    import re
-                    order_number = None
-                    order_id = None
-                    
-                    for entry in call_log:
-                        if entry.get('content'):
-                            content = entry['content'].lower()
-                            
-                            # First try to find 6-digit order numbers
-                            order_number_patterns = [
-                                r'order number\s+is\s+(\d{6})',  # "order number is 123456"
-                                r'order\s+(\d{6})',              # "order 123456"
-                                r'number\s+is\s+(\d{6})',        # "number is 123456"
-                                r'(\d{6})',                      # Any 6-digit number
-                            ]
-                            
-                            for pattern in order_number_patterns:
-                                match = re.search(pattern, content)
-                                if match:
-                                    order_number = match.group(1)
-                                    print(f"🔍 Extracted order number from conversation: {order_number}")
+                    if order_created and session_order_number:
+                        order_number = session_order_number
+                        print(f"🔍 Auto-detected new order from session: #{order_number}")
+                    else:
+                        # Try to detect from conversation history
+                        call_log = raw_data.get('call_log', []) if raw_data else []
+                        for entry in reversed(call_log[-10:]):  # Check last 10 entries
+                            if (entry.get('role') == 'assistant' and 
+                                entry.get('content') and 
+                                'order confirmed' in entry.get('content', '').lower()):
+                                
+                                # Try to extract order number from the assistant's message
+                                import re
+                                content = entry.get('content', '')
+                                order_match = re.search(r'Order #(\d{6})', content)
+                                if order_match:
+                                    order_number = order_match.group(1)
+                                    print(f"🔍 Auto-detected order from conversation: #{order_number}")
                                     break
-                            
-                            if order_number:
-                                break
+                
+                # Check if we already have verified order data in meta_data
+                verified_order = meta_data.get('verified_order')
+                if verified_order:
+                    print(f"✅ Using verified order from meta_data: {verified_order}")
+                    order_id = verified_order.get('order_id')
+                    order = Order.query.get(order_id) if order_id else None
+                    if order:
+                        print(f"🔍 Found verified order: Order #{order.order_number}")
+                    else:
+                        # Clear invalid meta_data
+                        result = SwaigFunctionResult("I need to verify your order information again.")
+                        result.set_metadata({})
+                        return result
+                else:
+                    # Find the order
+                    order = None
                     
-                    # Try to find by extracted order number
+                    # Try to find by order number first (preferred)
                     if order_number:
                         order = Order.query.filter_by(order_number=order_number).first()
                         if order:
-                            print(f"🔍 Found order by extracted number {order_number}: ID {order.id}")
+                            print(f"🔍 Found order by number {order_number}: ID {order.id}")
                         else:
-                            return SwaigFunctionResult(f"Order number {order_number} not found.")
-                
-                # If still no order found, try to find by caller phone
-                if not order and caller_phone:
-                    # Find the most recent unpaid order for this phone number
-                    recent_orders = Order.query.filter(
-                        Order.customer_phone.like(f"%{caller_phone}%"),
-                        Order.payment_status.in_(['unpaid', 'pending'])
-                    ).order_by(Order.created_at.desc()).limit(3).all()
+                            result = SwaigFunctionResult(f"Order number {order_number} not found.")
+                            result.set_metadata({
+                                "payment_step": "error",
+                                "error": "order_not_found"
+                            })
+                            return result
                     
-                    if len(recent_orders) == 1:
-                        order = recent_orders[0]
-                        print(f"🔍 Found single unpaid order for caller: Order #{order.order_number}")
-                    elif len(recent_orders) > 1:
-                        # Multiple orders found, ask user to specify
-                        order_list = []
-                        for o in recent_orders:
-                            order_list.append(f"Order #{o.order_number} for ${o.total_amount:.2f}")
+                    # Try to find by order ID
+                    elif args.get('order_id'):
+                        order = Order.query.get(args['order_id'])
+                        if order:
+                            print(f"🔍 Found order by ID {args['order_id']}")
+                        else:
+                            result = SwaigFunctionResult(f"Order ID {args['order_id']} not found.")
+                            result.set_metadata({
+                                "payment_step": "error",
+                                "error": "order_not_found"
+                            })
+                            return result
+                    
+                    # Try to extract order number from conversation if not provided
+                    elif raw_data and 'call_log' in raw_data:
+                        order_number = self._extract_order_number_from_conversation(raw_data['call_log'])
                         
-                        return SwaigFunctionResult(
-                            f"I found {len(recent_orders)} unpaid orders for your phone number: {', '.join(order_list)}. "
-                            f"Which order would you like to pay for? Please tell me the order number."
-                        )
-                    else:
-                        return SwaigFunctionResult(
-                            "I couldn't find any unpaid orders for your phone number. "
-                            "Could you please provide your order number?"
-                        )
+                        # Try to find by extracted order number
+                        if order_number:
+                            order = Order.query.filter_by(order_number=order_number).first()
+                            if order:
+                                print(f"🔍 Found order by extracted number {order_number}: ID {order.id}")
+                            else:
+                                result = SwaigFunctionResult(f"Order number {order_number} not found.")
+                                result.set_metadata({
+                                    "payment_step": "error",
+                                    "error": "order_not_found"
+                                })
+                                return result
+                    
+                    # If still no order found, try to find by phone number matching as fallback
+                    if not order and caller_phone:
+                        print(f"🔍 No order found by number/ID, searching by phone number: {caller_phone}")
+                        
+                        # Normalize the caller phone for better matching
+                        normalized_caller = self._normalize_phone_number(caller_phone)
+                        print(f"🔍 Normalized caller phone: {normalized_caller}")
+                        
+                        # Try multiple phone number formats for matching
+                        phone_patterns = [
+                            caller_phone,  # Original format
+                            normalized_caller,  # Normalized format
+                            caller_phone.replace('+1', ''),  # Without +1
+                            caller_phone.replace('+', ''),   # Without +
+                            caller_phone[-10:] if len(caller_phone) >= 10 else caller_phone,  # Last 10 digits
+                        ]
+                        
+                        # Remove duplicates while preserving order
+                        phone_patterns = list(dict.fromkeys(phone_patterns))
+                        print(f"🔍 Trying phone patterns: {phone_patterns}")
+                        
+                        recent_orders = []
+                        for pattern in phone_patterns:
+                            if pattern:
+                                orders = Order.query.filter(
+                                    Order.customer_phone.like(f"%{pattern}%"),
+                                    Order.payment_status.in_(['unpaid', 'pending'])
+                                ).order_by(Order.created_at.desc()).limit(3).all()
+                                recent_orders.extend(orders)
+                        
+                        # Remove duplicates
+                        seen_ids = set()
+                        unique_orders = []
+                        for order_obj in recent_orders:
+                            if order_obj.id not in seen_ids:
+                                unique_orders.append(order_obj)
+                                seen_ids.add(order_obj.id)
+                        
+                        recent_orders = unique_orders[:3]  # Limit to 3
+                        
+                        print(f"🔍 Found {len(recent_orders)} orders by phone matching")
+                        for order_obj in recent_orders:
+                            print(f"   Order #{order_obj.order_number}: Phone={order_obj.customer_phone}, Status={order_obj.payment_status}")
+                        
+                        if len(recent_orders) == 1:
+                            order = recent_orders[0]
+                            print(f"🔍 Found single unpaid order for caller: Order #{order.order_number}")
+                        elif len(recent_orders) > 1:
+                            # Multiple orders found, ask user to specify
+                            order_list = []
+                            for o in recent_orders:
+                                order_list.append(f"Order #{o.order_number} for ${o.total_amount:.2f}")
+                            
+                            result = SwaigFunctionResult(
+                                f"I found {len(recent_orders)} unpaid orders for your phone number: {', '.join(order_list)}. "
+                                f"Which order would you like to pay for? Please tell me the order number."
+                            )
+                            result.set_metadata({
+                                "payment_step": "need_order_selection",
+                                "available_orders": [{"order_number": o.order_number, "amount": o.total_amount} for o in recent_orders]
+                            })
+                            return result
+                        else:
+                            # No orders found - provide helpful message
+                            print("🔍 No unpaid orders found for caller")
+                            
+                            # Check if there are any orders at all for this phone
+                            all_orders_for_phone = []
+                            for pattern in phone_patterns:
+                                if pattern:
+                                    orders = Order.query.filter(
+                                        Order.customer_phone.like(f"%{pattern}%")
+                                    ).all()
+                                    all_orders_for_phone.extend(orders)
+                            
+                            if all_orders_for_phone:
+                                result = SwaigFunctionResult(
+                                    "I found orders for your phone number, but they are all already paid. "
+                                    "If you have a new order to pay for, please provide the order number."
+                                )
+                            else:
+                                result = SwaigFunctionResult(
+                                    "I couldn't find any orders for your phone number. "
+                                    "Could you please provide your order number?"
+                                )
+                            
+                            result.set_metadata({
+                                "payment_step": "need_order_number"
+                            })
+                            return result
                 
                 if not order:
-                    return SwaigFunctionResult(
+                    result = SwaigFunctionResult(
                         "I need your order number to process payment. "
                         "Could you please provide your 6-digit order number?"
                     )
+                    result.set_metadata({
+                        "payment_step": "need_order_number"
+                    })
+                    return result
                 
                 # Verify customer name if provided
                 if args.get('customer_name'):
                     if order.person_name and order.person_name.lower() != args['customer_name'].lower():
-                        return SwaigFunctionResult(
+                        result = SwaigFunctionResult(
                             f"The name '{args['customer_name']}' doesn't match our records for order #{order.order_number}. "
                             f"Please verify the order number and customer name."
                         )
+                        result.set_metadata({
+                            "payment_step": "error",
+                            "error": "name_mismatch"
+                        })
+                        return result
                 
                 # Check if order is already paid
                 if order.payment_status == 'paid':
-                    return SwaigFunctionResult(
+                    result = SwaigFunctionResult(
                         f"Order #{order.order_number} has already been paid. "
                         f"The payment amount was ${order.payment_amount:.2f}."
                     )
+                    result.set_metadata({
+                        "payment_step": "already_paid",
+                        "order_number": order.order_number
+                    })
+                    return result
                 
                 # Check if order can be paid (not cancelled)
                 if order.status == 'cancelled':
-                    return SwaigFunctionResult(
+                    result = SwaigFunctionResult(
                         f"Order #{order.order_number} has been cancelled and cannot be paid."
                     )
+                    result.set_metadata({
+                        "payment_step": "error",
+                        "error": "order_cancelled"
+                    })
+                    return result
                 
                 # Get payment amount
                 payment_amount = order.total_amount or 0.0
                 if payment_amount <= 0:
-                    return SwaigFunctionResult(
+                    result = SwaigFunctionResult(
                         f"Order #{order.order_number} has no amount due. Please contact the restaurant for assistance."
                     )
+                    result.set_metadata({
+                        "payment_step": "error",
+                        "error": "no_amount_due"
+                    })
+                    return result
                 
                 # Update order payment status to pending
                 order.payment_status = 'pending'
@@ -2694,6 +3433,19 @@ class RestaurantMenuSkill(SkillBase):
                 
                 # Use phone number from args or caller ID
                 phone_number = args.get('phone_number') or caller_phone or order.customer_phone
+                
+                # Store verified order data in meta_data
+                verified_data = {
+                    "payment_step": "processing_payment",
+                    "verified_order": {
+                        "order_id": order.id,
+                        "order_number": order.order_number,
+                        "customer_name": order.person_name or "",
+                        "phone_number": phone_number or "",
+                        "total_amount": payment_amount
+                    },
+                    "payment_session_active": True
+                }
                 
                 # Create payment confirmation message
                 message = f"💳 Processing payment for Order #{order.order_number}\n"
@@ -2704,43 +3456,46 @@ class RestaurantMenuSkill(SkillBase):
                 # Create result with payment action
                 result = SwaigFunctionResult(message)
                 
+                # Store session data in meta_data BEFORE payment collection
+                result.set_metadata(verified_data)
+                
                 # Add payment collection using the pay verb
                 import os
                 
-                # Get payment connector URL - try to auto-detect ngrok URL
-                payment_connector_url = os.getenv('SIGNALWIRE_PAYMENT_CONNECTOR_URL')
-                if payment_connector_url:
-                    # If environment variable is set, ensure it has the correct endpoint path
-                    if not payment_connector_url.endswith('/api/signalwire/payment-callback'):
-                        if payment_connector_url.endswith('/'):
-                            payment_connector_url = payment_connector_url + 'api/signalwire/payment-callback'
-                        else:
-                            payment_connector_url = payment_connector_url + '/api/signalwire/payment-callback'
+                # Get payment connector URL from environment or auto-detect
+                base_url = os.getenv('SIGNALWIRE_PAYMENT_CONNECTOR_URL')
+                
+                if base_url:
+                    # Use environment variable and ensure it has the correct endpoint
+                    if not base_url.endswith('/api/payment-processor'):
+                        payment_connector_url = f"{base_url.rstrip('/')}/api/payment-processor"
+                    else:
+                        payment_connector_url = base_url
+                    print(f"🔗 Using payment connector URL from environment: {payment_connector_url}")
                 else:
-                    # Try to auto-detect ngrok URL from request headers
+                    print("🔗 SIGNALWIRE_PAYMENT_CONNECTOR_URL not set, using auto-detection")
+                    # Fallback to dynamic URL detection
                     try:
                         from flask import request
                         if request and request.headers.get('Host'):
                             host = request.headers.get('Host')
-                            if 'ngrok' in host or 'tunnel' in host:
-                                payment_connector_url = f"https://{host}/api/signalwire/payment-callback"
-                            else:
-                                payment_connector_url = 'http://localhost:8080/api/signalwire/payment-callback'
+                            payment_connector_url = f"https://{host}/api/payment-processor"
                         else:
-                            payment_connector_url = 'http://localhost:8080/api/signalwire/payment-callback'
+                            payment_connector_url = 'http://localhost:8080/api/payment-processor'
                     except:
-                        payment_connector_url = 'http://localhost:8080/api/signalwire/payment-callback'
+                        payment_connector_url = 'http://localhost:8080/api/payment-processor'
                 
-                print(f"🔗 Using payment connector URL: {payment_connector_url}")
+                print(f"💳 Using payment connector URL: {payment_connector_url}")
                 
                 # Check if URL is localhost (will cause issues with SignalWire)
                 if 'localhost' in payment_connector_url or '127.0.0.1' in payment_connector_url:
                     print("⚠️  WARNING: Payment connector URL is localhost - SignalWire won't be able to reach this!")
                     print("   Make sure SIGNALWIRE_PAYMENT_CONNECTOR_URL is set to your ngrok URL")
                 
-                # Add payment collection
+                # Use our payment processor endpoint (which handles Stripe integration internally)
                 result = result.pay(
                     payment_connector_url=payment_connector_url,
+                    status_url=f"{payment_connector_url.replace('/api/payment-processor', '/api/signalwire/payment-callback')}",
                     input_method="dtmf",
                     payment_method="credit-card",
                     timeout=10,
@@ -2749,22 +3504,463 @@ class RestaurantMenuSkill(SkillBase):
                     postal_code=True,
                     min_postal_code_length=5,
                     token_type="one-time",
-                    charge_amount=str(payment_amount),
+                    charge_amount=f"{payment_amount:.2f}",
                     currency="usd",
                     language="en-US",
                     voice="woman",
                     description=f"Bobby's Table Order #{order.order_number}",
                     valid_card_types="visa mastercard amex discover",
+                    prompts=[
+                        {
+                            "name": "card_number",
+                            "text": "Please enter your 16-digit card number followed by the pound key."
+                        },
+                        {
+                            "name": "expiration_date",
+                            "text": "Please enter your card's expiration date as 4 digits, month and year, followed by the pound key."
+                        },
+                        {
+                            "name": "security_code",
+                            "text": "Please enter your 3 or 4 digit security code followed by the pound key."
+                        },
+                        {
+                            "name": "postal_code",
+                            "text": "Please enter your 5-digit ZIP code followed by the pound key."
+                        }
+                    ],
                     parameters=[
                         {"name": "order_id", "value": str(order.id)},
                         {"name": "order_number", "value": order.order_number},
                         {"name": "customer_name", "value": order.person_name or ""},
                         {"name": "phone_number", "value": phone_number or ""},
                         {"name": "payment_type", "value": "order"}
-                    ]
+                    ] + ([{"name": "call_id", "value": raw_data.get('call_id')}] if raw_data and raw_data.get('call_id') and raw_data.get('call_id').strip() else [])
                 )
                 
                 return result
                 
         except Exception as e:
-            return SwaigFunctionResult(f"Sorry, there was an error processing your payment request: {str(e)}") 
+            result = SwaigFunctionResult(f"Sorry, there was an error processing your payment request: {str(e)}")
+            result.set_metadata({
+                "payment_step": "error",
+                "error": str(e)
+            })
+            return result
+
+    def _pay_for_order_handler(self, args, raw_data):
+        """Handler for pay_for_order tool - uses meta_data from create_order"""
+        try:
+            # Import Flask app and models locally to avoid circular import
+            import sys
+            import os
+            
+            # Add the parent directory to sys.path to import app
+            parent_dir = os.path.dirname(os.path.dirname(__file__))
+            if parent_dir not in sys.path:
+                sys.path.insert(0, parent_dir)
+            
+            from app import app
+            from models import db, Order
+            
+            print(f"🔍 pay_for_order called with args: {args}")
+            print(f"🔍 Raw data keys: {list(raw_data.keys()) if raw_data else 'None'}")
+            
+            # Get meta_data from raw_data
+            meta_data = raw_data.get('meta_data', {}) if raw_data else {}
+            print(f"🔍 Current meta_data: {meta_data}")
+            
+            # Check if we have order information in meta_data
+            if not meta_data.get('order_id') and not meta_data.get('order_number'):
+                return SwaigFunctionResult("I don't have the order information available. Please provide the order number you'd like to pay for.")
+            
+            # Get order information from meta_data
+            order_id = meta_data.get('order_id')
+            order_number = meta_data.get('order_number')
+            order_total = meta_data.get('order_total') or meta_data.get('payment_amount', 0)
+            customer_name = meta_data.get('customer_name')
+            customer_phone = meta_data.get('customer_phone')
+            
+            print(f"🔍 Order info from meta_data:")
+            print(f"   Order ID: {order_id}")
+            print(f"   Order Number: {order_number}")
+            print(f"   Total: ${order_total}")
+            print(f"   Customer: {customer_name}")
+            print(f"   Phone: {customer_phone}")
+            
+            # Verify customer name matches
+            if args.get('customer_name') and customer_name:
+                if args['customer_name'].lower() != customer_name.lower():
+                    return SwaigFunctionResult(f"The customer name doesn't match the order. Please verify your information.")
+            
+            # Get cardholder name (use provided or default to customer name)
+            cardholder_name = args.get('cardholder_name') or customer_name or args.get('customer_name')
+            
+            with app.app_context():
+                # Verify order exists and get details
+                order = None
+                if order_id:
+                    order = Order.query.get(order_id)
+                elif order_number:
+                    order = Order.query.filter_by(order_number=order_number).first()
+                
+                if not order:
+                    return SwaigFunctionResult(f"Order not found. Please check the order number and try again.")
+                
+                # Check if order is already paid
+                if order.payment_status == 'paid':
+                    return SwaigFunctionResult(f"Order #{order.order_number} has already been paid. No additional payment is needed.")
+                
+                # Use order total from database if meta_data doesn't have it
+                if not order_total:
+                    order_total = order.total_amount
+                
+                # Round order total to 2 decimal places to avoid floating-point precision issues
+                order_total = round(order_total, 2)
+                
+                # Check for affirmative response in conversation
+                call_log = raw_data.get('call_log', []) if raw_data else []
+                wants_to_pay = self._detect_affirmative_response(call_log, "payment")
+                
+                if not wants_to_pay:
+                    # Ask for confirmation
+                    message = f"I can process payment for your order #{order.order_number} totaling ${order_total:.2f}. "
+                    message += f"Would you like to pay now with a credit card? Just say 'yes' or 'sure' and I'll collect your payment information."
+                    return SwaigFunctionResult(message)
+                
+                # Process payment
+                phone_number = customer_phone or raw_data.get('caller_id_number', '')
+                
+                # Normalize phone number
+                if phone_number:
+                    phone_number = self._normalize_phone_number(phone_number)
+                
+                # Create payment message
+                message = f"Perfect! I'll process payment for order #{order.order_number} totaling ${order_total:.2f}. "
+                message += f"Please have your credit card ready. I'll collect your card information now."
+                
+                # Create result with payment action
+                result = SwaigFunctionResult(message)
+                
+                # Set meta_data for payment processing
+                payment_meta_data = {
+                    'order_id': order.id,
+                    'order_number': order.order_number,
+                    'customer_name': customer_name,
+                    'customer_phone': phone_number,
+                    'cardholder_name': cardholder_name,
+                    'payment_amount': order_total,
+                    'payment_type': 'order'
+                }
+                
+                result = result.set_metadata(payment_meta_data)
+                
+                # Add payment collection using the pay verb
+                import os
+                
+                # Get payment connector URL
+                base_url = os.getenv('SIGNALWIRE_PAYMENT_CONNECTOR_URL')
+                
+                if base_url:
+                    if not base_url.endswith('/api/payment-processor'):
+                        payment_connector_url = f"{base_url.rstrip('/')}/api/payment-processor"
+                    else:
+                        payment_connector_url = base_url
+                    print(f"🔗 Using payment connector URL from environment: {payment_connector_url}")
+                else:
+                    print("🔗 SIGNALWIRE_PAYMENT_CONNECTOR_URL not set, using auto-detection")
+                    try:
+                        from flask import request
+                        if request and request.headers.get('Host'):
+                            host = request.headers.get('Host')
+                            payment_connector_url = f"https://{host}/api/payment-processor"
+                        else:
+                            payment_connector_url = 'http://localhost:8080/api/payment-processor'
+                    except:
+                        payment_connector_url = 'http://localhost:8080/api/payment-processor'
+                
+                print(f"🔗 Using payment connector URL: {payment_connector_url}")
+                
+                # Add payment collection
+                status_url = payment_connector_url.replace('/api/payment-processor', '/api/signalwire/payment-callback')
+                result = result.pay(
+                    payment_connector_url=payment_connector_url,
+                    status_url=status_url,
+                    input_method="dtmf",
+                    payment_method="credit-card",
+                    timeout=10,
+                    max_attempts=3,
+                    security_code=True,
+                    postal_code=True,
+                    min_postal_code_length=5,
+                    token_type="one-time",
+                    charge_amount=f"{order_total:.2f}",
+                    currency="usd",
+                    language="en-US",
+                    voice="woman",
+                    description=f"Bobby's Table Order #{order.order_number}",
+                    valid_card_types="visa mastercard amex discover",
+                    prompts=[
+                        {
+                            "name": "card_number",
+                            "text": "Please enter your 16-digit card number followed by the pound key."
+                        },
+                        {
+                            "name": "expiration_date",
+                            "text": "Please enter your card's expiration date as 4 digits, month and year, followed by the pound key."
+                        },
+                        {
+                            "name": "security_code",
+                            "text": "Please enter your 3 or 4 digit security code followed by the pound key."
+                        },
+                        {
+                            "name": "postal_code",
+                            "text": "Please enter your 5-digit ZIP code followed by the pound key."
+                        }
+                    ],
+                    parameters=[
+                        {"name": "order_id", "value": str(order.id)},
+                        {"name": "order_number", "value": order.order_number},
+                        {"name": "customer_name", "value": customer_name or ""},
+                        {"name": "phone_number", "value": phone_number or ""},
+                        {"name": "payment_type", "value": "order"}
+                    ] + ([{"name": "call_id", "value": raw_data.get('call_id')}] if raw_data and raw_data.get('call_id') and raw_data.get('call_id').strip() else [])
+                )
+                
+                return result
+                
+        except Exception as e:
+            return SwaigFunctionResult(f"Sorry, there was an error processing your payment: {str(e)}")
+
+    def _send_payment_receipt_handler(self, args, raw_data):
+        """Send payment receipt SMS using SWML send_sms action"""
+        try:
+            from signalwire_agents.core.function_result import SwaigFunctionResult
+            from models import Reservation
+
+            # Extract parameters from args (args is a list of parsed arguments)
+            if isinstance(args, list) and len(args) > 0:
+                params = args[0]  # First element contains the parameters
+            else:
+                params = args
+            
+            reservation_number = params.get('reservation_number')
+            phone_number = params.get('phone_number')
+            amount = params.get('amount')
+            confirmation_number = params.get('confirmation_number')
+
+            print(f"📱 VERBOSE: Sending payment receipt SMS")
+            print(f"   📋 Full args received: {json.dumps(args, indent=2) if args else 'None'}")
+            print(f"   📋 Full raw_data received: {json.dumps(raw_data, indent=2) if raw_data else 'None'}")
+            print(f"   📋 Extracted parameters:")
+            print(f"      - Reservation: {reservation_number}")
+            print(f"      - Phone: {phone_number}")
+            print(f"      - Amount: ${amount}")
+            print(f"      - Confirmation: {confirmation_number}")
+            
+            # Get reservation details
+            reservation = Reservation.query.filter_by(reservation_number=reservation_number).first()
+            if not reservation:
+                return SwaigFunctionResult(f"Reservation {reservation_number} not found")
+            
+            # Convert time to 12-hour format for SMS
+            try:
+                time_obj = datetime.strptime(str(reservation.time), '%H:%M')
+                time_12hr = time_obj.strftime('%I:%M %p').lstrip('0')
+            except (ValueError, TypeError):
+                time_12hr = str(reservation.time)
+            
+            # Build SMS body with proper escaping for SWML
+            # Build SMS body (using normal line breaks - the SDK will handle SWML formatting)
+            sms_body = f"💳 Bobby's Table Payment Receipt\n\n"
+            sms_body += f"✅ Payment Successful!\n\n"
+            sms_body += f"🎫 CONFIRMATION: {confirmation_number}\n\n"
+            sms_body += f"Reservation Details:\n"
+            sms_body += f"• Name: {reservation.name}\n"
+            sms_body += f"• Date: {reservation.date}\n"
+            sms_body += f"• Time: {time_12hr}\n"
+            party_text = "person" if reservation.party_size == 1 else "people"
+            sms_body += f"• Party Size: {reservation.party_size} {party_text}\n"
+            sms_body += f"• Reservation #: {reservation.reservation_number}\n\n"
+            sms_body += f"Payment Information:\n"
+            sms_body += f"• Amount Paid: ${amount:.2f}\n"
+            sms_body += f"• Payment Date: {datetime.now().strftime('%m/%d/%Y %I:%M %p')}\n\n"
+            sms_body += f"Thank you for your payment!\n"
+            sms_body += f"We look forward to serving you.\n\n"
+            sms_body += f"Bobby's Table Restaurant\n"
+            sms_body += f"Reply STOP to stop."
+            
+            # Get SignalWire phone number from environment
+            import os
+            signalwire_from_number = os.getenv('SIGNALWIRE_FROM_NUMBER', '+14126127565')
+            
+            print(f"📤 VERBOSE: Using SignalWire Agents SDK send_sms method")
+            print(f"   📋 SMS Parameters:")
+            print(f"      - From: {signalwire_from_number}")
+            print(f"      - To: {phone_number}")
+            print(f"      - Region: us")
+            print(f"   📋 SMS Body (full):")
+            print(f"      {repr(sms_body)}")
+            print(f"   📋 SMS Body (formatted):")
+            print(sms_body)
+            
+            # Use the updated SignalWire Agents SDK send_sms method
+            result = SwaigFunctionResult()
+            result = result.send_sms(
+                to_number=phone_number,
+                from_number=signalwire_from_number,
+                body=sms_body,
+                region="us"
+            )
+            
+            # Set a response message
+            result.set_response(f"📱 Payment receipt SMS will be sent to {phone_number} for reservation {reservation_number} with confirmation {confirmation_number}")
+            
+            print(f"✅ VERBOSE: SWML SMS action created successfully")
+            print(f"   📋 Result type: {type(result)}")
+            print(f"   📋 Result object: {result}")
+            if hasattr(result, 'to_dict'):
+                print(f"   📋 Result dict: {json.dumps(result.to_dict(), indent=2)}")
+            
+            return result
+            
+        except Exception as e:
+            print(f"❌ Error creating SMS receipt: {e}")
+            return SwaigFunctionResult(f"Failed to send SMS receipt: {str(e)}")
+
+    def _payment_completed_handler(self, args, raw_data):
+        """Handle payment completion and provide confirmation number to customer"""
+        try:
+            from signalwire_agents.core.function_result import SwaigFunctionResult
+            
+            payment_type = args.get('payment_type')
+            confirmation_number = args.get('confirmation_number')
+            amount = args.get('amount')
+            reservation_number = args.get('reservation_number')
+            order_number = args.get('order_number')
+            
+            print(f"🎉 Payment completed handler called")
+            print(f"   Type: {payment_type}")
+            print(f"   Confirmation: {confirmation_number}")
+            print(f"   Amount: ${amount}")
+            print(f"   Reservation: {reservation_number}")
+            print(f"   Order: {order_number}")
+            
+            # Create appropriate response based on payment type
+            if payment_type == 'reservation' and reservation_number:
+                message = f"🎉 Great news! Your payment has been processed successfully!\n\n"
+                message += f"💳 Payment Details:\n"
+                message += f"• Amount: ${amount:.2f}\n"
+                message += f"• Reservation: #{reservation_number}\n"
+                message += f"• Confirmation Number: {confirmation_number}\n\n"
+                message += f"📱 You'll receive an SMS receipt shortly with all the details.\n\n"
+                message += f"Thank you for your payment! We look forward to serving you at Bobby's Table. "
+                message += f"Is there anything else I can help you with today?"
+                
+            elif payment_type == 'order' and order_number:
+                message = f"🎉 Excellent! Your payment has been processed successfully!\n\n"
+                message += f"💳 Payment Details:\n"
+                message += f"• Amount: ${amount:.2f}\n"
+                message += f"• Order: #{order_number}\n"
+                message += f"• Confirmation Number: {confirmation_number}\n\n"
+                message += f"📱 You'll receive an SMS receipt with all the details.\n\n"
+                message += f"Thank you for your order! We'll have it ready for you soon. "
+                message += f"Is there anything else I can help you with?"
+                
+            else:
+                # Generic payment completion message
+                message = f"🎉 Payment processed successfully!\n\n"
+                message += f"💳 Payment Details:\n"
+                message += f"• Amount: ${amount:.2f}\n"
+                message += f"• Confirmation Number: {confirmation_number}\n\n"
+                message += f"Thank you for your payment! Is there anything else I can help you with today?"
+            
+            result = SwaigFunctionResult(message)
+            
+            # Set metadata to indicate payment is complete
+            result.set_metadata({
+                "payment_completed": True,
+                "payment_type": payment_type,
+                "confirmation_number": confirmation_number,
+                "amount": amount,
+                "reservation_number": reservation_number,
+                "order_number": order_number
+            })
+            
+            return result
+            
+        except Exception as e:
+            print(f"❌ Error in payment completed handler: {e}")
+            return SwaigFunctionResult(f"Payment was processed, but there was an error providing the details: {str(e)}")
+
+    def _send_test_sms_handler(self, args, raw_data):
+        """Send a test SMS message to verify SMS functionality"""
+        try:
+            from signalwire_agents.core.function_result import SwaigFunctionResult
+            import os
+            
+            # Extract parameters
+            if isinstance(args, list) and len(args) > 0:
+                params = args[0]
+            else:
+                params = args
+            
+            phone_number = params.get('phone_number')
+            custom_message = params.get('message')
+            
+            print(f"📱 VERBOSE: Sending test SMS")
+            print(f"   📋 Full args received: {json.dumps(args, indent=2) if args else 'None'}")
+            print(f"   📋 Full raw_data received: {json.dumps(raw_data, indent=2) if raw_data else 'None'}")
+            print(f"   📋 Extracted parameters:")
+            print(f"      - Phone: {phone_number}")
+            print(f"      - Custom Message: {custom_message}")
+            
+            if not phone_number:
+                return SwaigFunctionResult("❌ Phone number is required for test SMS")
+            
+            # Create test message
+            if custom_message:
+                sms_body = custom_message
+            else:
+                sms_body = f"🧪 Test SMS from Bobby's Table\n\n"
+                sms_body += f"This is a test message to verify SMS functionality.\n\n"
+                sms_body += f"✅ If you received this message, SMS is working correctly!\n\n"
+                sms_body += f"Sent at: {datetime.now().strftime('%m/%d/%Y %I:%M %p')}\n\n"
+                sms_body += f"Bobby's Table Restaurant\n"
+                sms_body += f"Reply STOP to stop."
+            
+            # Get SignalWire phone number from environment
+            signalwire_from_number = os.getenv('SIGNALWIRE_FROM_NUMBER', '+14126127565')
+            
+            print(f"📤 VERBOSE: Using SignalWire Agents SDK send_sms method for test")
+            print(f"   📋 SMS Parameters:")
+            print(f"      - From: {signalwire_from_number}")
+            print(f"      - To: {phone_number}")
+            print(f"      - Region: us")
+            print(f"   📋 SMS Body (full):")
+            print(f"      {repr(sms_body)}")
+            print(f"   📋 SMS Body (formatted):")
+            print(sms_body)
+            
+            # Use the SignalWire Agents SDK send_sms method
+            result = SwaigFunctionResult()
+            result = result.send_sms(
+                to_number=phone_number,
+                from_number=signalwire_from_number,
+                body=sms_body,
+                region="us"
+            )
+            
+            # Set a response message
+            result.set_response(f"📱 Test SMS will be sent to {phone_number}")
+            
+            print(f"✅ VERBOSE: Test SMS action created successfully")
+            print(f"   📋 Result type: {type(result)}")
+            print(f"   📋 Result object: {result}")
+            if hasattr(result, 'to_dict'):
+                print(f"   📋 Result dict: {json.dumps(result.to_dict(), indent=2)}")
+            
+            return result
+            
+        except Exception as e:
+            print(f"❌ Error creating test SMS: {e}")
+            return SwaigFunctionResult(f"Failed to send test SMS: {str(e)}")
