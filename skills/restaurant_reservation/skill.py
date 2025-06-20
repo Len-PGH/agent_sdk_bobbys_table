@@ -1400,6 +1400,7 @@ class RestaurantReservationSkill(SkillBase):
                         
                         # Create single order for the customer with all items
                         order = Order(
+                            order_number=self._generate_order_number(),
                             reservation_id=reservation.id,
                             table_id=None,  # Table assignment logic can be added
                             person_name=customer_name,
@@ -1444,6 +1445,7 @@ class RestaurantReservationSkill(SkillBase):
                             
                             # Create order for this person
                             order = Order(
+                                order_number=self._generate_order_number(),
                                 reservation_id=reservation.id,
                                 table_id=None,  # Table assignment logic can be added
                                 person_name=person_name,
@@ -3163,10 +3165,26 @@ class RestaurantReservationSkill(SkillBase):
             return SwaigFunctionResult(f"Error updating reservation: {str(e)}")
     
     def _generate_order_number(self):
-        """Generate a unique order number"""
+        """Generate a unique 6-digit order number"""
         import random
-        import string
-        return ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+        import sys
+        import os
+        
+        # Add the parent directory to sys.path to import app
+        parent_dir = os.path.dirname(os.path.dirname(__file__))
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+        
+        from models import Order
+        
+        while True:
+            # Generate a 6-digit number (100000 to 999999)
+            number = str(random.randint(100000, 999999))
+            
+            # Check if this number already exists
+            existing = Order.query.filter_by(order_number=number).first()
+            if not existing:
+                return number
     
     def _cancel_reservation_handler(self, args, raw_data):
         """Handler for cancel_reservation tool"""
