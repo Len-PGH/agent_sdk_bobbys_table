@@ -80,11 +80,11 @@ def init_test_data():
         # Add comprehensive test orders with mixed statuses for kitchen view
         db.session.flush()  # Ensure reservations have IDs
         
-        # Orders for Johnson Family reservation (reservation_id=1, party_size=4) - Mixed statuses for kitchen
+        # Orders for Johnson Family reservation (using actual reservation ID from flush) - Mixed statuses for kitchen
         johnson_orders = [
             Order(
                 order_number=generate_order_number(), 
-                reservation_id=1, 
+                reservation_id=reservations[0].id, 
                 table_id=1, 
                 person_name='John Johnson', 
                 status='pending', 
@@ -95,7 +95,7 @@ def init_test_data():
             ),
             Order(
                 order_number=generate_order_number(), 
-                reservation_id=1, 
+                reservation_id=reservations[0].id, 
                 table_id=1, 
                 person_name='Sarah Johnson', 
                 status='preparing', 
@@ -110,7 +110,7 @@ def init_test_data():
             ),
             Order(
                 order_number=generate_order_number(), 
-                reservation_id=1, 
+                reservation_id=reservations[0].id, 
                 table_id=1, 
                 person_name='Mike Johnson', 
                 status='ready', 
@@ -125,7 +125,7 @@ def init_test_data():
             ),
             Order(
                 order_number=generate_order_number(), 
-                reservation_id=1, 
+                reservation_id=reservations[0].id, 
                 table_id=1, 
                 person_name='Emma Johnson', 
                 status='pending', 
@@ -151,11 +151,11 @@ def init_test_data():
         ]
         db.session.add_all(johnson_order_items)
         
-        # Orders for Smith Party reservation (reservation_id=2, party_size=2) - More kitchen statuses
+        # Orders for Smith Party reservation (using actual reservation ID) - More kitchen statuses
         smith_orders = [
             Order(
                 order_number=generate_order_number(), 
-                reservation_id=2, 
+                reservation_id=reservations[1].id, 
                 table_id=2, 
                 person_name='Jane Smith', 
                 status='preparing', 
@@ -170,7 +170,7 @@ def init_test_data():
             ),
             Order(
                 order_number=generate_order_number(), 
-                reservation_id=2, 
+                reservation_id=reservations[1].id, 
                 table_id=2, 
                 person_name='David Smith', 
                 status='ready', 
@@ -198,11 +198,11 @@ def init_test_data():
         ]
         db.session.add_all(smith_order_items)
         
-        # Orders for Wilson Group reservation (reservation_id=3, party_size=6) - More variety
+        # Orders for Wilson Group reservation (using actual reservation ID) - More variety
         wilson_orders = [
             Order(
                 order_number=generate_order_number(), 
-                reservation_id=3, 
+                reservation_id=reservations[2].id, 
                 table_id=3, 
                 person_name='Bob Wilson', 
                 status='pending', 
@@ -213,7 +213,7 @@ def init_test_data():
             ),
             Order(
                 order_number=generate_order_number(), 
-                reservation_id=3, 
+                reservation_id=reservations[2].id, 
                 table_id=3, 
                 person_name='Alice Wilson', 
                 status='preparing', 
