@@ -60,7 +60,7 @@ def init_test_data():
                 time='18:30', 
                 phone_number='+1987654321', 
                 status='confirmed',
-                special_requests='Vegetarian options needed',
+                special_requests='Wheelchair Accessible',
                 payment_status='unpaid'
             ),
             Reservation(
