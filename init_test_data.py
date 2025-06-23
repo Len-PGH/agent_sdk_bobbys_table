@@ -14,6 +14,17 @@ def generate_order_number():
         if not existing:
             return number
 
+def generate_menu_item_id():
+    """Generate a unique 3-digit menu item ID (100-999)"""
+    while True:
+        # Generate a 3-digit number (100 to 999)
+        number = str(random.randint(100, 999))
+        
+        # Check if this number already exists
+        existing = MenuItem.query.filter_by(id=number).first()
+        if not existing:
+            return number
+
 def init_test_data():
     """Initialize the database with test data."""
     with app.app_context():
@@ -35,7 +46,7 @@ def init_test_data():
         ]
         db.session.add_all(tables)
         
-        # Use the comprehensive menu from populate_menu_items() with explicit IDs
+        # Populate menu items with random 3-digit IDs
         populate_menu_items()
         
         # Add test reservations with dynamic dates (today + next 3 days)
@@ -80,7 +91,7 @@ def init_test_data():
         # Add comprehensive test orders with mixed statuses for kitchen view
         db.session.flush()  # Ensure reservations have IDs
         
-        # Orders for Johnson Family reservation (using actual reservation ID from flush) - Mixed statuses for kitchen
+        # Orders for Johnson Family reservation
         johnson_orders = [
             Order(
                 order_number=generate_order_number(), 
@@ -138,20 +149,40 @@ def init_test_data():
         db.session.add_all(johnson_orders)
         db.session.flush()
         
-        # Order items for Johnson Family (using correct menu item IDs)
+        # Order items for Johnson Family (lookup menu item IDs by name)
         johnson_order_items = [
-            # John's order - Ribeye Steak (ID 471)
-            OrderItem(order_id=johnson_orders[0].id, menu_item_id=471, quantity=1, price_at_time=24.99),
-            # Sarah's order - Grilled Salmon (ID 782)
-            OrderItem(order_id=johnson_orders[1].id, menu_item_id=782, quantity=1, price_at_time=18.99),
-            # Mike's order - Buffalo Wings (ID 234)
-            OrderItem(order_id=johnson_orders[2].id, menu_item_id=234, quantity=1, price_at_time=12.99),
-            # Emma's order - Chocolate Cake (ID 658)
-            OrderItem(order_id=johnson_orders[3].id, menu_item_id=658, quantity=1, price_at_time=6.99)
+            # John's order - Ribeye Steak
+            OrderItem(
+                order_id=johnson_orders[0].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Ribeye Steak').first().id, 
+                quantity=1, 
+                price_at_time=24.99
+            ),
+            # Sarah's order - Grilled Salmon
+            OrderItem(
+                order_id=johnson_orders[1].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Grilled Salmon').first().id, 
+                quantity=1, 
+                price_at_time=18.99
+            ),
+            # Mike's order - Buffalo Wings
+            OrderItem(
+                order_id=johnson_orders[2].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Buffalo Wings').first().id, 
+                quantity=1, 
+                price_at_time=12.99
+            ),
+            # Emma's order - Chocolate Cake
+            OrderItem(
+                order_id=johnson_orders[3].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Chocolate Cake').first().id, 
+                quantity=1, 
+                price_at_time=6.99
+            )
         ]
         db.session.add_all(johnson_order_items)
         
-        # Orders for Smith Party reservation (using actual reservation ID) - More kitchen statuses
+        # Orders for Smith Party reservation
         smith_orders = [
             Order(
                 order_number=generate_order_number(), 
@@ -189,16 +220,36 @@ def init_test_data():
         
         # Order items for Smith Party
         smith_order_items = [
-            # Jane's order - Chicken Caesar Salad (ID 629) + Pepsi (ID 825)
-            OrderItem(order_id=smith_orders[0].id, menu_item_id=629, quantity=1, price_at_time=13.99),
-            OrderItem(order_id=smith_orders[0].id, menu_item_id=825, quantity=1, price_at_time=2.99),
-            # David's order - BBQ Ribs (ID 591) + Iced Tea (ID 192)
-            OrderItem(order_id=smith_orders[1].id, menu_item_id=591, quantity=1, price_at_time=19.99),
-            OrderItem(order_id=smith_orders[1].id, menu_item_id=192, quantity=1, price_at_time=2.99)
+            # Jane's order - Chicken Caesar Salad + Pepsi
+            OrderItem(
+                order_id=smith_orders[0].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Chicken Caesar Salad').first().id, 
+                quantity=1, 
+                price_at_time=13.99
+            ),
+            OrderItem(
+                order_id=smith_orders[0].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Pepsi').first().id, 
+                quantity=1, 
+                price_at_time=2.99
+            ),
+            # David's order - BBQ Ribs + Iced Tea
+            OrderItem(
+                order_id=smith_orders[1].id, 
+                menu_item_id=MenuItem.query.filter_by(name='BBQ Ribs').first().id, 
+                quantity=1, 
+                price_at_time=19.99
+            ),
+            OrderItem(
+                order_id=smith_orders[1].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Iced Tea').first().id, 
+                quantity=1, 
+                price_at_time=2.99
+            )
         ]
         db.session.add_all(smith_order_items)
         
-        # Orders for Wilson Group reservation (using actual reservation ID) - More variety
+        # Orders for Wilson Group reservation
         wilson_orders = [
             Order(
                 order_number=generate_order_number(), 
@@ -233,15 +284,35 @@ def init_test_data():
         # Order items for Wilson Group
         wilson_order_items = [
             # Bob's order - Sous Vide Ribeye + Iced Tea
-            OrderItem(order_id=wilson_orders[0].id, menu_item_id=693, quantity=1, price_at_time=36.99),  # Sous Vide Ribeye
-            OrderItem(order_id=wilson_orders[0].id, menu_item_id=192, quantity=1, price_at_time=2.99),   # Iced Tea
+            OrderItem(
+                order_id=wilson_orders[0].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Sous Vide Ribeye').first().id, 
+                quantity=1, 
+                price_at_time=36.99
+            ),
+            OrderItem(
+                order_id=wilson_orders[0].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Iced Tea').first().id, 
+                quantity=1, 
+                price_at_time=2.99
+            ),
             # Alice's order - New York Strip + Coffee
-            OrderItem(order_id=wilson_orders[1].id, menu_item_id=815, quantity=1, price_at_time=22.99),  # New York Strip
-            OrderItem(order_id=wilson_orders[1].id, menu_item_id=486, quantity=1, price_at_time=2.99),   # Coffee
+            OrderItem(
+                order_id=wilson_orders[1].id, 
+                menu_item_id=MenuItem.query.filter_by(name='New York Strip').first().id, 
+                quantity=1, 
+                price_at_time=22.99
+            ),
+            OrderItem(
+                order_id=wilson_orders[1].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Coffee').first().id, 
+                quantity=1, 
+                price_at_time=2.99
+            )
         ]
         db.session.add_all(wilson_order_items)
         
-        # Add standalone orders (pickup/delivery without reservations) with kitchen statuses
+        # Standalone orders (pickup/delivery without reservations)
         standalone_orders = [
             Order(
                 order_number=generate_order_number(),
@@ -292,9 +363,8 @@ def init_test_data():
                 payment_date=datetime.now() - timedelta(minutes=45),
                 confirmation_number='ORD3003'
             ),
-            # Add a test order with Jim Smith's test card details for testing
             Order(
-                order_number='123456',  # Fixed order number for testing
+                order_number='123456',
                 person_name='Jim Smith',
                 status='pending',
                 total_amount=15.98,  # Buffalo Wings + Pepsi
@@ -305,7 +375,6 @@ def init_test_data():
                 special_instructions='Test order for Stripe payment integration',
                 payment_status='unpaid'
             ),
-            # Add test orders for Bobby Brown and Bobby Smith (for comprehensive payment testing)
             Order(
                 order_number=generate_order_number(),
                 person_name='Bobby Brown',
@@ -334,29 +403,104 @@ def init_test_data():
         db.session.add_all(standalone_orders)
         db.session.flush()
         
-        # Order items for standalone orders (using correct menu item IDs)
+        # Order items for standalone orders
         standalone_order_items = [
             # Lisa Chen's order - Classic Cheeseburger + Loaded Fries + Mountain Dew
-            OrderItem(order_id=standalone_orders[0].id, menu_item_id=312, quantity=1, price_at_time=13.99),  # Classic Cheeseburger
-            OrderItem(order_id=standalone_orders[0].id, menu_item_id=623, quantity=1, price_at_time=8.99),   # Loaded Fries
-            OrderItem(order_id=standalone_orders[0].id, menu_item_id=573, quantity=1, price_at_time=2.99),   # Mountain Dew
-            # Mark Rodriguez's order - Fish and Chips + Draft Beer (total should be 20.98, not 32.97)
-            OrderItem(order_id=standalone_orders[1].id, menu_item_id=428, quantity=1, price_at_time=15.99),  # Fish and Chips
-            OrderItem(order_id=standalone_orders[1].id, menu_item_id=734, quantity=1, price_at_time=4.99),   # Draft Beer
+            OrderItem(
+                order_id=standalone_orders[0].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Classic Cheeseburger').first().id, 
+                quantity=1, 
+                price_at_time=13.99
+            ),
+            OrderItem(
+                order_id=standalone_orders[0].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Loaded Fries').first().id, 
+                quantity=1, 
+                price_at_time=8.99
+            ),
+            OrderItem(
+                order_id=standalone_orders[0].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Mountain Dew').first().id, 
+                quantity=1, 
+                price_at_time=2.99
+            ),
+            # Mark Rodriguez's order - Fish and Chips + Draft Beer
+            OrderItem(
+                order_id=standalone_orders[1].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Fish and Chips').first().id, 
+                quantity=1, 
+                price_at_time=15.99
+            ),
+            OrderItem(
+                order_id=standalone_orders[1].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Draft Beer').first().id, 
+                quantity=1, 
+                price_at_time=4.99
+            ),
             # Rachel Green's order - Caesar Salad + Coffee
-            OrderItem(order_id=standalone_orders[2].id, menu_item_id=186, quantity=1, price_at_time=9.99),   # Caesar Salad
-            OrderItem(order_id=standalone_orders[2].id, menu_item_id=486, quantity=1, price_at_time=2.99),   # Coffee
-            # Jim Smith's test order - Buffalo Wings + Pepsi (total should be 15.98, not 19.95)
-            OrderItem(order_id=standalone_orders[3].id, menu_item_id=234, quantity=1, price_at_time=12.99),   # Buffalo Wings
-            OrderItem(order_id=standalone_orders[3].id, menu_item_id=825, quantity=1, price_at_time=2.99),   # Pepsi
+            OrderItem(
+                order_id=standalone_orders[2].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Caesar Salad').first().id, 
+                quantity=1, 
+                price_at_time=9.99
+            ),
+            OrderItem(
+                order_id=standalone_orders[2].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Coffee').first().id, 
+                quantity=1, 
+                price_at_time=2.99
+            ),
+            # Jim Smith's test order - Buffalo Wings + Pepsi
+            OrderItem(
+                order_id=standalone_orders[3].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Buffalo Wings').first().id, 
+                quantity=1, 
+                price_at_time=12.99
+            ),
+            OrderItem(
+                order_id=standalone_orders[3].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Pepsi').first().id, 
+                quantity=1, 
+                price_at_time=2.99
+            ),
             # Bobby Brown's test order - Ribeye Steak + House Wine + Coffee
-            OrderItem(order_id=standalone_orders[4].id, menu_item_id=471, quantity=1, price_at_time=24.99),  # Ribeye Steak
-            OrderItem(order_id=standalone_orders[4].id, menu_item_id=821, quantity=1, price_at_time=6.99),   # House Wine
-            OrderItem(order_id=standalone_orders[4].id, menu_item_id=486, quantity=1, price_at_time=2.99),   # Coffee
+            OrderItem(
+                order_id=standalone_orders[4].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Ribeye Steak').first().id, 
+                quantity=1, 
+                price_at_time=24.99
+            ),
+            OrderItem(
+                order_id=standalone_orders[4].id, 
+                menu_item_id=MenuItem.query.filter_by(name='House Wine').first().id, 
+                quantity=1, 
+                price_at_time=6.99
+            ),
+            OrderItem(
+                order_id=standalone_orders[4].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Coffee').first().id, 
+                quantity=1, 
+                price_at_time=2.99
+            ),
             # Bobby Smith's test order - Grilled Salmon + Caesar Salad + Iced Tea
-            OrderItem(order_id=standalone_orders[5].id, menu_item_id=782, quantity=1, price_at_time=18.99),  # Grilled Salmon
-            OrderItem(order_id=standalone_orders[5].id, menu_item_id=186, quantity=1, price_at_time=9.99),   # Caesar Salad
-            OrderItem(order_id=standalone_orders[5].id, menu_item_id=192, quantity=1, price_at_time=2.99),   # Iced Tea
+            OrderItem(
+                order_id=standalone_orders[5].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Grilled Salmon').first().id, 
+                quantity=1, 
+                price_at_time=18.99
+            ),
+            OrderItem(
+                order_id=standalone_orders[5].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Caesar Salad').first().id, 
+                quantity=1, 
+                price_at_time=9.99
+            ),
+            OrderItem(
+                order_id=standalone_orders[5].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Iced Tea').first().id, 
+                quantity=1, 
+                price_at_time=2.99
+            )
         ]
         db.session.add_all(standalone_order_items)
         
@@ -364,94 +508,95 @@ def init_test_data():
         print("Test data initialized successfully!")
 
 def populate_menu_items():
-    """Populate menu items with random 3-digit IDs for consistency"""
+    """Populate menu items with random 3-digit IDs"""
     menu_items_data = [
-        # BREAKFAST (Random 3-digit IDs)
-        {'id': 147, 'name': 'Classic Pancakes', 'description': 'Three fluffy buttermilk pancakes with maple syrup and butter', 'price': 8.99, 'category': 'breakfast'},
-        {'id': 283, 'name': 'Blueberry Pancakes', 'description': 'Pancakes loaded with fresh blueberries and whipped cream', 'price': 9.99, 'category': 'breakfast'},
-        {'id': 456, 'name': 'Western Omelette', 'description': 'Three-egg omelette with ham, peppers, onions, and cheese', 'price': 10.99, 'category': 'breakfast'},
-        {'id': 729, 'name': 'Veggie Omelette', 'description': 'Three-egg omelette with mushrooms, spinach, tomatoes, and cheese', 'price': 9.99, 'category': 'breakfast'},
-        {'id': 861, 'name': 'Breakfast Burrito', 'description': 'Scrambled eggs, bacon, hash browns, and cheese wrapped in a flour tortilla', 'price': 9.49, 'category': 'breakfast'},
-        {'id': 392, 'name': 'French Toast', 'description': 'Thick-cut brioche bread with cinnamon, vanilla, and maple syrup', 'price': 8.99, 'category': 'breakfast'},
-        {'id': 674, 'name': 'Eggs Benedict', 'description': 'Poached eggs on English muffins with Canadian bacon and hollandaise', 'price': 12.99, 'category': 'breakfast'},
-        {'id': 518, 'name': 'Breakfast Platter', 'description': 'Two eggs any style, bacon or sausage, hash browns, and toast', 'price': 11.99, 'category': 'breakfast'},
+        # BREAKFAST
+        {'name': 'Classic Pancakes', 'description': 'Three fluffy buttermilk pancakes with maple syrup and butter', 'price': 8.99, 'category': 'breakfast'},
+        {'name': 'Blueberry Pancakes', 'description': 'Pancakes loaded with fresh blueberries and whipped cream', 'price': 9.99, 'category': 'breakfast'},
+        {'name': 'Western Omelette', 'description': 'Three-egg omelette with ham, peppers, onions, and cheese', 'price': 10.99, 'category': 'breakfast'},
+        {'name': 'Veggie Omelette', 'description': 'Three-egg omelette with mushrooms, spinach, tomatoes, and cheese', 'price': 9.99, 'category': 'breakfast'},
+        {'name': 'Breakfast Burrito', 'description': 'Scrambled eggs, bacon, hash browns, and cheese wrapped in a flour tortilla', 'price': 9.49, 'category': 'breakfast'},
+        {'name': 'French Toast', 'description': 'Thick-cut brioche bread with cinnamon, vanilla, and maple syrup', 'price': 8.99, 'category': 'breakfast'},
+        {'name': 'Eggs Benedict', 'description': 'Poached eggs on English muffins with Canadian bacon and hollandaise', 'price': 12.99, 'category': 'breakfast'},
+        {'name': 'Breakfast Platter', 'description': 'Two eggs any style, bacon or sausage, hash browns, and toast', 'price': 11.99, 'category': 'breakfast'},
         
-        # APPETIZERS (Random 3-digit IDs)
-        {'id': 234, 'name': 'Buffalo Wings', 'description': 'Crispy chicken wings tossed in spicy buffalo sauce with blue cheese', 'price': 12.99, 'category': 'appetizers'},
-        {'id': 567, 'name': 'BBQ Wings', 'description': 'Chicken wings glazed with tangy BBQ sauce', 'price': 12.99, 'category': 'appetizers'},
-        {'id': 891, 'name': 'Truffle Fries', 'description': 'Hand-cut fries with truffle oil, parmesan, and fresh herbs', 'price': 14.99, 'category': 'appetizers'},
-        {'id': 123, 'name': 'Ahi Tuna Tartare', 'description': 'Fresh ahi tuna with avocado, cucumber, and sesame oil', 'price': 16.99, 'category': 'appetizers'},
-        {'id': 345, 'name': 'Charred Octopus', 'description': 'Mediterranean octopus with chickpea purée and olive tapenade', 'price': 18.99, 'category': 'appetizers'},
-        {'id': 678, 'name': 'Loaded Nachos', 'description': 'Tortilla chips topped with cheese, jalapeños, sour cream, and guacamole', 'price': 11.99, 'category': 'appetizers'},
-        {'id': 912, 'name': 'Spinach Artichoke Dip', 'description': 'Creamy spinach and artichoke dip served with tortilla chips', 'price': 9.99, 'category': 'appetizers'},
-        {'id': 435, 'name': 'Potato Skins', 'description': 'Crispy potato skins loaded with cheese, bacon, and green onions', 'price': 9.99, 'category': 'appetizers'},
-        {'id': 756, 'name': 'Onion Rings', 'description': 'Beer-battered onion rings served with ranch dressing', 'price': 7.99, 'category': 'appetizers'},
-        {'id': 189, 'name': 'Jalapeño Poppers', 'description': 'Jalapeños stuffed with cream cheese, wrapped in bacon', 'price': 8.99, 'category': 'appetizers'},
-        {'id': 623, 'name': 'Loaded Fries', 'description': 'French fries topped with cheese, bacon bits, and green onions', 'price': 8.99, 'category': 'appetizers'},
-        {'id': 847, 'name': 'Calamari Rings', 'description': 'Crispy fried squid rings with marinara and lemon', 'price': 10.99, 'category': 'appetizers'},
+        # APPETIZERS
+        {'name': 'Buffalo Wings', 'description': 'Crispy chicken wings tossed in spicy buffalo sauce with blue cheese', 'price': 12.99, 'category': 'appetizers'},
+        {'name': 'BBQ Wings', 'description': 'Chicken wings glazed with tangy BBQ sauce', 'price': 12.99, 'category': 'appetizers'},
+        {'name': 'Truffle Fries', 'description': 'Hand-cut fries with truffle oil, parmesan, and fresh herbs', 'price': 14.99, 'category': 'appetizers'},
+        {'name': 'Ahi Tuna Tartare', 'description': 'Fresh ahi tuna with avocado, cucumber, and sesame oil', 'price': 16.99, 'category': 'appetizers'},
+        {'name': 'Charred Octopus', 'description': 'Mediterranean octopus with chickpea purée and olive tapenade', 'price': 18.99, 'category': 'appetizers'},
+        {'name': 'Loaded Nachos', 'description': 'Tortilla chips topped with cheese, jalapeños, sour cream, and guacamole', 'price': 11.99, 'category': 'appetizers'},
+        {'name': 'Spinach Artichoke Dip', 'description': 'Creamy spinach and artichoke dip served with tortilla chips', 'price': 9.99, 'category': 'appetizers'},
+        {'name': 'Potato Skins', 'description': 'Crispy potato skins loaded with cheese, bacon, and green onions', 'price': 9.99, 'category': 'appetizers'},
+        {'name': 'Onion Rings', 'description': 'Beer-battered onion rings served with ranch dressing', 'price': 7.99, 'category': 'appetizers'},
+        {'name': 'Jalapeño Poppers', 'description': 'Jalapeños stuffed with cream cheese, wrapped in bacon', 'price': 8.99, 'category': 'appetizers'},
+        {'name': 'Loaded Fries', 'description': 'French fries topped with cheese, bacon bits, and green onions', 'price': 8.99, 'category': 'appetizers'},
+        {'name': 'Calamari Rings', 'description': 'Crispy fried squid rings with marinara and lemon', 'price': 10.99, 'category': 'appetizers'},
         
-        # MAIN COURSES (Random 3-digit IDs)
-        {'id': 312, 'name': 'Classic Cheeseburger', 'description': '8oz beef patty with American cheese, lettuce, tomato, onion, and pickles', 'price': 13.99, 'category': 'main-courses'},
-        {'id': 598, 'name': 'Bacon Cheeseburger', 'description': '8oz beef patty with bacon, cheddar cheese, lettuce, tomato, and onion', 'price': 15.99, 'category': 'main-courses'},
-        {'id': 724, 'name': 'BBQ Burger', 'description': '8oz beef patty with BBQ sauce, onion rings, and cheddar cheese', 'price': 15.99, 'category': 'main-courses'},
-        {'id': 856, 'name': 'Mushroom Swiss Burger', 'description': '8oz beef patty with sautéed mushrooms and Swiss cheese', 'price': 15.99, 'category': 'main-courses'},
-        {'id': 471, 'name': 'Ribeye Steak', 'description': '12oz ribeye steak grilled to perfection with garlic butter', 'price': 24.99, 'category': 'main-courses'},
-        {'id': 693, 'name': 'Sous Vide Ribeye', 'description': '14oz precision-cooked ribeye with herb compound butter and roasted vegetables', 'price': 36.99, 'category': 'main-courses'},
-        {'id': 815, 'name': 'New York Strip', 'description': '10oz New York strip steak with herb butter', 'price': 22.99, 'category': 'main-courses'},
-        {'id': 249, 'name': 'Lobster Tagliatelle', 'description': 'Fresh lobster with house-made pasta in a light cream sauce', 'price': 32.99, 'category': 'main-courses'},
-        {'id': 637, 'name': 'Miso Glazed Salmon', 'description': 'Atlantic salmon with miso glaze, bok choy, and jasmine rice', 'price': 26.99, 'category': 'main-courses'},
-        {'id': 782, 'name': 'Grilled Salmon', 'description': 'Atlantic salmon with lemon dill sauce and seasonal vegetables', 'price': 18.99, 'category': 'main-courses'},
-        {'id': 364, 'name': 'Grilled Chicken Breast', 'description': 'Seasoned grilled chicken breast with lemon herb sauce', 'price': 16.99, 'category': 'main-courses'},
-        {'id': 591, 'name': 'BBQ Ribs', 'description': 'Full rack of baby back ribs with BBQ sauce and coleslaw', 'price': 19.99, 'category': 'main-courses'},
-        {'id': 428, 'name': 'Fish and Chips', 'description': 'Beer-battered cod with french fries and tartar sauce', 'price': 15.99, 'category': 'main-courses'},
-        {'id': 753, 'name': 'Vegan Buddha Bowl', 'description': 'Quinoa, roasted vegetables, avocado, and tahini dressing', 'price': 16.99, 'category': 'main-courses'},
-        {'id': 186, 'name': 'Caesar Salad', 'description': 'Crisp romaine lettuce with Caesar dressing, croutons, and parmesan', 'price': 9.99, 'category': 'main-courses'},
-        {'id': 629, 'name': 'Chicken Caesar Salad', 'description': 'Caesar salad topped with grilled chicken breast', 'price': 13.99, 'category': 'main-courses'},
-        {'id': 841, 'name': 'Heirloom Tomato Salad', 'description': 'Fresh heirloom tomatoes with burrata, basil, and balsamic reduction', 'price': 14.99, 'category': 'main-courses'},
-        {'id': 275, 'name': 'Chicken Tenders', 'description': 'Crispy chicken tenders with honey mustard and french fries', 'price': 12.99, 'category': 'main-courses'},
-        {'id': 516, 'name': 'Club Sandwich', 'description': 'Turkey, ham, bacon, lettuce, tomato, and mayo on toasted bread', 'price': 11.99, 'category': 'main-courses'},
-        {'id': 687, 'name': 'Buffalo Chicken Wrap', 'description': 'Crispy buffalo chicken with lettuce, tomato, and ranch in a tortilla', 'price': 10.99, 'category': 'main-courses'},
+        # MAIN COURSES
+        {'name': 'Classic Cheeseburger', 'description': '8oz beef patty with American cheese, lettuce, tomato, onion, and pickles', 'price': 13.99, 'category': 'main-courses'},
+        {'name': 'Bacon Cheeseburger', 'description': '8oz beef patty with bacon, cheddar cheese, lettuce, tomato, and onion', 'price': 15.99, 'category': 'main-courses'},
+        {'name': 'BBQ Burger', 'description': '8oz beef patty with BBQ sauce, onion rings, and cheddar cheese', 'price': 15.99, 'category': 'main-courses'},
+        {'name': 'Mushroom Swiss Burger', 'description': '8oz beef patty with sautéed mushrooms and Swiss cheese', 'price': 15.99, 'category': 'main-courses'},
+        {'name': 'Ribeye Steak', 'description': '12oz ribeye steak grilled to perfection with garlic butter', 'price': 24.99, 'category': 'main-courses'},
+        {'name': 'Sous Vide Ribeye', 'description': '14oz precision-cooked ribeye with herb compound butter and roasted vegetables', 'price': 36.99, 'category': 'main-courses'},
+        {'name': 'New York Strip', 'description': '10oz New York strip steak with herb butter', 'price': 22.99, 'category': 'main-courses'},
+        {'name': 'Lobster Tagliatelle', 'description': 'Fresh lobster with house-made pasta in a light cream sauce', 'price': 32.99, 'category': 'main-courses'},
+        {'name': 'Miso Glazed Salmon', 'description': 'Atlantic salmon with miso glaze, bok choy, and jasmine rice', 'price': 26.99, 'category': 'main-courses'},
+        {'name': 'Grilled Salmon', 'description': 'Atlantic salmon with lemon dill sauce and seasonal vegetables', 'price': 18.99, 'category': 'main-courses'},
+        {'name': 'Grilled Chicken Breast', 'description': 'Seasoned grilled chicken breast with lemon herb sauce', 'price': 16.99, 'category': 'main-courses'},
+        {'name': 'BBQ Ribs', 'description': 'Full rack of baby back ribs with BBQ sauce and coleslaw', 'price': 19.99, 'category': 'main-courses'},
+        {'name': 'Fish and Chips', 'description': 'Beer-battered cod with french fries and tartar sauce', 'price': 15.99, 'category': 'main-courses'},
+        {'name': 'Vegan Buddha Bowl', 'description': 'Quinoa, roasted vegetables, avocado, and tahini dressing', 'price': 16.99, 'category': 'main-courses'},
+        {'name': 'Caesar Salad', 'description': 'Crisp romaine lettuce with Caesar dressing, croutons, and parmesan', 'price': 9.99, 'category': 'main-courses'},
+        {'name': 'Chicken Caesar Salad', 'description': 'Caesar salad topped with grilled chicken breast', 'price': 13.99, 'category': 'main-courses'},
+        {'name': 'Heirloom Tomato Salad', 'description': 'Fresh heirloom tomatoes with burrata, basil, and balsamic reduction', 'price': 14.99, 'category': 'main-courses'},
+        {'name': 'Chicken Tenders', 'description': 'Crispy chicken tenders with honey mustard and french fries', 'price': 12.99, 'category': 'main-courses'},
+        {'name': 'Club Sandwich', 'description': 'Turkey, ham, bacon, lettuce, tomato, and mayo on toasted bread', 'price': 11.99, 'category': 'main-courses'},
+        {'name': 'Buffalo Chicken Wrap', 'description': 'Crispy buffalo chicken with lettuce, tomato, and ranch in a tortilla', 'price': 10.99, 'category': 'main-courses'},
         
-        # DESSERTS (Random 3-digit IDs)
-        {'id': 159, 'name': 'New York Cheesecake', 'description': 'Rich and creamy cheesecake with graham cracker crust', 'price': 6.99, 'category': 'desserts'},
-        {'id': 376, 'name': 'Chocolate Lava Cake', 'description': 'Warm chocolate cake with molten center and vanilla ice cream', 'price': 8.99, 'category': 'desserts'},
-        {'id': 482, 'name': 'Affogato', 'description': 'Vanilla gelato "drowned" in hot espresso with amaretti cookies', 'price': 7.99, 'category': 'desserts'},
-        {'id': 658, 'name': 'Chocolate Cake', 'description': 'Rich chocolate layer cake with chocolate frosting', 'price': 6.99, 'category': 'desserts'},
-        {'id': 793, 'name': 'Tiramisu', 'description': 'Traditional Italian dessert with coffee-soaked ladyfingers and mascarpone', 'price': 8.99, 'category': 'desserts'},
-        {'id': 214, 'name': 'Key Lime Pie', 'description': 'Tangy key lime pie with whipped cream', 'price': 6.99, 'category': 'desserts'},
-        {'id': 537, 'name': 'Crème Brûlée', 'description': 'Classic French custard with caramelized sugar top', 'price': 9.99, 'category': 'desserts'},
+        # DESSERTS
+        {'name': 'New York Cheesecake', 'description': 'Rich and creamy cheesecake with graham cracker crust', 'price': 6.99, 'category': 'desserts'},
+        {'name': 'Chocolate Lava Cake', 'description': 'Warm chocolate cake with molten center and vanilla ice cream', 'price': 8.99, 'category': 'desserts'},
+        {'name': 'Affogato', 'description': 'Vanilla gelato "drowned" in hot espresso with amaretti cookies', 'price': 7.99, 'category': 'desserts'},
+        {'name': 'Chocolate Cake', 'description': 'Rich chocolate layer cake with chocolate frosting', 'price': 6.99, 'category': 'desserts'},
+        {'name': 'Tiramisu', 'description': 'Traditional Italian dessert with coffee-soaked ladyfingers and mascarpone', 'price': 8.99, 'category': 'desserts'},
+        {'name': 'Key Lime Pie', 'description': 'Tangy key lime pie with whipped cream', 'price': 6.99, 'category': 'desserts'},
+        {'name': 'Crème Brûlée', 'description': 'Classic French custard with caramelized sugar top', 'price': 9.99, 'category': 'desserts'},
 
-        # DRINKS - Non-Alcoholic (Random 3-digit IDs)
-        {'id': 641, 'name': 'Coca-Cola', 'description': 'Classic Coca-Cola soft drink', 'price': 2.99, 'category': 'drinks'},
-        {'id': 825, 'name': 'Pepsi', 'description': 'Classic Pepsi cola soft drink', 'price': 2.99, 'category': 'drinks'},
-        {'id': 397, 'name': 'Diet Pepsi', 'description': 'Zero-calorie Pepsi cola', 'price': 2.99, 'category': 'drinks'},
-        {'id': 573, 'name': 'Mountain Dew', 'description': 'Citrus-flavored Pepsi product', 'price': 2.99, 'category': 'drinks'},
-        {'id': 768, 'name': 'Sierra Mist', 'description': 'Lemon-lime soda by Pepsi', 'price': 2.99, 'category': 'drinks'},
-        {'id': 192, 'name': 'Iced Tea', 'description': 'Freshly brewed iced tea', 'price': 2.99, 'category': 'drinks'},
-        {'id': 486, 'name': 'Coffee', 'description': 'Freshly brewed coffee', 'price': 2.99, 'category': 'drinks'},
-        {'id': 659, 'name': 'Orange Juice', 'description': 'Freshly squeezed orange juice', 'price': 3.99, 'category': 'drinks'},
+        # DRINKS - Non-Alcoholic
+        {'name': 'Coca-Cola', 'description': 'Classic Coca-Cola soft drink', 'price': 2.99, 'category': 'drinks'},
+        {'name': 'Pepsi', 'description': 'Classic Pepsi cola soft drink', 'price': 2.99, 'category': 'drinks'},
+        {'name': 'Diet Pepsi', 'description': 'Zero-calorie Pepsi cola', 'price': 2.99, 'category': 'drinks'},
+        {'name': 'Mountain Dew', 'description': 'Citrus-flavored Pepsi product', 'price': 2.99, 'category': 'drinks'},
+        {'name': 'Sierra Mist', 'description': 'Lemon-lime soda by Pepsi', 'price': 2.99, 'category': 'drinks'},
+        {'name': 'Iced Tea', 'description': 'Freshly brewed iced tea', 'price': 2.99, 'category': 'drinks'},
+        {'name': 'Coffee', 'description': 'Freshly brewed coffee', 'price': 2.99, 'category': 'drinks'},
+        {'name': 'Orange Juice', 'description': 'Freshly squeezed orange juice', 'price': 3.99, 'category': 'drinks'},
+        {'name': 'Lemonade', 'description': 'House-made lemonade with fresh herbs and seasonal fruit', 'price': 5.99, 'category': 'drinks'},
 
-        # DRINKS - Alcoholic (Random 3-digit IDs)
-        {'id': 734, 'name': 'Draft Beer', 'description': 'Selection of draft beers on tap', 'price': 4.99, 'category': 'drinks'},
-        {'id': 821, 'name': 'House Wine', 'description': 'Red or white house wine by the glass', 'price': 6.99, 'category': 'drinks'},
-        {'id': 463, 'name': 'Cucumber Gimlet', 'description': 'Hendricks gin with muddled cucumber, lime, and simple syrup', 'price': 12.99, 'category': 'drinks'},
-        {'id': 695, 'name': 'Craft Lemonade', 'description': 'House-made lemonade with fresh herbs and seasonal fruit', 'price': 5.99, 'category': 'drinks'},
-        {'id': 817, 'name': 'Sparkling Water', 'description': 'Premium sparkling water with lime', 'price': 3.99, 'category': 'drinks'},
+        # DRINKS - Alcoholic
+        {'name': 'Draft Beer', 'description': 'Selection of draft beers on tap', 'price': 4.99, 'category': 'drinks'},
+        {'name': 'House Wine', 'description': 'Red or white house wine by the glass', 'price': 6.99, 'category': 'drinks'},
+        {'name': 'Cucumber Gimlet', 'description': 'Hendricks gin with muddled cucumber, lime, and simple syrup', 'price': 12.99, 'category': 'drinks'},
+        {'name': 'Sparkling Water', 'description': 'Premium sparkling water with lime', 'price': 3.99, 'category': 'drinks'},
     ]
 
-    # Create menu items with explicit IDs
+    # Create menu items with random 3-digit IDs
     for item_data in menu_items_data:
         menu_item = MenuItem(
-            id=item_data['id'],
+            id=generate_menu_item_id(),
             name=item_data['name'],
             description=item_data['description'],
             price=item_data['price'],
             category=item_data['category']
         )
-        db.session.merge(menu_item)  # Use merge to handle explicit IDs
+        db.session.add(menu_item)  # Use add instead of merge since IDs are generated
     db.session.commit()
 
 def create_demo_reservation_with_party_orders():
+    """Create a demo reservation with party orders"""
     reservation = Reservation(
         reservation_number='111222',
         name='Smith Family',
@@ -485,8 +630,8 @@ def create_demo_reservation_with_party_orders():
             menu_item = MenuItem.query.filter_by(name=item_name).first()
             if menu_item:
                 db.session.add(OrderItem(
-                    order=order,
-                    menu_item=menu_item,
+                    order_id=order.id,
+                    menu_item_id=menu_item.id,
                     quantity=qty,
                     price_at_time=menu_item.price
                 ))
@@ -495,6 +640,7 @@ def create_demo_reservation_with_party_orders():
     db.session.commit()
 
 def create_additional_demo_reservations():
+    """Create additional demo reservations"""
     from models import Reservation, Order, OrderItem, MenuItem, db
     # Reservation 2
     reservation2 = Reservation(
@@ -529,8 +675,8 @@ def create_additional_demo_reservations():
             menu_item = MenuItem.query.filter_by(name=item_name).first()
             if menu_item:
                 db.session.add(OrderItem(
-                    order=order,
-                    menu_item=menu_item,
+                    order_id=order.id,
+                    menu_item_id=menu_item.id,
                     quantity=qty,
                     price_at_time=menu_item.price
                 ))
@@ -571,8 +717,8 @@ def create_additional_demo_reservations():
             menu_item = MenuItem.query.filter_by(name=item_name).first()
             if menu_item:
                 db.session.add(OrderItem(
-                    order=order,
-                    menu_item=menu_item,
+                    order_id=order.id,
+                    menu_item_id=menu_item.id,
                     quantity=qty,
                     price_at_time=menu_item.price
                 ))
@@ -597,12 +743,12 @@ def clear_existing_data():
         print(f"Error clearing data: {e}")
         db.session.rollback()
 
-# Call the function to populate the menu items
 def main():
+    """Main function to initialize test data"""
     with app.app_context():
         db.create_all()
         clear_existing_data()
         init_test_data()
 
 if __name__ == "__main__":
-    main() 
+    main()

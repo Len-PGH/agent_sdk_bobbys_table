@@ -778,11 +778,11 @@ class RestaurantReservationSkill(SkillBase):
                     print(f"🔍 Added call_id to parameters: {call_id}")
                 
                 # Create response message
-                message = f"💳 Processing payment for Reservation #{reservation_number}\n"
+                message = f"💳 Ready to process payment for Reservation #{reservation_number}\n"
                 message += f"Customer: {cardholder_name}\n"
                 message += f"Party of {reservation.party_size} on {reservation.date} at {reservation.time}\n"
                 message += f"Total amount: ${total_amount:.2f}\n\n"
-                message += f"I'll now collect your credit card information securely."
+                message += f"Please enter your credit card information when prompted."
                 
                 # Create SwaigFunctionResult
                 result = SwaigFunctionResult(message)
@@ -805,12 +805,13 @@ class RestaurantReservationSkill(SkillBase):
                 })
                 
                 # Get payment URLs from environment
-                payment_connector_url = os.getenv('PAYMENT_CONNECTOR_URL', 'https://magical-teal-complete.ngrok-free.app/api/payment-processor')
-                status_url = os.getenv('PAYMENT_STATUS_URL', 'https://magical-teal-complete.ngrok-free.app/api/signalwire/payment-callback')
+                base_url = os.getenv('BASE_URL', 'https://localhost:8080')
+                payment_connector_url = os.getenv('PAYMENT_CONNECTOR_URL', f"{base_url}/api/payment-processor")
+                status_url = os.getenv('PAYMENT_STATUS_URL', f"{base_url}/api/signalwire/payment-callback")
                 
                 print(f"🔗 Using payment connector URL: {payment_connector_url}")
                 
-                # Use SignalWire SDK v0.1.23 pay() method
+                # Use SignalWire SDK v0.1.26 pay() method
                 try:
                     print(f"✅ Using SignalWire SDK pay() method")
                     result.pay(
