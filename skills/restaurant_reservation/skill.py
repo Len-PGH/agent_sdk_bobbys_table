@@ -42,115 +42,32 @@ class RestaurantReservationSkill(SkillBase):
         """Setup the reservation skill"""
         return True
 
-    def _find_menu_item_fuzzy(self, item_name):
+    def _find_menu_item_exact(self, item_name):
         """
-        Find menu item using fuzzy matching to handle common misspellings
+        Find menu item using exact database matching only
         
         Args:
-            item_name: The item name to search for (potentially misspelled)
+            item_name: The exact item name from the database
             
         Returns:
             MenuItem object if found, None otherwise
         """
         from models import MenuItem
-        import re
         
         if not item_name:
             return None
         
-        # Normalize the search term
-        search_term = item_name.lower().strip()
-        
-        # First try exact match (case-insensitive)
+        # Only use exact matches - no fuzzy logic
         menu_item = MenuItem.query.filter(
-            MenuItem.name.ilike(search_term)
-        ).first()
+            MenuItem.name.ilike(item_name.strip())
+        ).filter_by(is_available=True).first()
+        
         if menu_item:
-            return menu_item
-        
-        # Try partial match
-        menu_item = MenuItem.query.filter(
-            MenuItem.name.ilike(f'%{search_term}%')
-        ).first()
-        if menu_item:
-            return menu_item
-        
-        # Get all menu items for fuzzy matching
-        all_items = MenuItem.query.all()
-        
-        # Common spelling corrections and variations - FIXED to avoid wrong item selection
-        spelling_corrections = {
-            'kraft': 'craft',
-            'coke': 'coca-cola',
-            # REMOVED: 'pepsi': 'coca-cola' - this was causing Pepsi orders to get Coca-Cola
-            # REMOVED: 'soda': 'coca-cola' - this was mapping all sodas to Coca-Cola
-            # REMOVED: 'pop': 'coca-cola' - this was mapping all pops to Coca-Cola  
-            # REMOVED: 'burger': 'ribeye steak' - this was mapping burgers to expensive steaks
-            # REMOVED: 'chicken': 'buffalo wings' - this was mapping all chicken to wings
-            # REMOVED: 'wings': 'buffalo wings' - this could map BBQ wings to Buffalo wings
-            'lemonade': 'craft lemonade',  # More specific mapping
-            'tea': 'iced tea',
-            'coffee': 'coffee',
-            'sparkling water': 'sparkling water',
-            'water': 'sparkling water',  # Default to sparkling water since it's on menu
-            'beer': 'draft beer',  # More specific
-            'wine': 'house wine'   # More specific
-        }
-        
-        # Apply spelling corrections
-        corrected_term = search_term
-        for wrong, correct in spelling_corrections.items():
-            if wrong in search_term:
-                corrected_term = search_term.replace(wrong, correct)
-                break
-        
-        # Try corrected term
-        if corrected_term != search_term:
-            menu_item = MenuItem.query.filter(
-                MenuItem.name.ilike(f'%{corrected_term}%')
-            ).first()
-            if menu_item:
-                return menu_item
-        
-        # Fuzzy matching using simple similarity
-        best_match = None
-        best_score = 0
-        
-        for item in all_items:
-            item_name_lower = item.name.lower()
+            print(f"✅ Found exact menu item: {menu_item.name} (ID: {menu_item.id})")
+        else:
+            print(f"❌ No exact match found for: {item_name}")
             
-            # Calculate similarity score
-            score = 0
-            
-            # Exact word matches get high score
-            search_words = search_term.split()
-            item_words = item_name_lower.split()
-            
-            for search_word in search_words:
-                for item_word in item_words:
-                    if search_word == item_word:
-                        score += 10
-                    elif search_word in item_word or item_word in search_word:
-                        score += 5
-                    elif self._levenshtein_distance(search_word, item_word) <= 2:
-                        score += 3
-            
-            # Bonus for containing the search term
-            if search_term in item_name_lower:
-                score += 8
-            elif corrected_term in item_name_lower:
-                score += 6
-            
-            # Length penalty for very different lengths
-            length_diff = abs(len(search_term) - len(item_name_lower))
-            if length_diff > 5:
-                score -= 2
-            
-            if score > best_score and score >= 3:  # Minimum threshold
-                best_score = score
-                best_match = item
-        
-        return best_match
+        return menu_item
     
     def _levenshtein_distance(self, s1, s2):
         """Calculate Levenshtein distance between two strings"""
@@ -327,6 +244,12 @@ class RestaurantReservationSkill(SkillBase):
                             return normalized
         
         return None
+
+    def _generate_order_number(self):
+        """Generate a unique order number"""
+        import random
+        import string
+        return ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
     def _detect_affirmative_response(self, call_log, context="payment"):
         """Detect if user gave an affirmative response in recent conversation"""
@@ -1342,26 +1265,23 @@ class RestaurantReservationSkill(SkillBase):
                     print(f"🔄 Converting pre_order format to party_orders format")
                     from models import MenuItem
                     
-                    # Convert pre_order items to party_orders format
+                    # Convert pre_order items to party_orders format using exact matching only
                     converted_items = []
                     for item in pre_order:
                         item_name = item.get('name', '')
                         quantity = item.get('quantity', 1)
                         
-                        # Find menu item by name with fuzzy matching
-                        menu_item = self._find_menu_item_fuzzy(item_name)
+                        # Find menu item by exact name match only
+                        menu_item = self._find_menu_item_exact(item_name)
                         
                         if menu_item:
                             converted_items.append({
                                 'menu_item_id': menu_item.id,
                                 'quantity': quantity
                             })
-                            if menu_item.name.lower() != item_name.lower():
-                                print(f"   Converted '{item_name}' to '{menu_item.name}' (menu item ID {menu_item.id})")
-                            else:
-                                print(f"   Converted '{item_name}' to menu item ID {menu_item.id}")
+                            print(f"   ✅ Added exact match: '{item_name}' (menu item ID {menu_item.id})")
                         else:
-                            print(f"   ⚠️ Could not find menu item for '{item_name}'")
+                            print(f"   ❌ Exact match not found for '{item_name}' - skipping")
                     
                     if converted_items:
                         party_orders = [{
@@ -1395,6 +1315,9 @@ class RestaurantReservationSkill(SkillBase):
                     conversation_items = self._extract_food_items_from_conversation(conversation_text, meta_data)
                     print(f"🔍 Found {len(conversation_items)} menu items from conversation: {conversation_items}")
                     
+                    # FIXED: Use set to track already processed items and avoid duplicates
+                    processed_items = set()
+                    
                     if conversation_items:
                         # Create orders directly from conversation extraction (ignore agent's party_orders)
                         customer_name = args.get('name', 'Customer')
@@ -1416,6 +1339,13 @@ class RestaurantReservationSkill(SkillBase):
                             menu_item_id = int(item_data['menu_item_id'])
                             quantity = int(item_data.get('quantity', 1))
                             
+                            # FIXED: Check if item already processed to avoid duplicates
+                            item_key = f"{menu_item_id}_{quantity}"
+                            if item_key in processed_items:
+                                print(f"      ⚠️ Skipping duplicate item: menu_item_id={menu_item_id}, quantity={quantity}")
+                                continue
+                            processed_items.add(item_key)
+                            
                             menu_item = MenuItem.query.get(menu_item_id)
                             if menu_item:
                                 print(f"      ✅ Adding: {menu_item.name} x{quantity} @ ${menu_item.price}")
@@ -1434,11 +1364,11 @@ class RestaurantReservationSkill(SkillBase):
                         order.total_amount = order_total
                         total_reservation_amount += order_total
                         print(f"   ✅ Order total: ${order_total:.2f}")
-                    else:
-                        print(f"   ⚠️ No menu items found in conversation, skipping order creation")
                         
-                                        # Legacy fallback: process party_orders only if no conversation items found
-                    if not conversation_items and party_orders:
+                        # FIXED: Don't process party_orders if conversation items were found
+                        print(f"   ✅ Processed {len(conversation_items)} items from conversation, skipping party_orders")
+                    else:
+                        # Legacy fallback: process party_orders only if no conversation items found
                         print(f"   🔄 Fallback: Processing party_orders from agent")
                         for person_order in party_orders:
                             person_name = person_order.get('person_name', '')
@@ -1459,16 +1389,24 @@ class RestaurantReservationSkill(SkillBase):
                             order_total = 0.0
                             for item_data in items:
                                 menu_item_id = int(item_data['menu_item_id'])
-                                menu_item = MenuItem.query.get(menu_item_id)
-                                qty = int(item_data['quantity'])
                                 
-                                if menu_item and qty > 0:
-                                    print(f"      ✅ Adding: {menu_item.name} x{qty} @ ${menu_item.price}")
-                                    order_total += menu_item.price * qty
+                                # FIXED: Check for duplicates in party_orders too
+                                quantity = int(item_data['quantity'])
+                                item_key = f"{menu_item_id}_{quantity}"
+                                if item_key in processed_items:
+                                    print(f"      ⚠️ Skipping duplicate party order item: menu_item_id={menu_item_id}, quantity={quantity}")
+                                    continue
+                                processed_items.add(item_key)
+                                
+                                menu_item = MenuItem.query.get(menu_item_id)
+                                
+                                if menu_item and quantity > 0:
+                                    print(f"      ✅ Adding: {menu_item.name} x{quantity} @ ${menu_item.price}")
+                                    order_total += menu_item.price * quantity
                                     order_item = OrderItem(
                                         order_id=order.id,
                                         menu_item_id=menu_item.id,
-                                        quantity=qty,
+                                        quantity=quantity,
                                         price_at_time=menu_item.price
                                     )
                                     db.session.add(order_item)
@@ -1541,11 +1479,22 @@ class RestaurantReservationSkill(SkillBase):
                 # Add order information if orders were placed
                 if total_reservation_amount > 0:
                     message += f"\n🍽️ Pre-Order Details:\n"
-                    # Show the pre-ordered items
-                    if pre_order:
-                        for item in pre_order:
-                            message += f"   • {item.get('quantity', 1)}x {item.get('name', 'Unknown Item')}\n"
-                    message += f"Pre-Order Total: ${total_reservation_amount:.2f}\n"
+                    
+                    # Show detailed pre-order breakdown by person
+                    from models import Order, OrderItem, MenuItem
+                    orders = Order.query.filter_by(reservation_id=reservation.id).all()
+                    
+                    for order in orders:
+                        message += f"• {order.person_name}:\n"
+                        order_items = OrderItem.query.filter_by(order_id=order.id).all()
+                        for order_item in order_items:
+                            menu_item = MenuItem.query.get(order_item.menu_item_id)
+                            if menu_item:
+                                message += f"   - {order_item.quantity}x {menu_item.name} (${menu_item.price:.2f})\n"
+                        if order.total_amount:
+                            message += f"   Subtotal: ${order.total_amount:.2f}\n"
+                    
+                    message += f"\nPre-Order Total: ${total_reservation_amount:.2f}\n"
                     message += f"Your food will be prepared and ready when you arrive!\n"
                 elif args.get('old_school', False):
                     message += f"\n📞 Old School Reservation - Just the table reserved!\n"
@@ -1556,7 +1505,7 @@ class RestaurantReservationSkill(SkillBase):
                     message += f"\n📱 A confirmation SMS has been sent to your phone. "
                 
                 message += f"\n🎯 IMPORTANT: Your reservation number is {reservation.reservation_number}\n"
-                message += f"Please write this down: {reservation.reservation_number}\n\n"
+                message += f"Please save this number for your records: {reservation.reservation_number}\n\n"
                 message += f"Thank you for choosing Bobby's Table! We look forward to serving you. "
                 message += f"Please arrive on time and let us know if you need to make any changes."
                 
@@ -1574,17 +1523,17 @@ class RestaurantReservationSkill(SkillBase):
                     "reservation_id": reservation.id
                 }
                 
-                # If there are pre-orders, indicate payment is needed and add payment prompt BEFORE creating result
+                # ONLY offer payment if there are pre-orders with amounts due
                 if total_reservation_amount > 0:
                     meta_data_for_next_function["payment_needed"] = True
                     meta_data_for_next_function["payment_amount"] = total_reservation_amount
                     meta_data_for_next_function["payment_step"] = "ready_for_payment"
                     
-                    # Ask if customer wants to add more items first, then offer payment
-                    message += f"\n\n🍽️ Would you like to add anything else to your pre-order before we finalize your reservation? "
-                    message += f"If not, since you have pre-ordered items totaling ${total_reservation_amount:.2f}, "
-                    message += f"would you like to pay now to complete your reservation? "
-                    message += f"Just say 'yes' or 'sure' and I'll collect your payment information securely."
+                    # Add optional payment offer as a separate paragraph
+                    message += f"\n\n💳 OPTIONAL PAYMENT:\n"
+                    message += f"Since you have pre-ordered items totaling ${total_reservation_amount:.2f}, "
+                    message += f"you can choose to pay now for convenience, or pay when you arrive at the restaurant. "
+                    message += f"Would you like to pay now? Just say 'yes' if you'd like to pay, or 'no thanks' if you prefer to pay later."
                 
                 # Create the result with the complete message (including payment prompt)
                 result = SwaigFunctionResult(message)
@@ -1891,7 +1840,7 @@ class RestaurantReservationSkill(SkillBase):
         return extracted
     
     def _extract_food_items_from_conversation(self, conversation_text, meta_data=None):
-        """Extract food items mentioned in conversation and convert to menu item IDs"""
+        """Extract food items that the agent explicitly confirmed with the customer"""
         try:
             # Import Flask app and models locally
             import sys
@@ -1905,106 +1854,66 @@ class RestaurantReservationSkill(SkillBase):
             from models import MenuItem
             
             with app.app_context():
-                # Common food item patterns to look for
-                food_patterns = [
-                    r'(?:i )?(?:want|order|have|get|like) (?:the )?([a-zA-Z\s]+?)(?:\s+and|\s*$|\s*\.)',
-                    r'(?:and )?(?:a |an )?([a-zA-Z\s]+?)(?:\s+and|\s*$|\s*\.|\s*\?)',
-                    r'(?:order|get|want) ([a-zA-Z\s]+)',
-                ]
-                
                 extracted_items = []
                 
-                # Check if menu is cached in meta_data
+                # Get menu items from database or cache
                 if meta_data and meta_data.get('cached_menu'):
                     print("🚀 Using cached menu from meta_data")
-                    menu_items = []
                     menu_item_names = {}
-                    
-                    # Reconstruct menu objects from cached data
                     for item_data in meta_data['cached_menu']:
-                        # Create a simple object with the needed attributes
-                        class CachedMenuItem:
-                            def __init__(self, data):
-                                self.id = data['id']
-                                self.name = data['name']
-                                self.price = data['price']
-                                self.category = data['category']
-                                self.is_available = data['is_available']
-                        
-                        item = CachedMenuItem(item_data)
-                        menu_items.append(item)
-                        menu_item_names[item.name.lower()] = item
+                        menu_item_names[item_data['name'].lower()] = {
+                            'id': item_data['id'],
+                            'name': item_data['name'],
+                            'price': item_data['price']
+                        }
                 else:
-                    print("📊 Loading menu from database (not cached)")
-                    # Look for specific menu items mentioned
-                    menu_items = MenuItem.query.all()
-                    menu_item_names = {item.name.lower(): item for item in menu_items}
+                    print("📊 Loading menu from database")
+                    menu_items = MenuItem.query.filter_by(is_available=True).all()
+                    menu_item_names = {item.name.lower(): {'id': item.id, 'name': item.name, 'price': item.price} for item in menu_items}
                 
-                # DISABLED: Over-broad menu item matching that causes false positives
-                # The previous logic was too aggressive and would match menu items based on 
-                # common words appearing anywhere in the conversation, leading to adding
-                # dozens of unintended items. We now rely on specific pattern matching below.
-                
-                # Look for specific food mentions with precise matching to avoid false positives
                 conversation_lower = conversation_text.lower()
+                print(f"🔍 Looking for agent-confirmed items in conversation")
                 
-                # Handle wings variations - map different wing mentions to Buffalo Wings
-                wing_mentions = ['buff wings', 'buffalo wings', 'barbecue wings', 'bbq wings', 'wings']
-                if any(mention in conversation_lower for mention in wing_mentions):
-                    # Look for Buffalo Wings in cached menu or database
-                    buffalo_wings = None
-                    if meta_data and meta_data.get('cached_menu'):
-                        # Search in cached menu
-                        for item in menu_items:
-                            if 'buffalo' in item.name.lower() and 'wing' in item.name.lower() and item.is_available:
-                                buffalo_wings = item
-                                break
-                    else:
-                        # Look for Buffalo Wings specifically in the database
-                        buffalo_wings = MenuItem.query.filter(
-                            MenuItem.name.ilike('%buffalo%wing%'),
-                            MenuItem.is_available == True
-                        ).first()
-                    
-                    if buffalo_wings and buffalo_wings.id not in [item['menu_item_id'] for item in extracted_items]:
-                        extracted_items.append({
-                            'menu_item_id': buffalo_wings.id,
-                            'quantity': 1
-                        })
-                        print(f"🍽️ Found Buffalo Wings: {buffalo_wings.name} (ID: {buffalo_wings.id}, Price: ${buffalo_wings.price})")
-                    else:
-                        print(f"⚠️ Buffalo Wings not found in menu or already added")
+                # Look for exact menu item names that the agent would have confirmed with prices
+                # This approach relies on the agent using exact database menu item names
+                for item_name_lower, item_data in menu_item_names.items():
+                    # Only add items that appear with context suggesting agent confirmation
+                    if item_name_lower in conversation_lower:
+                        # Look for price context to ensure this was agent-confirmed
+                        import re
+                        price_pattern = rf'{re.escape(item_name_lower)}.*?\$\d+\.\d{{2}}'
+                        if re.search(price_pattern, conversation_lower) or 'confirmed' in conversation_lower:
+                            if item_data['id'] not in [item['menu_item_id'] for item in extracted_items]:
+                                # Extract quantity from context
+                                quantity = 1
+                                quantity_patterns = [
+                                    rf'(\d+).*?{re.escape(item_name_lower)}',
+                                    rf'{re.escape(item_name_lower)}.*?(\d+)',
+                                    rf'(two|three|four|five|six|seven|eight|nine|ten).*?{re.escape(item_name_lower)}'
+                                ]
+                                
+                                for qty_pattern in quantity_patterns:
+                                    qty_match = re.search(qty_pattern, conversation_lower)
+                                    if qty_match:
+                                        qty_text = qty_match.group(1)
+                                        word_to_num = {'two': 2, 'three': 3, 'four': 4, 'five': 5}
+                                        if qty_text.isdigit():
+                                            quantity = int(qty_text)
+                                        elif qty_text in word_to_num:
+                                            quantity = word_to_num[qty_text]
+                                        break
+                                
+                                extracted_items.append({
+                                    'menu_item_id': item_data['id'],
+                                    'quantity': quantity
+                                })
+                                print(f"🍽️ Found agent-confirmed item: {item_data['name']} (ID: {item_data['id']}) x{quantity}")
                 
-                # Handle specific items ONLY when mentioned in clear ordering context
-                # Only extract items when they appear with ordering keywords
-                import re
-                ordering_patterns = [
-                    r'(?:want|order|get|have|add|like)\s+(?:the\s+)?([a-zA-Z\s]+?)(?:\s+and|\s*[,.]|\s*$)',
-                    r'(?:i\'d like|i would like|can i get|can i have)\s+(?:the\s+)?([a-zA-Z\s]+?)(?:\s+and|\s*[,.]|\s*$)',
-                    r'(?:add|include)\s+(?:the\s+)?([a-zA-Z\s]+?)(?:\s+to|\s+and|\s*[,.]|\s*$)'
-                ]
-                
-                # Only look for items mentioned with explicit ordering context
-                for pattern in ordering_patterns:
-                    matches = re.finditer(pattern, conversation_lower, re.IGNORECASE)
-                    for match in matches:
-                        mentioned_item = match.group(1).strip()
-                        
-                        # Look for this mentioned item in our menu
-                        for item_name, menu_item in menu_item_names.items():
-                            if (mentioned_item.lower() in item_name or item_name in mentioned_item.lower()) and len(mentioned_item) > 3:
-                                if menu_item.id not in [item['menu_item_id'] for item in extracted_items]:
-                                    extracted_items.append({
-                                        'menu_item_id': menu_item.id,
-                                        'quantity': 1
-                                    })
-                                    print(f"🍽️ Found ordered item: {menu_item.name} (ID: {menu_item.id}) from '{mentioned_item}'")
-                                    break
-                
+                print(f"🍽️ Total confirmed items: {len(extracted_items)}")
                 return extracted_items
                 
         except Exception as e:
-            print(f"❌ Error extracting food items: {e}")
+            print(f"❌ Error extracting confirmed food items: {e}")
             return []
     
     def _get_reservation_handler(self, args, raw_data):
@@ -3640,38 +3549,33 @@ class RestaurantReservationSkill(SkillBase):
             })
             return party_orders
         
-        # For multiple people, extract additional names first
-        additional_names = []
+        # For multiple people, use intelligent distribution
+        print(f"🔍 Parsing orders for {party_size} people with {len(food_items)} items")
         
-        # Enhanced patterns for person names - handle both single and full names
+        # Extract additional names from conversation
+        additional_names = []
         name_patterns = [
             r'(?:the other person\'?s name is|other person is|second guest is|guest is)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)',
             r'(?:and|with)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)',
             r'([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\s+(?:wants|will have|orders)',
-            r'for ([a-zA-Z]+(?:\s+[a-zA-Z]+)?)',  # "for Squidward"
-            r'([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\s+will\s+order',  # "Squidward will order"
+            r'for ([a-zA-Z]+(?:\s+[a-zA-Z]+)?)',
+            r'([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\s+will\s+order',
         ]
         
         for pattern in name_patterns:
             matches = re.findall(pattern, conversation_text, re.IGNORECASE)
             for match in matches:
                 name = match.strip().title()
-                # Filter out false positives and ensure it's a real name
-                # Allow both single names (like "SpongeBob") and full names (like "John Smith")
                 if (name.replace(' ', '').isalpha() and 
                     len(name) > 2 and
                     name.lower() not in ['today', 'tomorrow', 'tonight', 'party of', 'table for', 'a pepsi', 'the pepsi', 'a coke', 'the coke', 'for', 'and', 'or', 'the'] and
                     not any(food_word in name.lower() for food_word in ['pepsi', 'coke', 'wings', 'burger', 'pizza', 'mountain', 'dew']) and
-                    not name.lower().startswith('for ') and
-                    not name.lower().startswith('and ') and
-                    not name.lower().startswith('or ') and
-                    not name.lower().startswith('a ') and
                     name not in additional_names and
                     name != customer_name):
                     additional_names.append(name)
                     print(f"🔍 Found additional person: {name}")
         
-        # Import menu items for name matching
+        # Import menu items for analysis
         try:
             import sys
             import os
@@ -3684,142 +3588,112 @@ class RestaurantReservationSkill(SkillBase):
             with app.app_context():
                 menu_items = {item.id: item.name for item in MenuItem.query.all()}
                 
-                # Analyze conversation flow to assign items
-                customer_items = []
-                other_person_items = []
+                # Create person-specific item lists
+                person_items = {}
+                person_items[customer_name] = []
                 
-                # Split conversation into sentences/phrases - handle the specific case better
-                # First, handle the specific "and for spongebob, we'll order buffalo wings and a pepsi" pattern
-                conversation_text_fixed = conversation_text.replace("and for spongebob, we'll order buffalo wings and a pepsi", 
-                                                                   ". and for spongebob, we'll order buffalo wings and a pepsi.")
-                # Also split on "and for [name]" patterns to separate orders
-                conversation_text_fixed = re.sub(r'\s+and for ([a-zA-Z]+)', r'. and for \1', conversation_text_fixed)
-                sentences = re.split(r'[.!?]', conversation_text_fixed)
+                # Add additional names to person_items
+                for name in additional_names:
+                    person_items[name] = []
                 
-                # Track conversation state
-                current_person = 'customer'  # Start with customer
+                # If we don't have enough named people, add generic names
+                person_names = [customer_name] + additional_names
+                while len(person_names) < party_size:
+                    guest_name = f'Guest {len(person_names)}'
+                    person_names.append(guest_name)
+                    person_items[guest_name] = []
                 
-                for sentence in sentences:
-                    sentence = sentence.strip().lower()
-                    if not sentence:
-                        continue
+                print(f"🔍 Person names identified: {person_names}")
+                
+                # Analyze conversation to assign items to specific people
+                conversation_lower = conversation_text.lower()
+                
+                # Track which items have been assigned
+                assigned_items = set()
+                
+                # Method 1: Look for explicit person-item assignments in conversation
+                for person_name in person_names:
+                    person_lower = person_name.lower()
                     
-                    # Special case: if sentence is just "pepsi" and we were talking about SpongeBob, assign to SpongeBob
-                    if sentence.strip() == 'pepsi' and 'spongebob' in conversation_text.lower():
-                        current_person = 'spongebob'
-                        print(f"🔍 Switching to SpongeBob for Pepsi: {sentence}")
+                    # Find mentions of this person
+                    person_mentions = []
+                    import re
+                    for match in re.finditer(r'\b' + re.escape(person_lower) + r'\b', conversation_lower):
+                        person_mentions.append(match.start())
                     
-                    # Check if this sentence indicates a person switch
-                    if any(phrase in sentence for phrase in ['for me', 'i would like', 'i\'ll get', 'i want']):
-                        current_person = 'customer'
-                        print(f"🔍 Switching to customer: {sentence}")
-                    elif any(phrase in sentence for phrase in ['squidward will order', 'for squidward', 'squidward will have']):
-                        # This is Squidward's order
-                        current_person = 'squidward'
-                        print(f"🔍 Switching to Squidward: {sentence}")
-                    elif any(phrase in sentence for phrase in ['for spongebob', 'spongebob will order', 'spongebob will have', 'and for spongebob']):
-                        # This is SpongeBob's order
-                        current_person = 'spongebob'
-                        print(f"🔍 Switching to SpongeBob: {sentence}")
-                    elif any(phrase in sentence for phrase in ['buffalo wings and', 'mountain dew', 'he wants', 'she wants']):
-                        # This is likely the second person's order
-                        current_person = 'other'
-                        print(f"🔍 Switching to other person: {sentence}")
-                    
-                    # Check if any menu items are mentioned in this sentence
-                    for item in food_items:
-                        item_name = menu_items.get(item['menu_item_id'], '').lower()
+                    # For each person mention, look for nearby food items
+                    for mention_pos in person_mentions:
+                        # Look in a window around the person mention (±100 characters)
+                        start_pos = max(0, mention_pos - 100)
+                        end_pos = min(len(conversation_lower), mention_pos + 100)
+                        context = conversation_lower[start_pos:end_pos]
                         
-                        # Check for various forms of the item name
-                        item_variations = [
-                            item_name,
-                            item_name.replace(' ', ''),
-                            item_name.replace('buffalo', 'buff'),
-                            item_name.replace('wings', 'wing')
-                        ]
+                        # Check which food items are mentioned in this context
+                        for item in food_items:
+                            if item['menu_item_id'] in assigned_items:
+                                continue
+                                
+                            item_name = menu_items.get(item['menu_item_id'], '').lower()
+                            
+                            # Check for item name variations in context
+                            item_variations = [
+                                item_name,
+                                item_name.replace(' ', ''),
+                                item_name.replace('buffalo', 'buff'),
+                                item_name.replace('wings', 'wing'),
+                                item_name.split()[0] if ' ' in item_name else item_name  # First word
+                            ]
+                            
+                            if any(variation in context for variation in item_variations if len(variation) > 2):
+                                person_items[person_name].append(item)
+                                assigned_items.add(item['menu_item_id'])
+                                print(f"🍽️ Assigned {item_name} to {person_name} (context match)")
+                                break
+                
+                # Method 2: Smart distribution of remaining items
+                unassigned_items = [item for item in food_items if item['menu_item_id'] not in assigned_items]
+                
+                if unassigned_items:
+                    print(f"🔍 Distributing {len(unassigned_items)} unassigned items among {len(person_names)} people")
+                    
+                    # Distribute unassigned items evenly
+                    for i, item in enumerate(unassigned_items):
+                        person_index = i % len(person_names)
+                        person_name = person_names[person_index]
+                        person_items[person_name].append(item)
                         
-                        if any(variation in sentence for variation in item_variations):
-                            if current_person == 'customer':
-                                if item not in customer_items:
-                                    customer_items.append(item)
-                                    print(f"🍽️ Assigned {item_name} to {customer_name}")
-                            elif current_person == 'squidward':
-                                # Create separate list for Squidward
-                                if 'squidward_items' not in locals():
-                                    squidward_items = []
-                                if item not in squidward_items:
-                                    squidward_items.append(item)
-                                    print(f"🍽️ Assigned {item_name} to Squidward")
-                            elif current_person == 'spongebob':
-                                # Create separate list for SpongeBob
-                                if 'spongebob_items' not in locals():
-                                    spongebob_items = []
-                                if item not in spongebob_items:
-                                    spongebob_items.append(item)
-                                    print(f"🍽️ Assigned {item_name} to SpongeBob")
-                            else:
-                                if item not in other_person_items:
-                                    other_person_items.append(item)
-                                    other_name = additional_names[0] if additional_names else 'Guest 2'
-                                    print(f"🍽️ Assigned {item_name} to {other_name}")
+                        item_name = menu_items.get(item['menu_item_id'], f"Item {item['menu_item_id']}")
+                        print(f"🍽️ Assigned {item_name} to {person_name} (round-robin distribution)")
                 
-                # Handle specific person assignments
-                if 'squidward_items' in locals() and squidward_items:
-                    party_orders.append({
-                        'person_name': 'Squidward',
-                        'items': squidward_items
-                    })
+                # Create party orders from person_items
+                for person_name, items in person_items.items():
+                    if items:  # Only add if person has items
+                        party_orders.append({
+                            'person_name': person_name,
+                            'items': items
+                        })
                 
-                if 'spongebob_items' in locals() and spongebob_items:
-                    party_orders.append({
-                        'person_name': 'SpongeBob', 
-                        'items': spongebob_items
-                    })
-                
-                # If no items were assigned through conversation flow, use simple distribution
-                if not customer_items and not other_person_items and 'squidward_items' not in locals() and 'spongebob_items' not in locals():
-                    print("🔍 No items assigned through conversation flow, using simple distribution")
-                    # For the specific case: "buff wings and a Pepsi" + "Buffalo wings and, Mountain Dew"
-                    # Assign first half to customer, second half to other person
-                    mid_point = len(food_items) // 2
-                    customer_items = food_items[:mid_point] if mid_point > 0 else food_items[:1]
-                    other_person_items = food_items[mid_point:] if mid_point > 0 else food_items[1:]
-        
         except Exception as e:
             print(f"❌ Error parsing individual orders: {e}")
-            # Fallback: simple distribution
-            mid_point = len(food_items) // 2
-            customer_items = food_items[:mid_point] if mid_point > 0 else food_items[:1]
-            other_person_items = food_items[mid_point:] if mid_point > 0 else food_items[1:]
-        
-        # Create party orders (only if not already created above)
-        if customer_items and not any(order['person_name'] == customer_name for order in party_orders):
-            party_orders.append({
-                'person_name': customer_name,
-                'items': customer_items
-            })
-        
-        if other_person_items and not any(order['person_name'] in [name for name in additional_names] for order in party_orders):
-            other_name = additional_names[0] if additional_names else 'Guest 2'
-            party_orders.append({
-                'person_name': other_name,
-                'items': other_person_items
-            })
-        
-        # If we have additional names but no corresponding party orders, create them
-        for name in additional_names:
-            if not any(order['person_name'] == name for order in party_orders):
-                party_orders.append({
-                    'person_name': name,
-                    'items': []
-                })
-        
-        # Ensure we have the right number of people
-        while len(party_orders) < party_size and len(party_orders) < 2:
-            party_orders.append({
-                'person_name': f'Guest {len(party_orders) + 1}',
-                'items': []
-            })
+            # Fallback: simple even distribution
+            for i, item in enumerate(food_items):
+                person_index = i % party_size
+                if person_index == 0:
+                    person_name = customer_name
+                elif person_index - 1 < len(additional_names):
+                    person_name = additional_names[person_index - 1]
+                else:
+                    person_name = f'Guest {person_index + 1}'
+                
+                # Find existing party order for this person or create new one
+                existing_order = next((po for po in party_orders if po['person_name'] == person_name), None)
+                if existing_order:
+                    existing_order['items'].append(item)
+                else:
+                    party_orders.append({
+                        'person_name': person_name,
+                        'items': [item]
+                    })
         
         print(f"🍽️ Final party orders: {party_orders}")
         return party_orders
