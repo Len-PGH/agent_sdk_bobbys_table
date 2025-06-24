@@ -8,7 +8,7 @@ def generate_order_number():
     while True:
         # Generate a 6-digit number (100000 to 999999)
         number = str(random.randint(100000, 999999))
-        
+
         # Check if this number already exists
         existing = Order.query.filter_by(order_number=number).first()
         if not existing:
@@ -19,7 +19,7 @@ def generate_menu_item_id():
     while True:
         # Generate a 3-digit number (100 to 999)
         number = str(random.randint(100, 999))
-        
+
         # Check if this number already exists
         existing = MenuItem.query.filter_by(id=number).first()
         if not existing:
@@ -34,7 +34,7 @@ def init_test_data():
         Reservation.query.delete()
         Table.query.delete()
         MenuItem.query.delete()
-        
+
         # Add test tables
         tables = [
             Table(table_number=1, capacity=2, status='available', location='Window'),
@@ -45,10 +45,10 @@ def init_test_data():
             Table(table_number=6, capacity=8, status='available', location='Private Room')
         ]
         db.session.add_all(tables)
-        
+
         # Populate menu items with random 3-digit IDs
         populate_menu_items()
-        
+
         # Add test reservations with dynamic dates (today + next 3 days)
         today = datetime.now().date()
         reservations = [
@@ -71,7 +71,7 @@ def init_test_data():
                 time='18:30', 
                 phone_number='+1987654321', 
                 status='confirmed',
-                special_requests='Vegetarian options needed',
+                special_requests='Wheelchair Accessible',
                 payment_status='unpaid'
             ),
             Reservation(
@@ -87,10 +87,10 @@ def init_test_data():
             )
         ]
         db.session.add_all(reservations)
-        
+
         # Add comprehensive test orders with mixed statuses for kitchen view
         db.session.flush()  # Ensure reservations have IDs
-        
+
         # Orders for Johnson Family reservation
         johnson_orders = [
             Order(
@@ -148,7 +148,7 @@ def init_test_data():
         ]
         db.session.add_all(johnson_orders)
         db.session.flush()
-        
+
         # Order items for Johnson Family (lookup menu item IDs by name)
         johnson_order_items = [
             # John's order - Ribeye Steak
@@ -181,7 +181,7 @@ def init_test_data():
             )
         ]
         db.session.add_all(johnson_order_items)
-        
+
         # Orders for Smith Party reservation
         smith_orders = [
             Order(
@@ -217,7 +217,7 @@ def init_test_data():
         ]
         db.session.add_all(smith_orders)
         db.session.flush()
-        
+
         # Order items for Smith Party
         smith_order_items = [
             # Jane's order - Chicken Caesar Salad + Pepsi
@@ -248,8 +248,8 @@ def init_test_data():
             )
         ]
         db.session.add_all(smith_order_items)
-        
-        # Orders for Wilson Group reservation
+
+        # Orders for Wilson Group reservation (all 6 party members)
         wilson_orders = [
             Order(
                 order_number=generate_order_number(), 
@@ -276,12 +276,56 @@ def init_test_data():
                 confirmation_number='ORD3004',
                 target_date=str(today + timedelta(days=2)),
                 target_time='20:00'
+            ),
+            Order(
+                order_number=generate_order_number(), 
+                reservation_id=reservations[2].id, 
+                table_id=3, 
+                person_name='Charlie Wilson', 
+                status='pending', 
+                total_amount=21.98,  # Grilled Salmon + Draft Beer
+                payment_status='unpaid',
+                target_date=str(today + timedelta(days=2)),
+                target_time='20:00'
+            ),
+            Order(
+                order_number=generate_order_number(), 
+                reservation_id=reservations[2].id, 
+                table_id=3, 
+                person_name='Diana Wilson', 
+                status='pending', 
+                total_amount=15.98,  # Chicken Caesar Salad + House Wine
+                payment_status='unpaid',
+                target_date=str(today + timedelta(days=2)),
+                target_time='20:00'
+            ),
+            Order(
+                order_number=generate_order_number(), 
+                reservation_id=reservations[2].id, 
+                table_id=3, 
+                person_name='Edward Wilson', 
+                status='pending', 
+                total_amount=18.98,  # BBQ Ribs + Pepsi
+                payment_status='unpaid',
+                target_date=str(today + timedelta(days=2)),
+                target_time='20:00'
+            ),
+            Order(
+                order_number=generate_order_number(), 
+                reservation_id=reservations[2].id, 
+                table_id=3, 
+                person_name='Fiona Wilson', 
+                status='pending', 
+                total_amount=11.98,  # Buffalo Wings + Mountain Dew
+                payment_status='unpaid',
+                target_date=str(today + timedelta(days=2)),
+                target_time='20:00'
             )
         ]
         db.session.add_all(wilson_orders)
         db.session.flush()
-        
-        # Order items for Wilson Group
+
+        # Order items for Wilson Group (all 6 party members)
         wilson_order_items = [
             # Bob's order - Sous Vide Ribeye + Iced Tea
             OrderItem(
@@ -308,10 +352,62 @@ def init_test_data():
                 menu_item_id=MenuItem.query.filter_by(name='Coffee').first().id, 
                 quantity=1, 
                 price_at_time=2.99
+            ),
+            # Charlie's order - Grilled Salmon + Draft Beer
+            OrderItem(
+                order_id=wilson_orders[2].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Grilled Salmon').first().id, 
+                quantity=1, 
+                price_at_time=18.99
+            ),
+            OrderItem(
+                order_id=wilson_orders[2].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Draft Beer').first().id, 
+                quantity=1, 
+                price_at_time=4.99
+            ),
+            # Diana's order - Chicken Caesar Salad + House Wine
+            OrderItem(
+                order_id=wilson_orders[3].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Chicken Caesar Salad').first().id, 
+                quantity=1, 
+                price_at_time=13.99
+            ),
+            OrderItem(
+                order_id=wilson_orders[3].id, 
+                menu_item_id=MenuItem.query.filter_by(name='House Wine').first().id, 
+                quantity=1, 
+                price_at_time=6.99
+            ),
+            # Edward's order - BBQ Ribs + Pepsi
+            OrderItem(
+                order_id=wilson_orders[4].id, 
+                menu_item_id=MenuItem.query.filter_by(name='BBQ Ribs').first().id, 
+                quantity=1, 
+                price_at_time=19.99
+            ),
+            OrderItem(
+                order_id=wilson_orders[4].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Pepsi').first().id, 
+                quantity=1, 
+                price_at_time=2.99
+            ),
+            # Fiona's order - Buffalo Wings + Mountain Dew
+            OrderItem(
+                order_id=wilson_orders[5].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Buffalo Wings').first().id, 
+                quantity=1, 
+                price_at_time=12.99
+            ),
+            OrderItem(
+                order_id=wilson_orders[5].id, 
+                menu_item_id=MenuItem.query.filter_by(name='Mountain Dew').first().id, 
+                quantity=1, 
+                price_at_time=2.99
             )
         ]
         db.session.add_all(wilson_order_items)
-        
+
         # Standalone orders (pickup/delivery without reservations)
         standalone_orders = [
             Order(
@@ -402,7 +498,7 @@ def init_test_data():
         ]
         db.session.add_all(standalone_orders)
         db.session.flush()
-        
+
         # Order items for standalone orders
         standalone_order_items = [
             # Lisa Chen's order - Classic Cheeseburger + Loaded Fries + Mountain Dew
@@ -503,7 +599,7 @@ def init_test_data():
             )
         ]
         db.session.add_all(standalone_order_items)
-        
+
         db.session.commit()
         print("Test data initialized successfully!")
 
@@ -519,7 +615,7 @@ def populate_menu_items():
         {'name': 'French Toast', 'description': 'Thick-cut brioche bread with cinnamon, vanilla, and maple syrup', 'price': 8.99, 'category': 'breakfast'},
         {'name': 'Eggs Benedict', 'description': 'Poached eggs on English muffins with Canadian bacon and hollandaise', 'price': 12.99, 'category': 'breakfast'},
         {'name': 'Breakfast Platter', 'description': 'Two eggs any style, bacon or sausage, hash browns, and toast', 'price': 11.99, 'category': 'breakfast'},
-        
+
         # APPETIZERS
         {'name': 'Buffalo Wings', 'description': 'Crispy chicken wings tossed in spicy buffalo sauce with blue cheese', 'price': 12.99, 'category': 'appetizers'},
         {'name': 'BBQ Wings', 'description': 'Chicken wings glazed with tangy BBQ sauce', 'price': 12.99, 'category': 'appetizers'},
@@ -533,7 +629,7 @@ def populate_menu_items():
         {'name': 'Jalapeño Poppers', 'description': 'Jalapeños stuffed with cream cheese, wrapped in bacon', 'price': 8.99, 'category': 'appetizers'},
         {'name': 'Loaded Fries', 'description': 'French fries topped with cheese, bacon bits, and green onions', 'price': 8.99, 'category': 'appetizers'},
         {'name': 'Calamari Rings', 'description': 'Crispy fried squid rings with marinara and lemon', 'price': 10.99, 'category': 'appetizers'},
-        
+
         # MAIN COURSES
         {'name': 'Classic Cheeseburger', 'description': '8oz beef patty with American cheese, lettuce, tomato, onion, and pickles', 'price': 13.99, 'category': 'main-courses'},
         {'name': 'Bacon Cheeseburger', 'description': '8oz beef patty with bacon, cheddar cheese, lettuce, tomato, and onion', 'price': 15.99, 'category': 'main-courses'},
@@ -555,7 +651,7 @@ def populate_menu_items():
         {'name': 'Chicken Tenders', 'description': 'Crispy chicken tenders with honey mustard and french fries', 'price': 12.99, 'category': 'main-courses'},
         {'name': 'Club Sandwich', 'description': 'Turkey, ham, bacon, lettuce, tomato, and mayo on toasted bread', 'price': 11.99, 'category': 'main-courses'},
         {'name': 'Buffalo Chicken Wrap', 'description': 'Crispy buffalo chicken with lettuce, tomato, and ranch in a tortilla', 'price': 10.99, 'category': 'main-courses'},
-        
+
         # DESSERTS
         {'name': 'New York Cheesecake', 'description': 'Rich and creamy cheesecake with graham cracker crust', 'price': 6.99, 'category': 'desserts'},
         {'name': 'Chocolate Lava Cake', 'description': 'Warm chocolate cake with molten center and vanilla ice cream', 'price': 8.99, 'category': 'desserts'},
@@ -729,7 +825,7 @@ def create_additional_demo_reservations():
 def clear_existing_data():
     """Clear existing data from all tables"""
     from models import OrderItem, Order, Reservation, MenuItem, Table, db
-    
+
     try:
         # Delete in order to respect foreign key constraints
         OrderItem.query.delete()
