@@ -403,40 +403,7 @@ def format_phone_number_for_speech(phone_number):
         # Return as-is if format is unclear
         return phone_number
 
-def test_number_conversions():
-    """Test function to verify number conversions work correctly."""
-    print("🧪 Testing number conversion utilities...")
-    
-    # Test word-to-number conversion
-    test_cases = [
-        "reservation number one two three four five six",
-        "seven eight nine zero one two",
-        "my number is five five five one two three four",
-        "reservation 123456"
-    ]
-    
-    print("\n📝 Word-to-number conversion tests:")
-    for test in test_cases:
-        converted = words_to_numbers(test)
-        extracted = extract_reservation_number_from_text(test)
-        print(f"  Input: '{test}'")
-        print(f"  Converted: '{converted}'")
-        print(f"  Extracted number: {extracted}")
-        print()
-    
-    # Test number-to-words conversion
-    response_tests = [
-        "I found your reservation for Jane Smith on 2025-06-11 at 8:00 PM for 2 people. Reservation number: 789012. Total bill: $89.00.",
-        "Your reservation number is 123456.",
-        "Call us at 555-1234 for assistance."
-    ]
-    
-    print("🔤 Number-to-words conversion tests:")
-    for test in response_tests:
-        converted = numbers_to_words(test)
-        print(f"  Original: '{test}'")
-        print(f"  For TTS: '{converted}'")
-        print()
-
 if __name__ == '__main__':
-    test_number_conversions() 
+    # Simple manual example when running this module directly
+    sample = "Your reservation number is 123456."
+    print(numbers_to_words(sample))
