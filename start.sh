@@ -12,7 +12,7 @@ python -m venv venv
 
 # Activate virtual environment
 echo "Activating virtual environment..."
-source venv/Scripts/activate
+source venv/bin/activate
 
 # Install requirements with no cache
 echo "Installing requirements..."
