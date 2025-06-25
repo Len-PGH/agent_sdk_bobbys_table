@@ -61,13 +61,13 @@ def time12_filter(time_str):
 def time_ago_filter(dt):
     """Calculate how many minutes ago a datetime was"""
     try:
-        now = datetime.now()
         if dt.tzinfo is None:
-            # If datetime is naive, assume it's in the same timezone as now
+            now = datetime.now()
             diff = now - dt
         else:
-            # If datetime is timezone-aware, convert now to the same timezone
-            diff = now.replace(tzinfo=dt.tzinfo) - dt
+            # Convert "now" to the same timezone instead of just replacing tzinfo
+            now = datetime.now(dt.tzinfo)
+            diff = now - dt
         
         minutes = int(diff.total_seconds() / 60)
         

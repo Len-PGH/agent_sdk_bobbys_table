@@ -157,7 +157,6 @@ class RestaurantReservationSkill(SkillBase):
             Normalized phone number in E.164 format
         """
         import re
-        import re
         
         # If no phone number provided, use caller ID
         if not phone_number and caller_id:
@@ -172,8 +171,6 @@ class RestaurantReservationSkill(SkillBase):
             return phone_number
         
         # Extract only digits
-        import re
-        import re
         digits = re.sub(r'\D', '', phone_number)
         
         # Handle different digit lengths
