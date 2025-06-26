@@ -3,7 +3,7 @@
 # Exit on any error
 set -e
 
-# Install requirements using UPM (Universal Package Manager)
+# Install requirements
 echo "Installing requirements..."
 pip install -r requirements.txt
 
