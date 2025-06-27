@@ -20,6 +20,7 @@ class Reservation(db.Model):
     payment_amount = db.Column(db.Float)  # Total amount paid
     payment_date = db.Column(db.DateTime)  # When payment was completed
     confirmation_number = db.Column(db.String(20))  # Payment confirmation number
+    payment_method = db.Column(db.String(50))  # Payment method used (e.g., 'credit_card', 'cash', 'signalwire_pay')
     orders = db.relationship('Order', backref='reservation', lazy=True)
 
     def to_dict(self):
@@ -40,6 +41,7 @@ class Reservation(db.Model):
             'payment_amount': self.payment_amount,
             'payment_date': self.payment_date.isoformat() if self.payment_date else None,
             'confirmation_number': self.confirmation_number,
+            'payment_method': self.payment_method,
             'orders': [order.to_dict() for order in self.orders],
             'total_bill': total_bill
         }
@@ -102,6 +104,7 @@ class Order(db.Model):
     payment_amount = db.Column(db.Float)  # Total amount paid
     payment_date = db.Column(db.DateTime)  # When payment was completed
     confirmation_number = db.Column(db.String(20))  # Payment confirmation number
+    payment_method = db.Column(db.String(50))  # Payment method used (e.g., 'credit_card', 'cash', 'signalwire_pay')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     items = db.relationship('OrderItem', backref='order', lazy=True)
 
@@ -125,6 +128,7 @@ class Order(db.Model):
             'payment_amount': self.payment_amount,
             'payment_date': self.payment_date.isoformat() if self.payment_date else None,
             'confirmation_number': self.confirmation_number,
+            'payment_method': self.payment_method,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'items': [item.to_dict() for item in self.items]
         }

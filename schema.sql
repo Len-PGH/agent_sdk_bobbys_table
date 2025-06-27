@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS reservations (
     payment_amount DECIMAL(10,2),
     payment_date TIMESTAMP,
     confirmation_number TEXT,
+    payment_method TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -55,6 +56,7 @@ CREATE TABLE IF NOT EXISTS orders (
     payment_amount DECIMAL(10,2),
     payment_date TIMESTAMP,
     confirmation_number TEXT,
+    payment_method TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (reservation_id) REFERENCES reservations(id),
     FOREIGN KEY (table_id) REFERENCES tables(id)
