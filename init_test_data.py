@@ -116,6 +116,7 @@ def init_test_data():
                 payment_intent_id='pi_test_sarah_johnson_001',
                 payment_date=datetime.now() - timedelta(minutes=15),
                 confirmation_number='ORD1001',
+                payment_method='credit-card',
                 target_date=str(today),
                 target_time='19:00'
             ),
@@ -131,6 +132,7 @@ def init_test_data():
                 payment_intent_id='pi_test_mike_johnson_002',
                 payment_date=datetime.now() - timedelta(minutes=30),
                 confirmation_number='ORD1002',
+                payment_method='credit-card',
                 target_date=str(today),
                 target_time='19:00'
             ),
@@ -196,6 +198,7 @@ def init_test_data():
                 payment_intent_id='pi_test_jane_smith_003',
                 payment_date=datetime.now() - timedelta(minutes=20),
                 confirmation_number='ORD2001',
+                payment_method='credit-card',
                 target_date=str(today + timedelta(days=1)),
                 target_time='18:30'
             ),
@@ -211,6 +214,7 @@ def init_test_data():
                 payment_intent_id='pi_test_david_smith_004',
                 payment_date=datetime.now() - timedelta(minutes=25),
                 confirmation_number='ORD2002',
+                payment_method='credit-card',
                 target_date=str(today + timedelta(days=1)),
                 target_time='18:30'
             )
@@ -274,6 +278,7 @@ def init_test_data():
                 payment_intent_id='pi_test_alice_wilson_008',
                 payment_date=datetime.now() - timedelta(minutes=10),
                 confirmation_number='ORD3004',
+                payment_method='credit-card',
                 target_date=str(today + timedelta(days=2)),
                 target_time='20:00'
             ),
@@ -424,7 +429,8 @@ def init_test_data():
                 payment_amount=27.97,
                 payment_intent_id='pi_test_lisa_chen_005',
                 payment_date=datetime.now() - timedelta(minutes=10),
-                confirmation_number='ORD3001'
+                confirmation_number='ORD3001',
+                payment_method='credit-card'
             ),
             Order(
                 order_number=generate_order_number(),
@@ -441,7 +447,8 @@ def init_test_data():
                 payment_amount=20.98,
                 payment_intent_id='pi_test_mark_rodriguez_006',
                 payment_date=datetime.now() - timedelta(minutes=35),
-                confirmation_number='ORD3002'
+                confirmation_number='ORD3002',
+                payment_method='credit-card'
             ),
             Order(
                 order_number=generate_order_number(),
@@ -457,7 +464,8 @@ def init_test_data():
                 payment_amount=16.98,
                 payment_intent_id='pi_test_rachel_green_007',
                 payment_date=datetime.now() - timedelta(minutes=45),
-                confirmation_number='ORD3003'
+                confirmation_number='ORD3003',
+                payment_method='credit-card'
             ),
             Order(
                 order_number='123456',
