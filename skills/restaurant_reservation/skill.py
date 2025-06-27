@@ -1202,32 +1202,8 @@ class RestaurantReservationSkill(SkillBase):
                 if reservation_datetime < datetime.now():
                     return SwaigFunctionResult("I can't make a reservation for a time in the past. Please choose a future date and time.")
                 
-                # SAFEGUARD: Check if customer already has an existing reservation
-                # This prevents duplicate reservations when AI mistakenly calls create_reservation 
-                # instead of add_to_reservation
-                phone_number = args['phone_number']
-                customer_name = args['name']
-                
-                # Check for existing reservations by phone number (exact match only)
-                # Only check phone number for duplicates - name matching is too prone to false positives
-                existing_reservations = Reservation.query.filter(
-                    Reservation.phone_number == phone_number,
-                    Reservation.date >= datetime.now().strftime("%Y-%m-%d"),  # Only future reservations
-                    Reservation.status != 'cancelled'
-                ).all()
-                
-                if existing_reservations:
-                    # Found existing reservation(s) - suggest using add_to_reservation instead
-                    reservation_info = []
-                    for res in existing_reservations:
-                        reservation_info.append(f"#{res.reservation_number} for {res.name} on {res.date} at {res.time}")
-                    
-                    print(f"🚫 DUPLICATE PREVENTION: Found existing reservation(s): {reservation_info}")
-                    return SwaigFunctionResult(
-                        f"I found you already have an existing reservation: {', '.join(reservation_info)}. "
-                        f"Would you like me to add items to your existing reservation instead of creating a new one? "
-                        f"Or if you need a different reservation, please specify the different details."
-                    )
+                # No duplicate prevention - allow all reservation requests
+                # Customers should be free to make multiple reservations as needed
                 
                 # Generate a unique 6-digit reservation number (matching Flask route logic)
                 while True:
@@ -1565,13 +1541,14 @@ class RestaurantReservationSkill(SkillBase):
         conversation_text = ' '.join(user_messages)
         print(f"🔍 Analyzing conversation: {conversation_text}")
         
-        # Extract name patterns - improved to handle the specific case and avoid false positives
+        # Extract name patterns - improved to handle multiple names like "Jim and Bob"
         name_patterns = [
-            r'my name is ([a-zA-Z\s]+?)(?:\s*\.|\s+at|\s+for|\s+and|\s*$)',
-            r'i\'m ([a-zA-Z\s]+?)(?:\s*\.|\s+at|\s+for|\s+and|\s*$)',
-            r'this is ([a-zA-Z\s]+?)(?:\s*\.|\s+at|\s+for|\s+and|\s*$)',
+            r'my name is ([a-zA-Z\s]+?)(?:\s*\.|\s+at|\s+for|\s*$)',
+            r'i\'m ([a-zA-Z\s]+?)(?:\s*\.|\s+at|\s+for|\s*$)',
+            r'this is ([a-zA-Z\s]+?)(?:\s*\.|\s+at|\s+for|\s*$)',
             r'([a-zA-Z]+\s+[a-zA-Z]+)\s+calling',   # "John Smith calling"
             r'([a-zA-Z]+\s+[a-zA-Z]+)\s+here',      # "John Smith here"
+            r'^([a-zA-Z]+(?:\s+and\s+[a-zA-Z]+)?)$',  # "Jim and Bob" as standalone input
         ]
         
         # First try explicit name patterns
@@ -1580,8 +1557,8 @@ class RestaurantReservationSkill(SkillBase):
             if match:
                 name = match.group(1).strip().title()
                 # Filter out common false positives
-                if (len(name.split()) <= 3 and 
-                    name.replace(' ', '').isalpha() and 
+                if (len(name.split()) <= 4 and  # Allow for "Jim and Bob" 
+                    name.replace(' and ', '').replace(' ', '').isalpha() and 
                     name.lower() not in ['a party of', 'party of', 'the party', 'a party', 'today', 'tomorrow', 'tonight']):
                     extracted['name'] = name
                     break
@@ -1634,85 +1611,68 @@ class RestaurantReservationSkill(SkillBase):
                                 break
                         if 'name' in extracted:
                             break
+
+        # ENHANCED: Split compound names like "Jim and Bob" into separate people
+        if 'name' in extracted:
+            name = extracted['name']
+            # Check if the name contains "and" indicating multiple people (case insensitive)
+            if ' and ' in name.lower():
+                parts = [part.strip().title() for part in re.split(r'\s+and\s+', name, flags=re.IGNORECASE)]
+                if len(parts) == 2 and all(part.replace(' ', '').isalpha() for part in parts):
+                    # This is a compound name like "Jim and Bob"
+                    extracted['name'] = parts[0]  # Primary name is the first person
+                    extracted['additional_names'] = parts[1:]  # Store additional names
+                    extracted['party_size'] = len(parts)  # Set party size based on names
+                    print(f"🔍 Split compound name: Primary={parts[0]}, Additional={parts[1:]}")
         
         # Extract party size - improved patterns with context awareness
-        party_patterns = [
-            r'party of (\d+)',
-            r'for (\d+) people',
-            r'for (\d+) person',
-            r'(\d+) people',
-            r'(\d+) person',
-            r'for a party of (\d+)',
-            r'party of (one|two|three|four|five|six|seven|eight|nine|ten)',  # word numbers
-            r'for a party of (one|two|three|four|five|six|seven|eight|nine|ten)',
-            r'(?:reservation for|table for)\s+(\d+)',  # "table for 2"
-            r'(one|two|three|four|five|six|seven|eight|nine|ten) person',  # "one person"
-            r'(one|two|three|four|five|six|seven|eight|nine|ten) people',  # "two people"
-            # Removed standalone patterns that can conflict with time
-        ]
-        
-        # Word to number mapping for party size
-        party_word_to_num = {
-            'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
-            'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10
-        }
-        
-        for pattern in party_patterns:
-            match = re.search(pattern, conversation_text)
-            if match:
-                party_str = match.group(1)
-                print(f"🔍 Found party size match: '{party_str}' using pattern: {pattern}")
-                if party_str.lower() in party_word_to_num:
-                    party_size = party_word_to_num[party_str.lower()]
-                else:
-                    try:
-                        party_size = int(party_str)
-                    except ValueError:
-                        continue
-                
-                if 1 <= party_size <= 20:  # Reasonable range
-                    extracted['party_size'] = party_size
-                    print(f"✅ Extracted party size: {party_size}")
-                    break
-        
-        # If no explicit party size found, try to infer from mentioned names
-        if 'party_size' not in extracted:
-            # Count unique person names mentioned in conversation
-            person_names = set()
-            
-            # Look for patterns like "for [Name]", "[Name] will order", "the other person is [Name]"
-            name_mention_patterns = [
-                r'for ([A-Z][a-z]+)',  # "for Squidward"
-                r'([A-Z][a-z]+) will order',  # "Squidward will order"
-                r'([A-Z][a-z]+) will have',  # "Squidward will have"
-                r'other person.*?is ([A-Z][a-z]+)',  # "other person is SpongeBob"
-                r'person.*?name is ([A-Z][a-z]+)',  # "person name is SpongeBob"
-                # Removed the problematic "and ([A-Z][a-z]+)" pattern that catches drink names
+        if 'party_size' not in extracted:  # Only extract if not already set from compound names
+            party_patterns = [
+                r'party of (\d+)',
+                r'for (\d+) people',
+                r'for (\d+) person',
+                r'(\d+) people',
+                r'(\d+) person',
+                r'for a party of (\d+)',
+                r'party of (one|two|three|four|five|six|seven|eight|nine|ten)',  # word numbers
+                r'for a party of (one|two|three|four|five|six|seven|eight|nine|ten)',
+                r'(?:reservation for|table for)\s+(\d+)',  # "table for 2"
+                r'(one|two|three|four|five|six|seven|eight|nine|ten) person',  # "one person"
+                r'(one|two|three|four|five|six|seven|eight|nine|ten) people',  # "two people"
             ]
             
-            for pattern in name_mention_patterns:
-                matches = re.findall(pattern, conversation_text, re.IGNORECASE)
-                for match in matches:
-                    name = match.strip().title()
-                    # Enhanced filtering to exclude menu items and drinks
-                    if (name.replace(' ', '').isalpha() and 
-                        name.lower() not in ['today', 'tomorrow', 'tonight', 'order', 'will', 'have', 'like', 'want', 'for', 'and', 'the', 'or', 'pepsi', 'coke', 'cola', 'sprite', 'water', 'beer', 'wine', 'coffee', 'tea', 'juice', 'lemonade', 'soda', 'drink'] and
-                        len(name) > 2 and
-                        not name.lower().startswith('for ') and
-                        not name.lower().startswith('and ') and
-                        not name.lower().startswith('or ') and
-                        # Additional check: don't include common menu item words
-                        not any(food_word in name.lower() for food_word in ['wings', 'burger', 'pizza', 'salad', 'soup', 'steak', 'chicken', 'fish', 'pasta', 'sandwich'])):
-                        person_names.add(name)
-                        print(f"🔍 Found person name: {name}")
+            # Word to number mapping for party size
+            party_word_to_num = {
+                'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+                'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10
+            }
             
-            if len(person_names) > 0:
-                inferred_party_size = len(person_names)
-                extracted['party_size'] = inferred_party_size
-                print(f"✅ Inferred party size from names: {inferred_party_size} (names: {list(person_names)})")
+            for pattern in party_patterns:
+                match = re.search(pattern, conversation_text)
+                if match:
+                    party_str = match.group(1)
+                    print(f"🔍 Found party size match: '{party_str}' using pattern: {pattern}")
+                    if party_str.lower() in party_word_to_num:
+                        party_size = party_word_to_num[party_str.lower()]
+                    else:
+                        try:
+                            party_size = int(party_str)
+                        except ValueError:
+                            continue
+                    
+                    if 1 <= party_size <= 20:  # Reasonable range
+                        extracted['party_size'] = party_size
+                        print(f"✅ Extracted party size: {party_size}")
+                        break
+
+        # Extract food items mentioned during reservation (include assistant messages for recommendations)
+        full_conversation = []
+        for entry in call_log:
+            if entry.get('content'):
+                full_conversation.append(entry['content'])
+        full_conversation_text = ' '.join(full_conversation)
         
-        # Extract food items mentioned during reservation
-        food_items = self._extract_food_items_from_conversation(conversation_text, meta_data)
+        food_items = self._extract_food_items_from_conversation(full_conversation_text, meta_data)
         if food_items:
             # Create party_orders structure with proper person assignment
             party_orders = []
@@ -1720,9 +1680,10 @@ class RestaurantReservationSkill(SkillBase):
             # Get party size and customer name
             party_size = extracted.get('party_size', 1)
             customer_name = extracted.get('name', 'Customer')
+            additional_names = extracted.get('additional_names', [])
             
-            # Parse individual orders from conversation
-            party_orders = self._parse_individual_orders(conversation_text, customer_name, party_size, food_items)
+            # Parse individual orders from conversation with enhanced name handling
+            party_orders = self._parse_individual_orders_enhanced(full_conversation_text, customer_name, additional_names, party_size, food_items)
             
             extracted['party_orders'] = party_orders
             print(f"🍽️ Extracted food items: {food_items}")
@@ -1837,7 +1798,7 @@ class RestaurantReservationSkill(SkillBase):
         return extracted
     
     def _extract_food_items_from_conversation(self, conversation_text, meta_data=None):
-        """Extract food items that the agent explicitly confirmed with the customer"""
+        """Extract food items that the agent explicitly confirmed as orders (more precise)"""
         try:
             # Import Flask app and models locally
             import sys
@@ -1869,48 +1830,73 @@ class RestaurantReservationSkill(SkillBase):
                     menu_item_names = {item.name.lower(): {'id': item.id, 'name': item.name, 'price': item.price} for item in menu_items}
                 
                 conversation_lower = conversation_text.lower()
-                print(f"🔍 Looking for agent-confirmed items in conversation")
+                print(f"🔍 Looking for specific agent recommendations (not menu browsing)")
                 
-                # Look for exact menu item names that the agent would have confirmed with prices
-                # This approach relies on the agent using exact database menu item names
-                for item_name_lower, item_data in menu_item_names.items():
-                    # Only add items that appear with context suggesting agent confirmation
-                    if item_name_lower in conversation_lower:
-                        # Look for price context to ensure this was agent-confirmed
-                        import re
-                        price_pattern = rf'{re.escape(item_name_lower)}.*?\$\d+\.\d{{2}}'
-                        if re.search(price_pattern, conversation_lower) or 'confirmed' in conversation_lower:
-                            if item_data['id'] not in [item['menu_item_id'] for item in extracted_items]:
-                                # Extract quantity from context
-                                quantity = 1
-                                quantity_patterns = [
-                                    rf'(\d+).*?{re.escape(item_name_lower)}',
-                                    rf'{re.escape(item_name_lower)}.*?(\d+)',
-                                    rf'(two|three|four|five|six|seven|eight|nine|ten).*?{re.escape(item_name_lower)}'
-                                ]
-                                
-                                for qty_pattern in quantity_patterns:
-                                    qty_match = re.search(qty_pattern, conversation_lower)
-                                    if qty_match:
-                                        qty_text = qty_match.group(1)
-                                        word_to_num = {'two': 2, 'three': 3, 'four': 4, 'five': 5}
-                                        if qty_text.isdigit():
-                                            quantity = int(qty_text)
-                                        elif qty_text in word_to_num:
-                                            quantity = word_to_num[qty_text]
-                                        break
-                                
+                # Look for the agent's specific structured recommendations
+                # Pattern: "Jim: - Drink: House Wine for six dollars and ninety-nine cents - Food: Mushroom Swiss Burger..."
+                import re
+                
+                # Enhanced pattern to find agent's structured item selections
+                # Look for patterns like "- Drink: House Wine for..." or "- Food: Mushroom Swiss Burger for..."
+                structured_recommendation_pattern = r'[-•*]?\s*(?:drink|food):\s*([^-\n]+?)(?:\s+for\s+[\w\s]+dollars|$)'
+                matches = re.findall(structured_recommendation_pattern, conversation_lower, re.IGNORECASE | re.MULTILINE)
+                
+                print(f"🔍 Found structured recommendations: {matches}")
+                
+                # Process each recommendation
+                for match in matches:
+                    item_text = match.strip().lower()
+                    print(f"🔍 Processing recommendation: '{item_text}'")
+                    
+                    # Find the best matching menu item
+                    best_match = None
+                    best_score = 0
+                    
+                    for item_name_lower, item_data in menu_item_names.items():
+                        # Check for exact match or strong partial match
+                        if item_name_lower in item_text or item_text in item_name_lower:
+                            # Calculate match score
+                            words_in_item = set(item_name_lower.split())
+                            words_in_text = set(item_text.split())
+                            common_words = words_in_item.intersection(words_in_text)
+                            score = len(common_words) / max(len(words_in_item), 1)
+                            
+                            if score > best_score and score > 0.5:  # At least 50% word overlap
+                                best_match = item_data
+                                best_score = score
+                    
+                    if best_match and best_match['id'] not in [item['menu_item_id'] for item in extracted_items]:
+                        extracted_items.append({
+                            'menu_item_id': best_match['id'],
+                            'quantity': 1
+                        })
+                        print(f"🍽️ Found ordered item: {best_match['name']} (ID: {best_match['id']}) - Score: {best_score:.2f}")
+                
+                # If no structured recommendations found, try broader patterns
+                if not extracted_items:
+                    print("🔍 No structured recommendations found, trying broader patterns...")
+                    
+                    # Look for items mentioned with prices in agent responses
+                    price_pattern = r'([a-z\s]+?)\s+for\s+[\w\s]*dollars'
+                    price_matches = re.findall(price_pattern, conversation_lower, re.IGNORECASE)
+                    
+                    for price_match in price_matches:
+                        item_text = price_match.strip().lower()
+                        print(f"🔍 Checking price mention: '{item_text}'")
+                        
+                        for item_name_lower, item_data in menu_item_names.items():
+                            if item_name_lower in item_text and item_data['id'] not in [item['menu_item_id'] for item in extracted_items]:
                                 extracted_items.append({
                                     'menu_item_id': item_data['id'],
-                                    'quantity': quantity
+                                    'quantity': 1
                                 })
-                                print(f"🍽️ Found agent-confirmed item: {item_data['name']} (ID: {item_data['id']}) x{quantity}")
+                                print(f"🍽️ Found ordered item: {item_data['name']} (ID: {item_data['id']}) from price mention")
                 
-                print(f"🍽️ Total confirmed items: {len(extracted_items)}")
+                print(f"🍽️ Total ordered items: {len(extracted_items)}")
                 return extracted_items
                 
         except Exception as e:
-            print(f"❌ Error extracting confirmed food items: {e}")
+            print(f"❌ Error extracting ordered food items: {e}")
             return []
     
     def _get_reservation_handler(self, args, raw_data):
@@ -3693,6 +3679,121 @@ class RestaurantReservationSkill(SkillBase):
                     })
         
         print(f"🍽️ Final party orders: {party_orders}")
+        return party_orders
+
+    def _parse_individual_orders_enhanced(self, conversation_text, customer_name, additional_names, party_size, food_items):
+        """Enhanced parsing of individual orders with better name handling"""
+        party_orders = []
+        
+        # If only one person, assign all items to them
+        if party_size == 1:
+            party_orders.append({
+                'person_name': customer_name,
+                'items': food_items
+            })
+            return party_orders
+        
+        # For multiple people, use intelligent distribution
+        print(f"🔍 Enhanced parsing for {party_size} people with {len(food_items)} items")
+        print(f"🔍 Primary name: {customer_name}, Additional names: {additional_names}")
+        
+        # Create list of all known person names
+        all_person_names = [customer_name] + additional_names
+        
+        # Pad with generic names if needed
+        while len(all_person_names) < party_size:
+            all_person_names.append(f'Guest {len(all_person_names) + 1}')
+        
+        print(f"🔍 All person names: {all_person_names}")
+        
+        # Import menu items for analysis
+        try:
+            import sys
+            import os
+            parent_dir = os.path.dirname(os.path.dirname(__file__))
+            if parent_dir not in sys.path:
+                sys.path.insert(0, parent_dir)
+            from app import app
+            from models import MenuItem
+            
+            with app.app_context():
+                menu_items = {item.id: item.name for item in MenuItem.query.all()}
+                
+                # Create person-specific item lists
+                person_items = {name: [] for name in all_person_names}
+                
+                # Track which items have been assigned
+                assigned_items = set()
+                
+                # Method 1: Look for explicit person-item assignments in agent's response
+                # Pattern like "Jim: - Drink: House Wine... - Food: Mushroom Swiss Burger..."
+                conversation_lower = conversation_text.lower()
+                
+                for person_name in all_person_names:
+                    person_lower = person_name.lower()
+                    
+                    # Look for agent's structured recommendations for this person
+                    person_section_pattern = rf'{re.escape(person_lower)}:\s*[-•*]?\s*.*?(?=(?:{"|".join([re.escape(n.lower()) for n in all_person_names if n != person_name])}:|$)'
+                    person_match = re.search(person_section_pattern, conversation_lower, re.DOTALL)
+                    
+                    if person_match:
+                        person_section = person_match.group(0)
+                        print(f"🔍 Found section for {person_name}: {person_section[:100]}...")
+                        
+                        # Look for food items mentioned in this person's section
+                        for item in food_items:
+                            if item['menu_item_id'] in assigned_items:
+                                continue
+                                
+                            item_name = menu_items.get(item['menu_item_id'], '').lower()
+                            
+                            # Check if this item is mentioned in this person's section
+                            if item_name and any(word in person_section for word in item_name.split() if len(word) > 3):
+                                person_items[person_name].append(item)
+                                assigned_items.add(item['menu_item_id'])
+                                print(f"🍽️ Assigned {item_name} to {person_name} (structured match)")
+                
+                # Method 2: For any remaining unassigned items, distribute evenly
+                unassigned_items = [item for item in food_items if item['menu_item_id'] not in assigned_items]
+                
+                if unassigned_items:
+                    print(f"🔍 Distributing {len(unassigned_items)} unassigned items")
+                    
+                    # Distribute remaining items evenly
+                    for i, item in enumerate(unassigned_items):
+                        person_index = i % len(all_person_names)
+                        person_name = all_person_names[person_index]
+                        person_items[person_name].append(item)
+                        
+                        item_name = menu_items.get(item['menu_item_id'], f"Item {item['menu_item_id']}")
+                        print(f"🍽️ Assigned {item_name} to {person_name} (even distribution)")
+                
+                # Create party orders from person_items
+                for person_name, items in person_items.items():
+                    if items:  # Only add if person has items
+                        party_orders.append({
+                            'person_name': person_name,
+                            'items': items
+                        })
+                
+        except Exception as e:
+            print(f"❌ Error in enhanced parsing: {e}")
+            # Fallback: simple even distribution
+            for i, item in enumerate(food_items):
+                person_index = i % len(all_person_names)
+                person_name = all_person_names[person_index]
+                
+                # Find existing party order for this person or create new one
+                existing_order = next((po for po in party_orders if po['person_name'] == person_name), None)
+                if existing_order:
+                    existing_order['items'].append(item)
+                else:
+                    party_orders.append({
+                        'person_name': person_name,
+                        'items': [item]
+                    })
+        
+        print(f"🍽️ Enhanced party orders: {party_orders}")
         return party_orders
     
     def _split_conversation_by_person(self, conversation_text):

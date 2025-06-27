@@ -1104,7 +1104,7 @@ function startAutoRefresh() {
             
             // Check for new reservations and show notification
             checkForNewReservations();
-        }, 5000); // 5 seconds for faster updates
+        }, 30000); // 30 seconds - reasonable refresh rate
     }
 }
 
@@ -1218,6 +1218,10 @@ document.addEventListener('DOMContentLoaded', function() {
     // Wait for calendar to initialize, then start auto-refresh
     setTimeout(() => {
         if (typeof calendar !== 'undefined') {
+            // 🚀 PRIORITY: Start real-time updates first (instant)
+            initializeRealTimeUpdates();
+            
+            // Keep auto-refresh as fallback (30-second polling)
             startAutoRefresh();
             
             // Initialize reservation count
@@ -1237,22 +1241,172 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     }, 2000);
     
-    // Stop auto-refresh when leaving the page
+    // Stop auto-refresh and real-time updates when leaving the page
     window.addEventListener('beforeunload', function() {
         stopAutoRefresh();
+        stopRealTimeUpdates();
     });
     
     // Pause auto-refresh when page is not visible (tab switching)
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             stopAutoRefresh();
+            stopRealTimeUpdates();
         } else {
             // Restart when page becomes visible again
             setTimeout(() => {
                 if (typeof calendar !== 'undefined') {
+                    initializeRealTimeUpdates();
                     startAutoRefresh();
                 }
             }, 1000);
         }
     });
 });
+
+// 🚀 REAL-TIME CALENDAR UPDATES via Server-Sent Events (SSE)
+let calendarEventSource = null;
+
+function initializeRealTimeUpdates() {
+    // Only initialize if calendar exists and SSE is supported
+    if (typeof calendar === 'undefined' || !window.EventSource) {
+        console.log('⚠️ Calendar or SSE not available, skipping real-time updates');
+        return;
+    }
+    
+    console.log('🚀 Initializing real-time calendar updates via SSE');
+    
+    // Create SSE connection
+    calendarEventSource = new EventSource('/api/calendar/events-stream');
+    
+    calendarEventSource.onopen = function(event) {
+        console.log('✅ SSE connection established for calendar updates');
+    };
+    
+    calendarEventSource.onmessage = function(event) {
+        try {
+            const data = JSON.parse(event.data);
+            
+            if (data.type === 'ping') {
+                // Keepalive ping - ignore
+                return;
+            }
+            
+            if (data.type === 'calendar_refresh') {
+                console.log('📅 Real-time calendar update received:', data);
+                
+                // Trigger instant calendar refresh
+                calendar.refetchEvents();
+                
+                // Show notification for phone reservations
+                if (data.source === 'phone_swaig') {
+                    showRealTimeReservationNotification(data);
+                }
+                
+                // Update reservation count for auto-refresh system
+                if (typeof checkForNewReservations === 'function') {
+                    setTimeout(() => {
+                        checkForNewReservations();
+                    }, 1000); // Small delay to ensure data is available
+                }
+            }
+            
+        } catch (error) {
+            console.error('❌ Error processing SSE calendar event:', error);
+        }
+    };
+    
+    calendarEventSource.onerror = function(event) {
+        console.error('❌ SSE connection error:', event);
+        
+        // Attempt to reconnect after 5 seconds
+        setTimeout(() => {
+            if (calendarEventSource.readyState === EventSource.CLOSED) {
+                console.log('🔄 Attempting to reconnect SSE...');
+                initializeRealTimeUpdates();
+            }
+        }, 5000);
+    };
+}
+
+function showRealTimeReservationNotification(data) {
+    let message;
+    switch (data.event_type) {
+        case 'reservation_created':
+            message = `📞 New phone reservation: ${data.customer_name}`;
+            break;
+        case 'reservation_updated':
+            message = `📞 Reservation updated: ${data.customer_name}`;
+            break;
+        case 'reservation_cancelled':
+            message = `📞 Reservation cancelled: ${data.customer_name}`;
+            break;
+        default:
+            message = `📞 Reservation ${data.event_type}: ${data.customer_name}`;
+    }
+    
+    // Create enhanced toast notification
+    const toastHtml = `
+        <div class="toast align-items-center text-white bg-success border-0" role="alert" style="position: fixed; top: 20px; right: 20px; z-index: 9999; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
+            <div class="d-flex">
+                <div class="toast-body">
+                    <i class="fas fa-phone me-2"></i><strong>${message}</strong>
+                    <small class="d-block text-light opacity-75 mt-1">
+                        ${data.date} at ${data.time} • Party of ${data.party_size} • Calendar updated instantly
+                    </small>
+                </div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+            </div>
+        </div>
+    `;
+    
+    document.body.insertAdjacentHTML('beforeend', toastHtml);
+    const toastElement = document.body.lastElementChild;
+    const toast = new bootstrap.Toast(toastElement, { delay: 10000 }); // 10 second delay
+    toast.show();
+    
+    toastElement.addEventListener('hidden.bs.toast', () => {
+        toastElement.remove();
+    });
+    
+    // Play notification sound
+    playNotificationSound();
+}
+
+function playNotificationSound() {
+    try {
+        // Create a more pleasant notification sound
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator1 = audioContext.createOscillator();
+        const oscillator2 = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+        
+        oscillator1.connect(gainNode);
+        oscillator2.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        
+        // Create a pleasant two-tone chime
+        oscillator1.frequency.setValueAtTime(800, audioContext.currentTime); // High tone
+        oscillator2.frequency.setValueAtTime(600, audioContext.currentTime); // Low tone
+        
+        gainNode.gain.setValueAtTime(0.1, audioContext.currentTime); // Low volume
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.8);
+        
+        oscillator1.start(audioContext.currentTime);
+        oscillator1.stop(audioContext.currentTime + 0.3);
+        
+        oscillator2.start(audioContext.currentTime + 0.1);
+        oscillator2.stop(audioContext.currentTime + 0.5);
+    } catch (e) {
+        // Ignore audio errors - not critical
+        console.log('Audio notification not available');
+    }
+}
+
+function stopRealTimeUpdates() {
+    if (calendarEventSource) {
+        console.log('⏹️ Stopping real-time calendar updates');
+        calendarEventSource.close();
+        calendarEventSource = null;
+    }
+}

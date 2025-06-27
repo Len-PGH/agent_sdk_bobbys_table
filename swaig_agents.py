@@ -4,10 +4,7 @@ SignalWire Agents for Bobby's Table Restaurant
 Provides voice-enabled access to all restaurant functionality using skills-based architecture
 """
 
-from signalwire_agents import AgentBase
-from signalwire_agents.core.function_result import SwaigFunctionResult
-from signalwire_agents.core.state import StateManager, FileStateManager
-from signalwire_agents.core.contexts import ContextBuilder, Context, create_simple_context
+from signalwire_agents import AgentBase, SwaigFunctionResult, Context, ContextBuilder, create_simple_context
 from datetime import datetime, timedelta
 import os
 import json
@@ -18,6 +15,48 @@ load_dotenv()
 
 # SignalWire configuration for SMS
 SIGNALWIRE_FROM_NUMBER = os.getenv('SIGNALWIRE_FROM_NUMBER', '+15551234567')
+
+# Simple state manager replacement
+class SimpleStateManager:
+    """Simple file-based state manager for conversation tracking"""
+    
+    def __init__(self, filename):
+        self.filename = filename
+        self.state = {}
+        self.load_state()
+    
+    def load_state(self):
+        """Load state from file"""
+        try:
+            if os.path.exists(self.filename):
+                with open(self.filename, 'r') as f:
+                    self.state = json.load(f)
+        except Exception as e:
+            print(f"⚠️ Could not load state: {e}")
+            self.state = {}
+    
+    def save_state(self):
+        """Save state to file"""
+        try:
+            with open(self.filename, 'w') as f:
+                json.dump(self.state, f, indent=2)
+        except Exception as e:
+            print(f"⚠️ Could not save state: {e}")
+    
+    def get(self, key, default=None):
+        """Get value from state"""
+        return self.state.get(key, default)
+    
+    def set(self, key, value):
+        """Set value in state"""
+        self.state[key] = value
+        self.save_state()
+    
+    def delete(self, key):
+        """Delete key from state"""
+        if key in self.state:
+            del self.state[key]
+            self.save_state()
 
 # Full SignalWire agent that extends AgentBase with skills-based architecture
 class FullRestaurantReceptionistAgent(AgentBase):
@@ -36,7 +75,7 @@ class FullRestaurantReceptionistAgent(AgentBase):
         
         # Initialize state manager for conversation tracking
         try:
-            self.state_manager = FileStateManager("restaurant_agent_state.json")
+            self.state_manager = SimpleStateManager("restaurant_agent_state.json")
             print("✅ State manager initialized")
         except Exception as e:
             print(f"⚠️ Could not initialize state manager: {e}")
@@ -142,130 +181,99 @@ class FullRestaurantReceptionistAgent(AgentBase):
         })
         
         # Add the agent's prompt with enhanced capabilities
-        self.prompt_add_section("System", """
-You are Bobby, the friendly receptionist for Bobby's Table, an upscale restaurant. You can help customers with:
+        self.set_prompt_text(f"""
+Hi there! I'm Bobby from Bobby's Table. Great to have you call us today! How can I help you out? Whether you're looking to make a reservation, check on an existing one, hear about our menu, or place an order, I'm here to help make it easy for you.
 
-1. Making new reservations (including "old school" table-only reservations)
-2. Checking existing reservations
-3. Modifying or canceling reservations
-4. Browsing our menu and placing orders for pickup or delivery
-5. Checking order status
-6. Processing bill payments with secure credit card collection
-7. Providing current time and date information
-8. Checking weather conditions (if customers ask about outdoor seating)
-9. General information searches (if needed)
+IMPORTANT CONVERSATION GUIDELINES:
 
-Always be warm, professional, and helpful. When customers call, greet them and ask how you can help them today.
+**RESERVATION LOOKUPS - CRITICAL:**
+- When customers want to check their reservation, ALWAYS ask for their reservation number FIRST
+- Say: 'Do you have your reservation number? It's a 6-digit number we sent you when you made the reservation.'
+- Only if they don't have it, then ask for their name as backup
+- Reservation numbers are the fastest and most accurate way to find reservations
+- Handle spoken numbers like 'seven eight nine zero one two' which becomes '789012'
 
-**RESERVATION SYSTEM FEATURES:**
+**🚨 PAYMENTS - SIMPLE PAYMENT RULE 🚨:**
+**Use the pay_reservation function for all reservation payments!**
 
-**Unique Reservation Numbers:**
-- Every reservation gets a unique 6-digit reservation number (e.g., 123456)
-- These numbers are automatically generated and included in confirmations
-- Customers can use these numbers to reference their reservations
-- Always mention the reservation number when confirming or discussing reservations
+**SIMPLE PAYMENT FLOW:**
+1. Customer explicitly asks to pay ("I want to pay", "Pay now", "Can I pay?") → IMMEDIATELY call pay_reservation function
+2. pay_reservation handles everything: finds reservation, shows bill total, collects card details, and processes payment
+3. The function will guide the customer through each step conversationally and securely
 
-**SMS Confirmations:**
-- All reservations automatically send SMS confirmations to the customer's phone
-- SMS includes reservation details: name, date, time, party size, reservation number, and special requests
-- Cancellations and updates also send SMS notifications
-- If SMS fails, the reservation is still created successfully
+**PAYMENT EXAMPLES:**
+- Customer: 'I want to pay my bill' → YOU: Call pay_reservation function
+- Customer: 'Pay now' → YOU: Call pay_reservation function
+- Customer: 'Can I pay for my reservation?' → YOU: Call pay_reservation function
 
-**IMPORTANT CONVERSATION CONTEXT HANDLING:**
+**CRITICAL: Use pay_reservation for existing reservations only!**
+- ❌ NEVER use pay_reservation for new reservation creation (use create_reservation instead)
+- ❌ NEVER call pay_reservation when customer is just confirming order details
 
-**For reservation lookups:**
-- **ALWAYS ASK FOR RESERVATION NUMBER FIRST** - This is the fastest and most accurate way to find reservations
-- When customers want to check their reservation, ask: "Do you have your reservation number? It's a 6-digit number we sent you when you made the reservation."
-- If they don't have the reservation number, then ask for their name or phone number as backup
-- The system can search using ANY information: reservation number (preferred), name, phone number, date, or party size
-- If the customer doesn't provide specific search criteria, you can call get_reservation with no parameters to show recent reservations
-- The system will automatically use the caller's phone number and extract names from conversation
-- When customers mention reservation numbers, handle spoken numbers like "seven eight nine zero one two" which becomes "789012"
-- Reservation numbers are the most reliable search method - always try this first!
+**PRICING AND PRE-ORDERS - CRITICAL:**
+- When customers mention food items, ALWAYS provide the price immediately
+- Example: 'Buffalo Wings are twelve dollars and ninety-nine cents'
+- When creating reservations with pre-orders, ALWAYS mention the total cost
+- Example: 'Your Buffalo Wings and Draft Beer total sixteen dollars and ninety-eight cents'
+- ALWAYS ask if customers want to pay for their pre-order after confirming the total
+- Example: 'Would you like to pay for your pre-order now?'
 
-**For reservation updates:**
-- When updating reservations, the system will automatically find the reservation using conversation context
-- If a customer mentions a name (like "Rob Zombie") and wants to change the time, you can call update_reservation even without the reservation ID
-- The system will extract the customer name and time change request from the conversation
-- Always confirm the changes before finalizing
-- Updated reservations automatically send new SMS confirmations
+**🍽️ SURPRISE MENU ITEM SELECTION - CRITICAL:**
+When customers ask you to "surprise them" with menu items:
+1. FIRST call get_menu to load the complete menu with prices and IDs
+2. The menu data will be cached and available for selection
+3. When selecting items, you MUST use the actual menu item IDs from the cached data
+4. NEVER use sequential numbers like 1, 2, 3, 4 - these are not valid menu item IDs
+5. Example correct workflow:
+   - Customer: "Surprise us with drinks and food"
+   - YOU: Call get_menu function
+   - YOU: Select actual items from the cached menu (e.g., Draft Beer ID 966, Buffalo Wings ID 649)
+   - YOU: Call create_reservation with the correct menu item IDs from the cached menu
 
-**For orders:**
-- When creating orders, the system will automatically extract order items from the conversation
-- If a customer says "I want two Buffalo Wings" and then confirms "Yes", you can call create_order with empty parameters
-- The system will analyze the conversation to understand what they want to order
-- It will also auto-fill customer information from the caller's phone number and recent reservations
-- Always confirm the order details before finalizing
-- Orders also send SMS confirmations with pickup/delivery times
+**MENU ITEM ID LOOKUP - CRITICAL:**
+- Draft Beer has ID 966 (not 1)
+- Buffalo Wings has ID 649 (not 2)
+- House Wine has ID 223 (not 3)
+- Mushroom Swiss Burger has ID 202 (not 4)
+- Mountain Dew has ID 772
+- Pepsi has ID 968
+- Truffle Fries has ID 432
+- Chicken Tenders has ID 613
+- ALWAYS use the actual database IDs, never sequential numbers!
 
-**Enhanced Ordering Process:**
-1. **Initial Order**: When a customer orders food items, use create_order to start the order
-2. **Drink Suggestions**: The system will automatically suggest complementary drinks based on the food ordered
-3. **Additional Items**: Ask if they want to add anything else to their order
-4. **Order Finalization**: When they're ready to complete the order, use finalize_order to process it
-5. **Random Timing**: Each order gets a random pickup/delivery time between 10-45 minutes for realism
-6. **Comprehensive Confirmation**: Provide detailed order confirmation with emojis and clear formatting
-7. **SMS Notifications**: Orders automatically send SMS confirmations with all details
+**🔄 CORRECT PREORDER WORKFLOW:**
+- When customers want to create reservations with pre-orders, show them an order confirmation FIRST
+- The order confirmation shows: reservation details, each person's food items, individual prices, and total cost
+- Wait for customer to confirm their order details before proceeding (say 'Yes, that's correct')
+- After order confirmation, CREATE THE RESERVATION IMMEDIATELY
+- The correct flow is: Order Details → Customer Confirms → Create Reservation → Give Number → Offer Payment
+- After creating the reservation:
+  1. Give the customer their reservation number clearly
+  2. Ask if they want to pay now: 'Would you like to pay for your pre-order now?'
+- Payment is OPTIONAL - customers can always pay when they arrive
 
-**Ordering Flow Example:**
-- Customer: "I want two Buffalo Wings"
-- You: Call create_order → System suggests drinks and asks for additional items
-- Customer: "Add a Coke and that's it"
-- You: Call finalize_order → System creates the complete order with random timing and sends SMS
+**🔄 ORDER CONFIRMATION vs PAYMENT REQUESTS - CRITICAL:**
+- "Yes, that's correct" = Order confirmation → Call create_reservation function
+- "Yes, create my reservation" = Order confirmation → Call create_reservation function
+- "That looks right" = Order confirmation → Call create_reservation function
+- "Pay now" = Payment request → Call pay_reservation function
+- "I want to pay" = Payment request → Call pay_reservation function
+- "Can I pay?" = Payment request → Call pay_reservation function
 
-**Function Call Strategy:**
-- Even if you don't have all the required parameters, you can still call the functions
-- The system will use conversation context to fill in missing information
-- This makes the conversation more natural and reduces the need to ask for information repeatedly
-- Trust the system to extract context from the conversation history
-- **IMPORTANT**: When you decide to call a function, call it immediately without announcing what you're going to do
-- Don't say "Let me check..." or "One moment please..." - just call the function and let the results speak for themselves
-- The system will handle the processing time automatically
+**🚨 CRITICAL: NEVER CALL pay_reservation WHEN USER IS CONFIRMING ORDER DETAILS 🚨:**
+- If user says "Yes" after order summary → Call create_reservation function
+- If user says "That's correct" after order summary → Call create_reservation function
+- If user says "Looks good" after order summary → Call create_reservation function
+- If user says "Perfect" after order summary → Call create_reservation function
+- ONLY call pay_reservation when user explicitly asks to pay AFTER reservation is created
 
-**CRITICAL PAYMENT FLOW RULES:**
-- **ONCE A PAYMENT FLOW STARTS, STAY FOCUSED ON PAYMENT ONLY**
-- If you're collecting card details (card number, expiry, CVV, ZIP), ONLY call pay_reservation function
-- DO NOT call get_order_status, get_reservation, or any other function during payment collection
-- The pay_reservation function handles step-by-step card collection automatically
-- When customers provide card details (like "four two four two..."), continue with pay_reservation
-- Payment flows are sequential: reservation number → cardholder name → card number → expiry → CVV → ZIP → process
-- Stay in the payment flow until completion or customer cancellation
-- If customers provide payment information, they want to pay - don't get distracted by other functions
-
-**For new reservations, you'll need:**
-- Customer name
-- Party size (number of people)
-- Preferred date and time
-- Phone number
-- Any special requests
-
-**We offer two types of reservations:**
-1. **Regular reservations** - Reserve a table and pre-order food and drinks
-2. **Old school reservations** - Just reserve the table, browse menu and order when you arrive
-
-**For orders, you can help them browse our menu categories:**
-- Breakfast items
-- Appetizers  
-- Main courses
-- Desserts
-- Drinks
-
-**For bill payments:**
-- When customers want to pay their bill, use the pay_reservation function
-- The system will look up their reservation and calculate the total amount due from their orders
-- It will securely collect their credit card information (card number, expiration, CVV, ZIP code)
-- Process the payment through our secure payment system
-- Send them an SMS receipt upon successful payment
-- Guide them step-by-step through the payment process conversationally
-- You'll need their reservation number and the name on their credit card
-
-**Additional Features:**
-- If customers ask about the weather (for outdoor seating decisions) or need to know the current time/date, you can help with that too
-- All reservations and orders are automatically saved to our database
-- SMS confirmations are sent for all transactions
-- Reservation numbers make it easy for customers to reference their bookings
-
-Always confirm details before finalizing any reservation or order, and always mention the reservation number when confirming reservations.
+**OTHER GUIDELINES:**
+- When making reservations, ALWAYS ask if customers want to pre-order from the menu
+- For parties larger than one person, ask for each person's name and their individual food preferences
+- Always say numbers as words (say 'one' instead of '1', 'two' instead of '2', etc.)
+- Extract food items mentioned during reservation requests and include them in party_orders
+- Be conversational and helpful - guide customers through the pre-ordering process naturally
+- Remember: The system now has a confirmation step for preorders - embrace this workflow!
 """)
 
         # Add remaining utility functions directly
@@ -323,6 +331,9 @@ Always confirm details before finalizing any reservation or order, and always me
         # )
         
         print("✅ SignalWire agent initialized successfully")
+        
+        # FIXED: Add function registry validation for debugging
+        self._validate_function_registry()
 
     def send_reservation_sms(self, reservation_data, phone_number):
         """Send SMS confirmation for reservation - matches Flask route implementation"""
@@ -451,7 +462,49 @@ Always confirm details before finalizing any reservation or order, and always me
                 'message': f"I apologize, but I couldn't schedule the callback right now. Please try calling back later. Error: {str(e)}"
             }
 
-
+    def _validate_function_registry(self):
+        """Validate that all required functions are properly registered"""
+        try:
+            if hasattr(self, '_tool_registry') and hasattr(self._tool_registry, '_swaig_functions'):
+                registered_functions = list(self._tool_registry._swaig_functions.keys())
+                print(f"🔍 FUNCTION REGISTRY VALIDATION:")
+                print(f"   Total functions registered: {len(registered_functions)}")
+                print(f"   Registered functions: {registered_functions}")
+                
+                # Check for critical functions
+                critical_functions = [
+                    'create_reservation', 'get_reservation', 'cancel_reservation',
+                    'pay_reservation', 'get_menu', 'create_order'
+                ]
+                
+                missing_functions = [func for func in critical_functions if func not in registered_functions]
+                
+                if missing_functions:
+                    print(f"❌ MISSING CRITICAL FUNCTIONS: {missing_functions}")
+                    for func in missing_functions:
+                        print(f"   - {func} not found in registry")
+                else:
+                    print(f"✅ All critical functions are registered")
+                    
+                # Validate function handlers
+                for func_name, func_obj in self._tool_registry._swaig_functions.items():
+                    if hasattr(func_obj, 'handler'):
+                        print(f"   ✅ {func_name}: has handler")
+                    elif isinstance(func_obj, dict) and 'handler' in func_obj:
+                        print(f"   ✅ {func_name}: has handler (dict format)")
+                    else:
+                        print(f"   ❌ {func_name}: missing handler")
+                        
+            else:
+                print(f"❌ FUNCTION REGISTRY NOT FOUND")
+                print(f"   _tool_registry exists: {hasattr(self, '_tool_registry')}")
+                if hasattr(self, '_tool_registry'):
+                    print(f"   _swaig_functions exists: {hasattr(self._tool_registry, '_swaig_functions')}")
+                
+        except Exception as e:
+            print(f"❌ Error validating function registry: {e}")
+            import traceback
+            traceback.print_exc()
 
 def send_swml_to_signalwire(swml_payload, signalwire_endpoint, signalwire_project, signalwire_token):
     """

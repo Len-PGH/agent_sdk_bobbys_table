@@ -54,7 +54,8 @@ When customers want to pay their bill, use the appropriate payment function dire
 
 **For Reservation Payments:**
 - Use `pay_reservation` function for reservation bills
-- The function uses SignalWire's SWML pay verb with Stripe integration
+- The function handles everything: finds reservation, shows bill total, collects card details, and processes payment
+- Uses SignalWire's SWML pay verb with Stripe integration
 - Securely collects card details via phone keypad (DTMF) automatically
 - No manual card detail collection needed
 

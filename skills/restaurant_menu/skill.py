@@ -1,6 +1,16 @@
 """
 Restaurant Menu Skill for SignalWire AI Agents
 Provides menu browsing and ordering capabilities
+
+ENHANCED META_DATA CACHING SYSTEM:
+This skill now uses SignalWire's meta_data feature to cache the entire menu for comprehensive search.
+Benefits:
+- Single database query caches complete menu (all categories, prices, descriptions, item IDs)
+- Searches across ALL menu items, not just specific categories
+- Eliminates repeated database queries during conversation
+- Improves item matching (e.g., finds "Chicken Tenders" when user says "chicken fingers")
+- Consistent data across all menu operations
+- 10-minute cache timeout for optimal performance
 """
 
 import os
@@ -221,17 +231,17 @@ class RestaurantMenuSkill(SkillBase):
             if not existing:
                 return number
 
-    def _find_menu_item_fuzzy(self, item_name):
+    def _find_menu_item_fuzzy(self, item_name, cached_menu=None):
         """
         Find menu item using fuzzy matching to handle common misspellings
         
         Args:
             item_name: The item name to search for (potentially misspelled)
+            cached_menu: Optional cached menu data from meta_data to avoid database queries
             
         Returns:
-            MenuItem object if found, None otherwise
+            MenuItem object or dict if found, None otherwise
         """
-        from models import MenuItem
         import re
         
         if not item_name:
@@ -240,22 +250,53 @@ class RestaurantMenuSkill(SkillBase):
         # Normalize the search term
         search_term = item_name.lower().strip()
         
-        # First try exact match (case-insensitive)
-        menu_item = MenuItem.query.filter(
-            MenuItem.name.ilike(search_term)
-        ).filter_by(is_available=True).first()
-        if menu_item:
-            return menu_item
-        
-        # Try partial match
-        menu_item = MenuItem.query.filter(
-            MenuItem.name.ilike(f'%{search_term}%')
-        ).filter_by(is_available=True).first()
-        if menu_item:
-            return menu_item
-        
-        # Get all available menu items for fuzzy matching
-        all_items = MenuItem.query.filter_by(is_available=True).all()
+        # Use cached menu if available, otherwise query database
+        if cached_menu:
+            print(f"🚀 Using cached menu for fuzzy search of '{item_name}'")
+            all_items = cached_menu
+            
+            # Convert to compatible format for existing logic
+            class MenuItemStub:
+                def __init__(self, item_data):
+                    self.id = item_data['id']
+                    self.name = item_data['name']
+                    self.price = item_data['price']
+                    self.category = item_data['category']
+                    self.description = item_data['description']
+                    self.is_available = item_data['is_available']
+            
+            # First try exact match (case-insensitive)
+            for item_data in all_items:
+                if item_data['name'].lower() == search_term and item_data['is_available']:
+                    return MenuItemStub(item_data)
+            
+            # Try partial match
+            for item_data in all_items:
+                if search_term in item_data['name'].lower() and item_data['is_available']:
+                    return MenuItemStub(item_data)
+            
+            # Convert cached items to stub objects for fuzzy matching
+            menu_items = [MenuItemStub(item_data) for item_data in all_items if item_data['is_available']]
+        else:
+            print(f"📊 Using database query for fuzzy search of '{item_name}'")
+            from models import MenuItem
+            
+            # First try exact match (case-insensitive)
+            menu_item = MenuItem.query.filter(
+                MenuItem.name.ilike(search_term)
+            ).filter_by(is_available=True).first()
+            if menu_item:
+                return menu_item
+            
+            # Try partial match
+            menu_item = MenuItem.query.filter(
+                MenuItem.name.ilike(f'%{search_term}%')
+            ).filter_by(is_available=True).first()
+            if menu_item:
+                return menu_item
+            
+            # Get all available menu items for fuzzy matching
+            menu_items = MenuItem.query.filter_by(is_available=True).all()
         
         # Common spelling corrections and variations - FIXED to avoid wrong item selection
         spelling_corrections = {
@@ -273,7 +314,9 @@ class RestaurantMenuSkill(SkillBase):
             'sparkling water': 'sparkling water',
             'water': 'sparkling water',  # Default to sparkling water since it's on menu
             'beer': 'draft beer',  # More specific
-            'wine': 'house wine'   # More specific
+            'wine': 'house wine',   # More specific
+            'chicken fingers': 'chicken tenders',  # Common alternative name
+            'fingers': 'chicken tenders'  # Shorthand for chicken fingers
         }
         
         # Apply spelling corrections
@@ -283,8 +326,12 @@ class RestaurantMenuSkill(SkillBase):
                 corrected_term = search_term.replace(wrong, correct)
                 break
         
-        # Try corrected term
-        if corrected_term != search_term:
+        # Try corrected term with cached menu
+        if corrected_term != search_term and cached_menu:
+            for item_data in cached_menu:
+                if corrected_term in item_data['name'].lower() and item_data['is_available']:
+                    return MenuItemStub(item_data)
+        elif corrected_term != search_term:
             menu_item = MenuItem.query.filter(
                 MenuItem.name.ilike(f'%{corrected_term}%')
             ).filter_by(is_available=True).first()
@@ -295,7 +342,7 @@ class RestaurantMenuSkill(SkillBase):
         best_match = None
         best_score = 0
         
-        for item in all_items:
+        for item in menu_items:
             item_name_lower = item.name.lower()
             
             # Calculate similarity score
@@ -844,7 +891,7 @@ class RestaurantMenuSkill(SkillBase):
         )
     
     def _get_menu_handler(self, args, raw_data):
-        """Handler for get_menu tool"""
+        """Handler for get_menu tool - Uses cached menu from meta_data for comprehensive search"""
 
         try:
             # Import Flask app and models locally to avoid circular import
@@ -860,6 +907,55 @@ class RestaurantMenuSkill(SkillBase):
             from models import MenuItem
             
             with app.app_context():
+                # Get current meta_data
+                meta_data = raw_data.get('meta_data', {}) if raw_data else {}
+                
+                # Check if menu is already cached and still fresh (cache for 10 minutes)
+                from datetime import datetime, timedelta
+                cache_time = meta_data.get('menu_cached_at')
+                cached_menu = meta_data.get('cached_menu', [])
+                
+                if cache_time and cached_menu:
+                    try:
+                        cached_at = datetime.fromisoformat(cache_time)
+                        if datetime.now() - cached_at < timedelta(minutes=10):
+                            print("🚀 Menu cache is still fresh, using cached data")
+                        else:
+                            print("⏰ Menu cache expired, refreshing...")
+                            cached_menu = []
+                    except ValueError:
+                        print("⚠️ Invalid cache timestamp, refreshing...")
+                        cached_menu = []
+                
+                # If no cached menu or cache expired, fetch from database and cache it
+                if not cached_menu:
+                    print("📊 Caching entire menu in meta_data for comprehensive search")
+                    menu_items = MenuItem.query.filter_by(is_available=True).all()
+                    
+                    # Sort by name length (descending) to prioritize compound names for better matching
+                    menu_items = sorted(menu_items, key=lambda item: len(item.name.lower()), reverse=True)
+                    
+                    # Convert to serializable format for meta_data storage
+                    cached_menu = []
+                    for item in menu_items:
+                        cached_menu.append({
+                            'id': item.id,
+                            'name': item.name,
+                            'price': float(item.price),
+                            'category': item.category,
+                            'description': item.description,
+                            'is_available': item.is_available
+                        })
+                    
+                    # Update meta_data with cached menu
+                    meta_data['cached_menu'] = cached_menu
+                    meta_data['menu_cached_at'] = datetime.now().isoformat()
+                    meta_data['menu_item_count'] = len(cached_menu)
+                    
+                    print(f"✅ Cached {len(cached_menu)} menu items in meta_data")
+                else:
+                    print(f"✅ Using cached menu with {len(cached_menu)} items")
+                
                 # Check if user is asking for specific items from conversation
                 call_log = raw_data.get('call_log', []) if raw_data else []
                 specific_item_request = None
@@ -869,68 +965,57 @@ class RestaurantMenuSkill(SkillBase):
                     if entry.get('role') == 'user' and entry.get('content'):
                         content = entry['content'].lower()
                         
-                        # Check for specific item requests
-                        if 'lemonade' in content:
-                            specific_item_request = 'lemonade'
-                            break
-                        elif 'wings' in content:
-                            specific_item_request = 'wings'
-                            break
-                        elif 'burger' in content:
-                            specific_item_request = 'burger'
-                            break
-                        elif 'steak' in content:
-                            specific_item_request = 'steak'
+                        # Use the cached menu to search for specific items mentioned
+                        for menu_item in cached_menu:
+                            item_name_lower = menu_item['name'].lower()
+                            # Check for various forms of the item name
+                            if (item_name_lower in content or
+                                item_name_lower.replace(' ', '') in content or
+                                any(word in content for word in item_name_lower.split() if len(word) > 3)):
+                                specific_item_request = menu_item
+                                print(f"🔍 Found specific item request: {menu_item['name']}")
+                                break
+                        
+                        if specific_item_request:
                             break
                 
-                # If user asked for a specific item, provide detailed info about that item
+                # If user asked for a specific item, provide detailed info about that item and similar items
                 if specific_item_request:
-                    if specific_item_request == 'lemonade':
-                        lemonade_items = MenuItem.query.filter(
-                            MenuItem.name.ilike('%lemonade%'),
-                            MenuItem.is_available == True
-                        ).all()
-                        
-                        if lemonade_items:
-                            message = "Here are our lemonade options: "
-                            item_list = []
-                            for item in lemonade_items:
-                                item_list.append(f"{item.name} for ${item.price:.2f}")
-                            message += ", ".join(item_list) + ". "
-                            message += "Would you like to add any of these to your order?"
-                            return SwaigFunctionResult(message)
-                        else:
-                            return SwaigFunctionResult("I'm sorry, we don't currently have lemonade available on our menu. Would you like to hear about our other drink options?")
+                    item = specific_item_request
+                    message = f"I found {item['name']} for ${item['price']:.2f}. "
                     
-                    elif specific_item_request == 'wings':
-                        wing_items = MenuItem.query.filter(
-                            MenuItem.name.ilike('%wing%'),
-                            MenuItem.is_available == True
-                        ).all()
-                        
-                        if wing_items:
-                            message = "Here are our wing options: "
-                            item_list = []
-                            for item in wing_items:
-                                item_list.append(f"{item.name} for ${item.price:.2f}")
-                            message += ", ".join(item_list) + ". "
-                            message += "Would you like to add any of these to your order?"
-                            return SwaigFunctionResult(message)
+                    # Find similar items in the same category
+                    similar_items = [
+                        menu_item for menu_item in cached_menu 
+                        if (menu_item['category'] == item['category'] and 
+                            menu_item['id'] != item['id'])
+                    ][:3]  # Limit to 3 similar items
+                    
+                    if similar_items:
+                        message += f"We also have other {item['category'].replace('-', ' ').title()} options: "
+                        similar_list = [f"{si['name']} for ${si['price']:.2f}" for si in similar_items]
+                        message += ", ".join(similar_list) + ". "
+                    
+                    message += "Would you like to add any of these to your order?"
+                    
+                    # Return result with cached menu data in meta_data
+                    result = SwaigFunctionResult(message)
+                    result.set_metadata(meta_data)
+                    return result
                 
                 # Detect if this is a SignalWire call and default to text format for voice
-                # SignalWire calls include specific metadata in raw_data
                 is_signalwire_call = (
                     raw_data and 
                     isinstance(raw_data, dict) and 
                     ('content_type' in raw_data or 'app_name' in raw_data or 'call_id' in raw_data)
                 )
                 
-                # Get format preference - default to text for voice calls, json only if explicitly requested
-                default_format = 'text'  # Always default to text for voice-friendly responses
+                # Get format preference - default to text for voice calls
+                default_format = 'text'
                 response_format = args.get('format', default_format).lower()
                 
                 if args.get('category'):
-                    # Normalize category name to match database
+                    # Filter cached menu by category
                     category_map = {
                         'breakfast': 'breakfast',
                         'appetizers': 'appetizers', 
@@ -959,46 +1044,46 @@ class RestaurantMenuSkill(SkillBase):
                     }
                     
                     category = category_map.get(args['category'].lower(), args['category'].lower())
-                    items = MenuItem.query.filter_by(category=category, is_available=True).all()
+                    items = [item for item in cached_menu if item['category'] == category]
                     
                     if not items:
                         display_name = category_display_names.get(category, category.title())
-                        if response_format == 'json':
-                            return SwaigFunctionResult({
-                                "success": False,
-                                "message": f"No items found in {display_name} category",
-                                "category": category,
-                                "items": []
-                            })
-                        else:
-                            return SwaigFunctionResult(f"I couldn't find any items in the {display_name} category. Would you like to hear about our other menu categories?")
+                        message = f"I couldn't find any items in the {display_name} category. Would you like to hear about our other menu categories?"
+                        result = SwaigFunctionResult(message)
+                        result.set_metadata(meta_data)
+                        return result
                     
                     if response_format == 'json':
                         # Return structured JSON data with proper SWAIG format
                         display_name = category_display_names.get(category, category.title())
                         response_text = f"Here are our {display_name} items with {len(items)} options available."
                         
-                        return (
+                        result = (
                             SwaigFunctionResult(response_text)
                             .add_action("menu_data", {
                                 "success": True,
                                 "category": category,
                                 "category_display_name": display_name,
-                                "items": [item.to_dict() for item in items]
+                                "items": items
                             })
                         )
+                        result.set_metadata(meta_data)
+                        return result
                     else:
                         # Return formatted text for voice
                         display_name = category_display_names.get(category, category.title())
                         message = f"Here are our {display_name} items: "
                         item_list = []
                         for item in items:
-                            item_list.append(f"{item.name} for ${item.price:.2f}")
+                            item_list.append(f"{item['name']} for ${item['price']:.2f}")
                         message += ", ".join(item_list) + ". Would you like to hear details about any specific item?"
-                        return SwaigFunctionResult(message)
+                        
+                        result = SwaigFunctionResult(message)
+                        result.set_metadata(meta_data)
+                        return result
                     
                 else:
-                    # Get all menu items organized by category
+                    # Get all menu items organized by category from cached data
                     categories = ['breakfast', 'appetizers', 'main-courses', 'desserts', 'drinks']
                     category_display_names = {
                         'breakfast': 'Breakfast',
@@ -1009,17 +1094,17 @@ class RestaurantMenuSkill(SkillBase):
                     }
                     
                     if response_format == 'json':
-                        # Return structured JSON data with proper SWAIG format
+                        # Return structured JSON data organized by category
                         menu_data = {}
-                        total_items = 0
+                        total_items = len(cached_menu)
+                        
                         for category in categories:
-                            items = MenuItem.query.filter_by(category=category, is_available=True).all()
+                            items = [item for item in cached_menu if item['category'] == category]
                             if items:
                                 menu_data[category] = {
                                     "display_name": category_display_names[category],
-                                    "items": [item.to_dict() for item in items]
+                                    "items": items
                                 }
-                                total_items += len(items)
                         
                         response_text = f"Here's our complete menu with {len(menu_data)} categories and {total_items} items available."
                         
@@ -1032,30 +1117,24 @@ class RestaurantMenuSkill(SkillBase):
                                 "total_items": total_items
                             })
                         )
-                        # Store menu data in meta_data for future reference
-                        result.add_action("set_meta_data", {
-                            "menu_data": menu_data,
-                            "menu_retrieved_at": datetime.now().isoformat(),
-                            "total_items": total_items
-                        })
+                        result.set_metadata(meta_data)
                         return result
                     else:
                         # Return formatted text for voice - more concise for phone calls
-                        # Get all available items across all categories
-                        all_items = MenuItem.query.filter_by(is_available=True).all()
-                        
-                        if not all_items:
-                            return SwaigFunctionResult("I'm sorry, our menu is currently unavailable. Please try again later.")
+                        if not cached_menu:
+                            result = SwaigFunctionResult("I'm sorry, our menu is currently unavailable. Please try again later.")
+                            result.set_metadata(meta_data)
+                            return result
                         
                         # Group items by category for organized presentation
                         categories_with_items = {}
-                        for item in all_items:
-                            if item.category not in categories_with_items:
-                                categories_with_items[item.category] = []
-                            categories_with_items[item.category].append(item)
+                        for item in cached_menu:
+                            if item['category'] not in categories_with_items:
+                                categories_with_items[item['category']] = []
+                            categories_with_items[item['category']].append(item)
                         
                         # Build comprehensive menu response
-                        message = f"Here's our complete menu with {len(all_items)} items available. "
+                        message = f"Here's our complete menu with {len(cached_menu)} items available. "
                         
                         # List items by category
                         for category, items in categories_with_items.items():
@@ -1063,22 +1142,24 @@ class RestaurantMenuSkill(SkillBase):
                             message += f"For {category_display}, we have: "
                             item_list = []
                             for item in items:
-                                item_list.append(f"{item.name} for ${item.price:.2f}")
+                                item_list.append(f"{item['name']} for ${item['price']:.2f}")
                             message += ", ".join(item_list) + ". "
                         
                         message += "Would you like to hear more details about any category or specific item?"
                         
-                        # Also include the menu data in the result for programmatic access
+                        # Include the menu data in the result for programmatic access and preserve in meta_data
                         result = SwaigFunctionResult(message)
                         result.add_action("menu_data", {
                             "success": True,
-                            "total_items": len(all_items),
+                            "total_items": len(cached_menu),
                             "categories": list(categories_with_items.keys()),
-                            "items": [item.to_dict() for item in all_items]
+                            "items": cached_menu
                         })
+                        result.set_metadata(meta_data)
                         return result
                 
         except Exception as e:
+            print(f"❌ Error in get_menu handler: {e}")
             if args.get('format', 'text').lower() == 'json':
                 return (
                     SwaigFunctionResult("Sorry, there was an error retrieving the menu.")
@@ -1091,26 +1172,48 @@ class RestaurantMenuSkill(SkillBase):
             else:
                 return SwaigFunctionResult(f"Sorry, there was an error retrieving the menu: {str(e)}")
     
-    def _extract_order_from_conversation(self, user_messages):
-        """Extract order items from natural language conversation"""
+    def _extract_order_from_conversation(self, user_messages, cached_menu=None):
+        """Extract order items from natural language conversation using cached menu when available"""
         try:
-            # Import Flask app and models locally
-            import sys
-            import os
             import re
             
-            # Add the parent directory to sys.path to import app
-            parent_dir = os.path.dirname(os.path.dirname(__file__))
-            if parent_dir not in sys.path:
-                sys.path.insert(0, parent_dir)
-            
-            from app import app
-            from models import MenuItem
-            
-            with app.app_context():
-                # Get all menu items for matching
-                menu_items = MenuItem.query.filter_by(is_available=True).all()
+            # Use cached menu if available, otherwise query database
+            if cached_menu:
+                print("🚀 Using cached menu for order extraction")
+                # Convert cached menu to compatible format
+                menu_items = []
+                class MenuItemStub:
+                    def __init__(self, item_data):
+                        self.id = item_data['id']
+                        self.name = item_data['name']
+                        self.price = item_data['price']
+                        self.category = item_data['category']
+                        self.description = item_data['description']
+                        self.is_available = item_data['is_available']
+                
+                for item_data in cached_menu:
+                    if item_data['is_available']:
+                        menu_items.append(MenuItemStub(item_data))
+                
                 menu_item_names = [item.name.lower() for item in menu_items]
+            else:
+                print("📊 Using database query for order extraction")
+                # Import Flask app and models locally
+                import sys
+                import os
+                
+                # Add the parent directory to sys.path to import app
+                parent_dir = os.path.dirname(os.path.dirname(__file__))
+                if parent_dir not in sys.path:
+                    sys.path.insert(0, parent_dir)
+                
+                from app import app
+                from models import MenuItem
+                
+                with app.app_context():
+                    # Get all menu items for matching
+                    menu_items = MenuItem.query.filter_by(is_available=True).all()
+                    menu_item_names = [item.name.lower() for item in menu_items]
                 
                 extracted_items = []
                 
@@ -2386,10 +2489,14 @@ class RestaurantMenuSkill(SkillBase):
                 if not order:
                     return SwaigFunctionResult(f"Order #{args['order_id']} not found.")
                 
-                # Verify customer phone if provided (but skip verification for update_info action)
+                # Optional phone number check (warning only, not blocking)
                 if args.get('customer_phone') and action != 'update_info':
                     if order.customer_phone != args['customer_phone']:
-                        return SwaigFunctionResult(f"Phone number doesn't match the order. Please verify your information.")
+                        print(f"⚠️ Phone number mismatch for order #{args['order_id']}:")
+                        print(f"   Order phone: {order.customer_phone}")
+                        print(f"   Provided phone: {args['customer_phone']}")
+                        print(f"   Note: People may have multiple phone numbers, continuing anyway")
+                        # Continue processing - don't block the order update
                 
                 # Check if order is still pending
                 if order.status.lower() != 'pending':
