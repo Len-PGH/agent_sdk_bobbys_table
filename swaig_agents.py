@@ -312,7 +312,7 @@ When customers ask you to "surprise them" with menu items:
         # Example 1: External payment processing service
         # self.add_function_include(
         #     url="https://payments.example.com/swaig",
-        #     functions=["process_payment", "refund_payment"],
+        #     functions=["pay_reservation", "refund_payment"],
         #     meta_data={"service": "payment_processor", "version": "v1"}
         # )
         
