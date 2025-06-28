@@ -19,12 +19,12 @@ SIGNALWIRE_FROM_NUMBER = os.getenv('SIGNALWIRE_FROM_NUMBER', '+15551234567')
 # Simple state manager replacement
 class SimpleStateManager:
     """Simple file-based state manager for conversation tracking"""
-    
+
     def __init__(self, filename):
         self.filename = filename
         self.state = {}
         self.load_state()
-    
+
     def load_state(self):
         """Load state from file"""
         try:
@@ -34,7 +34,7 @@ class SimpleStateManager:
         except Exception as e:
             print(f"⚠️ Could not load state: {e}")
             self.state = {}
-    
+
     def save_state(self):
         """Save state to file"""
         try:
@@ -42,16 +42,16 @@ class SimpleStateManager:
                 json.dump(self.state, f, indent=2)
         except Exception as e:
             print(f"⚠️ Could not save state: {e}")
-    
+
     def get(self, key, default=None):
         """Get value from state"""
         return self.state.get(key, default)
-    
+
     def set(self, key, value):
         """Set value in state"""
         self.state[key] = value
         self.save_state()
-    
+
     def delete(self, key):
         """Delete key from state"""
         if key in self.state:
@@ -61,7 +61,7 @@ class SimpleStateManager:
 # Full SignalWire agent that extends AgentBase with skills-based architecture
 class FullRestaurantReceptionistAgent(AgentBase):
     """Modern restaurant receptionist agent using skills-based architecture"""
-    
+
     def __init__(self):
         super().__init__(
             name="restaurant-receptionist",
@@ -69,10 +69,10 @@ class FullRestaurantReceptionistAgent(AgentBase):
             host="0.0.0.0",
             port=8080
         )
-        
+
         # Add English language support
         self.add_language("English", "en-US", "rime.spore:mistv2")
-        
+
         # Initialize state manager for conversation tracking
         try:
             self.state_manager = SimpleStateManager("restaurant_agent_state.json")
@@ -80,7 +80,7 @@ class FullRestaurantReceptionistAgent(AgentBase):
         except Exception as e:
             print(f"⚠️ Could not initialize state manager: {e}")
             self.state_manager = None
-        
+
         # Add pre-built skills for enhanced functionality
         try:
             # Add datetime skill for time/date queries
@@ -88,7 +88,7 @@ class FullRestaurantReceptionistAgent(AgentBase):
             print("✅ Added datetime skill")
         except Exception as e:
             print(f"⚠️ Could not add datetime skill: {e}")
-        
+
         try:
             # Add weather skill if API key is available
             weather_api_key = os.getenv('WEATHER_API_KEY')
@@ -103,7 +103,7 @@ class FullRestaurantReceptionistAgent(AgentBase):
                 print("⚠️ Weather API key not found, skipping weather skill")
         except Exception as e:
             print(f"⚠️ Could not add weather skill: {e}")
-        
+
         try:
             # Add web search skill if API key is available
             search_api_key = os.getenv('SEARCH_API_KEY')
@@ -122,7 +122,7 @@ class FullRestaurantReceptionistAgent(AgentBase):
         try:
             # Import and add reservation management skill
             from skills.restaurant_reservation.skill import RestaurantReservationSkill
-            
+
             skill_params = {
                 "swaig_fields": {
                     "secure": True,
@@ -136,7 +136,7 @@ class FullRestaurantReceptionistAgent(AgentBase):
                     }
                 }
             }
-            
+
             reservation_skill = RestaurantReservationSkill(self, skill_params)
             if reservation_skill.setup():
                 reservation_skill.register_tools()
@@ -149,7 +149,7 @@ class FullRestaurantReceptionistAgent(AgentBase):
         try:
             # Import and add menu and ordering skill
             from skills.restaurant_menu.skill import RestaurantMenuSkill
-            
+
             skill_params = {
                 "swaig_fields": {
                     "secure": True,
@@ -163,7 +163,7 @@ class FullRestaurantReceptionistAgent(AgentBase):
                     }
                 }
             }
-            
+
             menu_skill = RestaurantMenuSkill(self, skill_params)
             if menu_skill.setup():
                 menu_skill.register_tools()
@@ -172,14 +172,14 @@ class FullRestaurantReceptionistAgent(AgentBase):
                 print("⚠️ Restaurant menu skill setup failed")
         except Exception as e:
             print(f"⚠️ Could not add restaurant menu skill: {e}")
-        
+
         # Set up the agent's capabilities
         self.set_params({
             "end_of_speech_timeout": 500,
             "silence_timeout": 500,
             "max_speech_timeout": 15000
         })
-        
+
         # Add the agent's prompt with enhanced capabilities
         self.set_prompt_text(f"""
 Hi there! I'm Bobby from Bobby's Table. Great to have you call us today! How can I help you out? Whether you're looking to make a reservation, check on an existing one, hear about our menu, or place an order, I'm here to help make it easy for you.
@@ -290,7 +290,7 @@ When customers ask you to "surprise them" with menu items:
             },
             self._transfer_to_manager_handler
         )
-        
+
         self.define_tool(
             "schedule_callback",
             "Schedule a callback for the customer",
@@ -305,33 +305,33 @@ When customers ask you to "surprise them" with menu items:
             },
             self._schedule_callback_handler
         )
-        
+
         # Example: Add remote function includes for external services
         # Uncomment these if you have external SWAIG services to include
-        
+
         # Example 1: External payment processing service
         # self.add_function_include(
         #     url="https://payments.example.com/swaig",
-        #     functions=["pay_reservation", "refund_payment"],
+        #     functions=["process_payment", "refund_payment"],
         #     meta_data={"service": "payment_processor", "version": "v1"}
         # )
-        
+
         # Example 2: External loyalty program service  
         # self.add_function_include(
         #     url="https://loyalty.example.com/swaig",
         #     functions=["check_loyalty_points", "redeem_points"],
         #     meta_data={"service": "loyalty_program", "version": "v2"}
         # )
-        
+
         # Example 3: External inventory service
         # self.add_function_include(
         #     url="https://inventory.example.com/swaig", 
         #     functions=["check_ingredient_availability"],
         #     meta_data={"service": "inventory_system", "version": "v1"}
         # )
-        
+
         print("✅ SignalWire agent initialized successfully")
-        
+
         # FIXED: Add function registry validation for debugging
         self._validate_function_registry()
 
@@ -339,7 +339,7 @@ When customers ask you to "surprise them" with menu items:
         """Send SMS confirmation for reservation - matches Flask route implementation"""
         try:
             from signalwire_agents.core.function_result import SwaigFunctionResult
-            
+
             # Convert time to 12-hour format for SMS
             try:
                 from datetime import datetime
@@ -347,7 +347,7 @@ When customers ask you to "surprise them" with menu items:
                 time_12hr = time_obj.strftime('%I:%M %p').lstrip('0')
             except (ValueError, TypeError):
                 time_12hr = str(reservation_data['time'])
-            
+
             sms_body = f"🍽️ Bobby's Table Reservation Confirmed!\n\n"
             sms_body += f"Name: {reservation_data['name']}\n"
             sms_body += f"Date: {reservation_data['date']}\n"
@@ -355,53 +355,53 @@ When customers ask you to "surprise them" with menu items:
             party_text = "person" if reservation_data['party_size'] == 1 else "people"
             sms_body += f"Party Size: {reservation_data['party_size']} {party_text}\n"
             sms_body += f"Reservation Number: {reservation_data.get('reservation_number', reservation_data['id'])}\n"
-            
+
             if reservation_data.get('special_requests'):
                 sms_body += f"Special Requests: {reservation_data['special_requests']}\n"
-            
+
             sms_body += f"\nWe look forward to serving you!\nBobby's Table Restaurant"
             sms_body += f"\nReply STOP to stop."
-            
+
             # Get SignalWire phone number from environment
             signalwire_from_number = os.getenv('SIGNALWIRE_FROM_NUMBER', '+15551234567')
-            
+
             # Send SMS using SignalWire Agents SDK
             sms_function_result = SwaigFunctionResult().send_sms(
                 to_number=phone_number,
                 from_number=signalwire_from_number,
                 body=sms_body
             )
-            
+
             return {'success': True, 'sms_sent': True, 'sms_result': 'SMS sent successfully'}
-            
+
         except Exception as e:
             return {'success': False, 'sms_sent': False, 'error': str(e)}
-        
+
     def _transfer_to_manager_handler(self, args, raw_data):
         """Handler for transfer_to_manager tool"""
         try:
             reason = args.get('reason', 'Customer request')
             customer_info = args.get('customer_info', 'No additional information provided')
-            
+
             # Log the transfer request
             print(f"📞 TRANSFER REQUEST:")
             print(f"   Reason: {reason}")
             print(f"   Customer Info: {customer_info}")
             print(f"   Timestamp: {datetime.now()}")
-            
+
             # In a real implementation, this would initiate an actual call transfer
             # For now, we'll provide a helpful response
             message = f"I understand you need to speak with a manager about {reason}. "
             message += "I'm transferring you now. Please hold while I connect you with our management team. "
             message += "They'll be able to assist you with your specific needs."
-            
+
             return {
                 'success': True,
                 'message': message,
                 'transfer_initiated': True,
                 'reason': reason
             }
-            
+
         except Exception as e:
             return {
                 'success': False,
@@ -412,7 +412,7 @@ When customers ask you to "surprise them" with menu items:
         """Handler for schedule_callback tool"""
         try:
             from datetime import datetime
-            
+
             # Extract phone number from args or raw_data
             phone_number = args.get('phone_number')
             if not phone_number and raw_data:
@@ -423,30 +423,30 @@ When customers ask you to "surprise them" with menu items:
                     raw_data.get('from') or
                     raw_data.get('from_number')
                 )
-            
+
             preferred_time = args.get('preferred_time', 'as soon as possible')
             reason = args.get('reason', 'general inquiry')
-            
+
             # If still no phone number, return error
             if not phone_number:
                 return {
                     'success': False,
                     'message': "I need your phone number to schedule a callback. Could you please provide your phone number?"
                 }
-            
+
             # Log the callback request
             print(f"📅 CALLBACK REQUEST:")
             print(f"   Phone: {phone_number}")
             print(f"   Preferred Time: {preferred_time}")
             print(f"   Reason: {reason}")
             print(f"   Timestamp: {datetime.now()}")
-            
+
             # In a real implementation, this would schedule an actual callback
             # For now, we'll provide a confirmation response
             message = f"Perfect! I've scheduled a callback for {phone_number} at {preferred_time} regarding {reason}. "
             message += "One of our team members will call you back at the requested time. "
             message += "Thank you for choosing Bobby's Table!"
-            
+
             return {
                 'success': True,
                 'message': message,
@@ -455,7 +455,7 @@ When customers ask you to "surprise them" with menu items:
                 'preferred_time': preferred_time,
                 'reason': reason
             }
-            
+
         except Exception as e:
             return {
                 'success': False,
@@ -470,22 +470,22 @@ When customers ask you to "surprise them" with menu items:
                 print(f"🔍 FUNCTION REGISTRY VALIDATION:")
                 print(f"   Total functions registered: {len(registered_functions)}")
                 print(f"   Registered functions: {registered_functions}")
-                
+
                 # Check for critical functions
                 critical_functions = [
                     'create_reservation', 'get_reservation', 'cancel_reservation',
                     'pay_reservation', 'get_menu', 'create_order'
                 ]
-                
+
                 missing_functions = [func for func in critical_functions if func not in registered_functions]
-                
+
                 if missing_functions:
                     print(f"❌ MISSING CRITICAL FUNCTIONS: {missing_functions}")
                     for func in missing_functions:
                         print(f"   - {func} not found in registry")
                 else:
                     print(f"✅ All critical functions are registered")
-                    
+
                 # Validate function handlers
                 for func_name, func_obj in self._tool_registry._swaig_functions.items():
                     if hasattr(func_obj, 'handler'):
@@ -494,13 +494,13 @@ When customers ask you to "surprise them" with menu items:
                         print(f"   ✅ {func_name}: has handler (dict format)")
                     else:
                         print(f"   ❌ {func_name}: missing handler")
-                        
+
             else:
                 print(f"❌ FUNCTION REGISTRY NOT FOUND")
                 print(f"   _tool_registry exists: {hasattr(self, '_tool_registry')}")
                 if hasattr(self, '_tool_registry'):
                     print(f"   _swaig_functions exists: {hasattr(self._tool_registry, '_swaig_functions')}")
-                
+
         except Exception as e:
             print(f"❌ Error validating function registry: {e}")
             import traceback
@@ -533,8 +533,6 @@ if __name__ == "__main__":
     print("📞 Voice Interface: http://localhost:8080/receptionist")
     print("🔧 SWAIG Functions: http://localhost:8080/swaig")
     print("--------------------------------------------------")
-    
+
     receptionist_agent = FullRestaurantReceptionistAgent()
     receptionist_agent.serve(host="0.0.0.0", port=8080)
-
- 
