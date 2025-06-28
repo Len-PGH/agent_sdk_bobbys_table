@@ -725,9 +725,14 @@ class RestaurantReservationSkill(SkillBase):
                 })
                 
                 # Get payment URLs from environment
-                base_url = os.getenv('BASE_URL', 'https://localhost:8080')
-                payment_connector_url = os.getenv('PAYMENT_CONNECTOR_URL', f"{base_url}/api/payment-processor")
-                status_url = os.getenv('PAYMENT_STATUS_URL', f"{base_url}/api/signalwire/payment-callback")
+                base_url = os.getenv('SIGNALWIRE_PAYMENT_CONNECTOR_URL') or os.getenv('BASE_URL', 'https://localhost:8080')
+                
+                if base_url and not base_url.endswith('/api/payment-processor'):
+                    payment_connector_url = f"{base_url.rstrip('/')}/api/payment-processor"
+                else:
+                    payment_connector_url = base_url or f"{os.getenv('BASE_URL', 'https://localhost:8080')}/api/payment-processor"
+                
+                status_url = payment_connector_url.replace('/api/payment-processor', '/api/signalwire/payment-callback')
                 
                 print(f"🔗 Using payment connector URL: {payment_connector_url}")
                 
