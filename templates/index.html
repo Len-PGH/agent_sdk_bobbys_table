@@ -11,7 +11,7 @@
         <h2 class="card-title mb-0 fw-semibold heading-gradient">Current Reservations</h2>
         <a href="{{ url_for('new_reservation') }}" class="btn btn-accent">Create New Reservation</a>
     </div>
-    
+
     <!-- Search Form -->
     <div class="row mb-4">
         <div class="col-md-8">
@@ -122,8 +122,10 @@
 // currentReservationId is declared in calendar.js, so we'll use window.currentReservationId
 
 function openPaymentModal(reservationId, customerName, totalAmount) {
-    window.currentReservationId = reservationId;
+    console.log('Opening payment modal for reservation:', reservationId, 'Customer:', customerName, 'Amount:', totalAmount);
     
+    window.currentReservationId = reservationId;
+
     // Set the total amount for payment.js
     if (typeof window.setCurrentTotalAmount === 'function') {
         window.setCurrentTotalAmount(totalAmount);
@@ -131,21 +133,68 @@ function openPaymentModal(reservationId, customerName, totalAmount) {
         // Fallback: set it directly on the payment.js context
         window.currentTotalAmount = totalAmount;
     }
-    
-    // Populate payment details
-    const paymentDetails = document.getElementById('paymentDetails');
-    paymentDetails.innerHTML = `
-        <div class="alert alert-info">
-            <h6><i class="fas fa-info-circle me-2"></i>Payment Summary</h6>
-            <p class="mb-1"><strong>Customer:</strong> ${customerName}</p>
-            <p class="mb-1"><strong>Reservation ID:</strong> ${reservationId}</p>
-            <p class="mb-0"><strong>Total Amount:</strong> $${totalAmount.toFixed(2)}</p>
-        </div>
-    `;
-    
-    // Show the modal
-    const paymentModal = new bootstrap.Modal(document.getElementById('paymentModal'));
-    paymentModal.show();
+
+    // Fetch full reservation details for better payment summary
+    fetch(`/api/reservations/${reservationId}`)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            return response.json();
+        })
+        .then(reservation => {
+            // Store reservation data for payment.js
+            window.currentReservationData = {
+                ...reservation,
+                totalBill: totalAmount,
+                time: new Date(`1970-01-01T${reservation.time}`).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })
+            };
+
+            // Populate payment details
+            const paymentDetails = document.getElementById('paymentDetails');
+            if (paymentDetails) {
+                paymentDetails.innerHTML = `
+                    <div class="alert alert-info">
+                        <h6><i class="fas fa-info-circle me-2"></i>Payment Summary</h6>
+                        <p class="mb-1"><strong>Customer:</strong> ${reservation.name}</p>
+                        <p class="mb-1"><strong>Reservation #:</strong> ${reservation.reservation_number}</p>
+                        <p class="mb-1"><strong>Date & Time:</strong> ${reservation.date} at ${window.currentReservationData.time}</p>
+                        <p class="mb-1"><strong>Party Size:</strong> ${reservation.party_size} ${reservation.party_size === 1 ? 'person' : 'people'}</p>
+                        <p class="mb-0"><strong>Total Amount:</strong> $${totalAmount.toFixed(2)}</p>
+                    </div>
+                `;
+
+                // Show the modal
+                const paymentModal = new bootstrap.Modal(document.getElementById('paymentModal'));
+                paymentModal.show();
+            } else {
+                console.error('Payment details element not found');
+                alert('Payment modal not available');
+            }
+        })
+        .catch(error => {
+            console.error('Error fetching reservation details:', error);
+            
+            // Fallback: show basic payment modal
+            const paymentDetails = document.getElementById('paymentDetails');
+            if (paymentDetails) {
+                paymentDetails.innerHTML = `
+                    <div class="alert alert-info">
+                        <h6><i class="fas fa-info-circle me-2"></i>Payment Summary</h6>
+                        <p class="mb-1"><strong>Customer:</strong> ${customerName}</p>
+                        <p class="mb-1"><strong>Reservation ID:</strong> ${reservationId}</p>
+                        <p class="mb-0"><strong>Total Amount:</strong> $${totalAmount.toFixed(2)}</p>
+                    </div>
+                `;
+
+                // Show the modal
+                const paymentModal = new bootstrap.Modal(document.getElementById('paymentModal'));
+                paymentModal.show();
+            } else {
+                console.error('Payment details element not found');
+                alert('Payment modal not available');
+            }
+        });
 }
 
 // Handle successful payment
@@ -169,10 +218,10 @@ function handlePaymentSuccess(paymentIntentId, amount) {
             // Close modal
             const paymentModal = bootstrap.Modal.getInstance(document.getElementById('paymentModal'));
             paymentModal.hide();
-            
+
             // Show success message
             alert('Payment successful! The page will refresh to show the updated status.');
-            
+
             // Refresh the page to show updated payment status
             window.location.reload();
         } else {
@@ -188,29 +237,40 @@ function handlePaymentSuccess(paymentIntentId, amount) {
 // Make handlePaymentSuccess available globally for payment.js
 window.handlePaymentSuccess = handlePaymentSuccess;
 
-// Edit Reservation Modal Functions
+// Define openEditReservationModal function that was missing
 function openEditReservationModal(reservationId) {
-    // Fetch reservation data
+    console.log('Opening edit modal for reservation:', reservationId);
+    
+    // Use the calendar.js editReservation function if available
+    if (typeof editReservation === 'function') {
+        editReservation(reservationId);
+        return;
+    }
+    
+    // Fallback: Fetch reservation data directly
     fetch(`/api/reservations/${reservationId}`)
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                populateEditModal(data.reservation);
-                const editModal = new bootstrap.Modal(document.getElementById('editReservationModal'));
-                editModal.show();
-            } else {
-                alert('Error loading reservation data: ' + data.message);
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
+            return response.json();
+        })
+        .then(reservation => {
+            populateEditModal(reservation);
+            const editModal = new bootstrap.Modal(document.getElementById('editReservationModal'));
+            editModal.show();
         })
         .catch(error => {
-            console.error('Error:', error);
-            alert('Error loading reservation data');
+            console.error('Error loading reservation:', error);
+            alert('Error loading reservation data: ' + error.message);
         });
 }
 
+// Edit Reservation Modal Functions
+
 function populateEditModal(reservation) {
-    
-    
+    console.log('Populating edit modal with:', reservation);
+
     // Populate basic fields
     document.getElementById('editReservationId').value = reservation.id;
     document.getElementById('editReservationNumber').textContent = reservation.reservation_number;
@@ -220,17 +280,18 @@ function populateEditModal(reservation) {
     document.getElementById('editTime').value = reservation.time;
     document.getElementById('editPhone').value = reservation.phone_number;
     document.getElementById('editRequests').value = reservation.special_requests || '';
-    
+
     // Set old school reservation checkbox
     const hasOrders = reservation.orders && reservation.orders.length > 0;
-    document.getElementById('editOldSchoolReservation').checked = !hasOrders;
-    
-    
-    
+    const oldSchoolCheckbox = document.getElementById('editOldSchoolReservation');
+    if (oldSchoolCheckbox) {
+        oldSchoolCheckbox.checked = !hasOrders;
+    }
+
     // Store reservation data globally for the calendar.js functions to use
     window.currentEditReservationData = reservation;
     window.currentReservationId = reservation.id;
-    
+
     // Initialize the party orders section using calendar.js functions
     if (typeof renderEditPartyOrderForms === 'function') {
         // Ensure menu data is loaded first
@@ -254,6 +315,10 @@ function populateEditModal(reservation) {
                     });
                     window.menuData = Object.values(categories);
                     renderEditPartyOrderForms(reservation);
+                })
+                .catch(error => {
+                    console.error('Error loading menu items:', error);
+                    renderEditPartyOrdersBasic(reservation);
                 });
         }
     } else {
@@ -265,44 +330,134 @@ function populateEditModal(reservation) {
 function renderEditPartyOrdersBasic(reservation) {
     const container = document.getElementById('editPartyOrders');
     container.innerHTML = '';
-    
+
     // Create party order forms based on existing orders or party size
     const partySize = reservation.party_size;
     const orders = reservation.orders || [];
-    
+
     for (let i = 0; i < partySize; i++) {
         const order = orders[i] || null;
         const personName = order ? order.person_name : `Person ${i + 1}`;
-        
+
         const orderDiv = document.createElement('div');
         orderDiv.className = 'party-order mb-3 p-3 border rounded';
         orderDiv.innerHTML = `
             <h6 class="fw-bold">${personName}</h6>
             <input type="hidden" name="person_names[]" value="${personName}">
             <div class="order-items">
-                ${order && order.order_items ? order.order_items.map(item => `
+                ${order && order.items ? order.items.map(item => `
                     <div class="d-flex justify-content-between align-items-center mb-2">
                         <span>${item.menu_item.name} x${item.quantity}</span>
                         <span>$${(item.price_at_time * item.quantity).toFixed(2)}</span>
                     </div>
-                `).join('') : '<p class="text-muted">No items ordered</p>'}
-            </div>
+                `).join('') : `
+                    <p class="text-muted mb-0">No items ordered yet</p>
+                `}</div>
         `;
         container.appendChild(orderDiv);
     }
 }
 
 // Handle old school reservation toggle in edit modal
-document.getElementById('editOldSchoolReservation').addEventListener('change', function() {
-    const editOrderSection = document.getElementById('editOrderSection');
-    if (this.checked) {
-        editOrderSection.style.display = 'none';
-    } else {
-        editOrderSection.style.display = 'block';
+document.addEventListener('DOMContentLoaded', function() {
+    const editOldSchoolCheckbox = document.getElementById('editOldSchoolReservation');
+    if (editOldSchoolCheckbox) {
+        editOldSchoolCheckbox.addEventListener('change', function() {
+            const editOrderSection = document.getElementById('editOrderSection');
+            if (editOrderSection) {
+                if (this.checked) {
+                    editOrderSection.style.display = 'none';
+                } else {
+                    editOrderSection.style.display = 'block';
+                }
+            }
+        });
+    }
+
+    // Handle edit reservation form submission if calendar.js doesn't handle it
+    const editForm = document.getElementById('editReservationForm');
+    if (editForm) {
+        editForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            // Check if calendar.js is handling this
+            if (typeof window.currentReservationId === 'undefined' || !window.currentReservationId) {
+                alert('No reservation selected for editing');
+                return;
+            }
+
+            const formData = new FormData(this);
+            
+            // Check if this is an old school reservation
+            const isOldSchool = document.getElementById('editOldSchoolReservation').checked;
+
+            if (!isOldSchool) {
+                // Collect party orders only if not old school
+                const partyOrders = [];
+                const partySize = parseInt(document.getElementById('editPartySize').value) || 1;
+                const nameInputs = document.querySelectorAll('#editPartyOrders .party-member-name');
+
+                for (let i = 0; i < partySize; i++) {
+                    const name = nameInputs[i] ? nameInputs[i].value || '' : '';
+                    const items = [];
+                    document.querySelectorAll(`#editPartyOrders input.menu-qty[data-person="${i}"]`).forEach(function(input) {
+                        if (parseInt(input.value) > 0) {
+                            items.push({
+                                menu_item_id: input.dataset.id,
+                                quantity: input.value
+                            });
+                        }
+                    });
+                    partyOrders.push({ name, items });
+                }
+                formData.append('party_orders', JSON.stringify(partyOrders));
+            } else {
+                // For old school reservations, send empty party orders
+                formData.append('party_orders', JSON.stringify([]));
+            }
+
+            // Convert FormData to JSON object
+            const jsonData = {};
+            for (let [key, value] of formData.entries()) {
+                jsonData[key] = value;
+            }
+
+            // Submit the form
+            fetch(`/api/reservations/${window.currentReservationId}`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(jsonData)
+            }).then(resp => {
+                if (!resp.ok) {
+                    throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
+                }
+                return resp.json();
+            })
+            .then(data => {
+                if (data.success) {
+                    // Close modal and refresh page
+                    bootstrap.Modal.getInstance(document.getElementById('editReservationModal')).hide();
+                    
+                    // Refresh calendar if available, otherwise refresh page
+                    if (typeof calendar !== 'undefined' && calendar.refetchEvents) {
+                        calendar.refetchEvents();
+                    } else {
+                        window.location.reload();
+                    }
+                    
+                    alert('Reservation updated successfully!');
+                } else {
+                    alert('Error: ' + (data.error || 'Could not update reservation.'));
+                }
+            }).catch(error => {
+                console.error('Error:', error);
+                alert('An error occurred while updating the reservation: ' + error.message);
+            });
+        });
     }
 });
-
-// Note: Form submission is handled by calendar.js
 
 // Add periodic refresh for payment status updates
 let paymentStatusRefreshInterval = null;
@@ -312,17 +467,17 @@ function startPaymentStatusRefresh() {
     if (paymentStatusRefreshInterval) {
         return;
     }
-    
+
     console.log('🔍 Starting payment status refresh for index page');
-    
+
     // Check for payment status updates every 10 seconds
     paymentStatusRefreshInterval = setInterval(() => {
         // Check if there are any unpaid reservations visible
         const unpaidBadges = document.querySelectorAll('.badge.bg-danger.clickable-payment');
-        
+
         if (unpaidBadges.length > 0) {
             console.log(`🔍 Checking payment status for ${unpaidBadges.length} unpaid reservations`);
-            
+
             // Refresh the page to get updated payment statuses
             // We use a simple page refresh since the index page shows multiple reservations
             // and it's more efficient than checking each one individually
@@ -338,7 +493,7 @@ function startPaymentStatusRefresh() {
                 const parser = new DOMParser();
                 const doc = parser.parseFromString(html, 'text/html');
                 const newUnpaidBadges = doc.querySelectorAll('.badge.bg-danger.clickable-payment');
-                
+
                 // If the number of unpaid reservations has changed, refresh the page
                 if (newUnpaidBadges.length !== unpaidBadges.length) {
                     console.log('✅ Payment status changed detected, refreshing page');
@@ -394,4 +549,4 @@ window.addEventListener('beforeunload', function() {
     transform: scale(0.98);
 }
 </style>
-{% endblock %} 
+{% endblock %}
