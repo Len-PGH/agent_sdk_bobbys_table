@@ -19,7 +19,14 @@ def main():
 
     try:
         # Import and run the Flask app with integrated SWAIG agents
-        from app import app
+        from app import app, cleanup_payment_sessions_on_startup, start_payment_session_cleanup_scheduler
+        
+        # Clean up any orphaned payment sessions from previous runs
+        cleanup_payment_sessions_on_startup()
+        
+        # Start automatic cleanup scheduler
+        start_payment_session_cleanup_scheduler()
+        
         app.run(host="0.0.0.0", port=8080, debug=True)
 
     except KeyboardInterrupt:

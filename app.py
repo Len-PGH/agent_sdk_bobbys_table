@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import or_
 import queue
 import threading
+import time
 # Import moved to avoid circular import
 
 load_dotenv()
@@ -165,7 +166,8 @@ with app.app_context():
                     ('payment_status', "VARCHAR(20) DEFAULT 'unpaid'"),
                     ('payment_intent_id', "VARCHAR(100)"),
                     ('payment_amount', "FLOAT"),
-                    ('payment_date', "DATETIME")
+                    ('payment_date', "DATETIME"),
+                    ('payment_method', "VARCHAR(50)")
                 ]
                 
                 migration_needed = False
@@ -195,8 +197,70 @@ with app.app_context():
                 import traceback
                 traceback.print_exc()
         
-        # Run migration
+        # Database migration: Add missing payment_method column to reservations table
+        def migrate_reservations_table():
+            """Add payment_method column to reservations table if it doesn't exist"""
+            try:
+                import sqlite3
+                
+                # Use direct SQLite connection for more reliable migration
+                db_path = 'instance/restaurant.db'
+                
+                # Check if database file exists
+                if not os.path.exists(db_path):
+                    print("⚠️ Database file doesn't exist, creating new one")
+                    return
+                
+                # Direct SQLite connection for migration
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                
+                # Check if reservations table exists
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='reservations'")
+                if not cursor.fetchone():
+                    print("⚠️ Reservations table doesn't exist yet, skipping migration")
+                    conn.close()
+                    return
+                
+                # Check current columns
+                cursor.execute("PRAGMA table_info(reservations)")
+                columns_info = cursor.fetchall()
+                columns = [col[1] for col in columns_info]
+                print(f"📋 Current reservations table columns: {columns}")
+                
+                # Define new columns to add
+                new_columns = [
+                    ('payment_method', "VARCHAR(50)")
+                ]
+                
+                migration_needed = False
+                for col_name, col_def in new_columns:
+                    if col_name not in columns:
+                        print(f"🔧 Adding missing column to reservations: {col_name}")
+                        cursor.execute(f"ALTER TABLE reservations ADD COLUMN {col_name} {col_def}")
+                        migration_needed = True
+                
+                if migration_needed:
+                    conn.commit()
+                    print("✅ Reservations table migration completed")
+                    
+                    # Verify the migration
+                    cursor.execute("PRAGMA table_info(reservations)")
+                    updated_columns = [col[1] for col in cursor.fetchall()]
+                    print(f"📋 Updated reservations table columns: {updated_columns}")
+                else:
+                    print("✅ Reservations table already has all required columns")
+                
+                conn.close()
+                
+            except Exception as e:
+                print(f"⚠️ Reservations table migration error: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # Run migrations
         migrate_orders_table()
+        migrate_reservations_table()
         
     except Exception as e:
         print(f"⚠️ Database initialization error: {e}")
@@ -4508,38 +4572,68 @@ def signalwire_payment_callback():
 def cleanup_orphaned_payment_sessions():
     """Clean up orphaned payment sessions that are blocking operations"""
     try:
+        global payment_sessions_global
+        
         if not hasattr(app, 'payment_sessions'):
             app.payment_sessions = {}
         
-        print(f"🧹 Cleaning up orphaned payment sessions...")
-        print(f"   Current sessions: {list(app.payment_sessions.keys())}")
+        if 'payment_sessions_global' not in globals():
+            payment_sessions_global = {}
         
-        # Remove the specific orphaned session
-        orphaned_call_ids = [
-            'cc1c1950-4b27-4f96-b966-33743ab8597a',  # The problematic session
-        ]
+        print(f"🧹 Cleaning up orphaned payment sessions...")
+        print(f"   App sessions: {list(app.payment_sessions.keys())}")
+        print(f"   Global sessions: {list(payment_sessions_global.keys())}")
         
         cleaned_count = 0
-        for call_id in orphaned_call_ids:
-            if call_id in app.payment_sessions:
-                session_data = app.payment_sessions.pop(call_id)
-                print(f"🗑️ Removed orphaned session: {call_id} (reservation: {session_data.get('reservation_number')})")
-                cleaned_count += 1
         
-        # Also clean up sessions older than 1 hour
-        cutoff = datetime.now() - timedelta(hours=1)
-        expired_sessions = [
+        # Clean up sessions older than 30 minutes (more aggressive cleanup)
+        cutoff = datetime.now() - timedelta(minutes=30)
+        
+        # Clean app sessions
+        expired_app_sessions = [
             call_id for call_id, session in app.payment_sessions.items()
             if session.get('started_at', datetime.now()) < cutoff
         ]
         
-        for call_id in expired_sessions:
+        for call_id in expired_app_sessions:
             session_data = app.payment_sessions.pop(call_id, None)
-            print(f"🕐 Removed expired session: {call_id}")
+            print(f"🕐 Removed expired app session: {call_id}")
             cleaned_count += 1
         
-        print(f"✅ Cleaned up {cleaned_count} orphaned/expired payment sessions")
-        print(f"   Remaining sessions: {len(app.payment_sessions)}")
+        # Clean global sessions
+        expired_global_sessions = [
+            call_id for call_id, session in payment_sessions_global.items()
+            if session.get('started_at', datetime.now()) < cutoff
+        ]
+        
+        for call_id in expired_global_sessions:
+            session_data = payment_sessions_global.pop(call_id, None)
+            print(f"🕐 Removed expired global session: {call_id}")
+            cleaned_count += 1
+        
+        # Remove any sessions that exist in one but not the other (orphaned)
+        app_session_ids = set(app.payment_sessions.keys())
+        global_session_ids = set(payment_sessions_global.keys())
+        
+        # Clean orphaned app sessions
+        orphaned_app = app_session_ids - global_session_ids
+        for call_id in orphaned_app:
+            session_data = app.payment_sessions.pop(call_id, None)
+            print(f"🗑️ Removed orphaned app session: {call_id}")
+            cleaned_count += 1
+        
+        # Clean orphaned global sessions
+        orphaned_global = global_session_ids - app_session_ids
+        for call_id in orphaned_global:
+            session_data = payment_sessions_global.pop(call_id, None)
+            print(f"🗑️ Removed orphaned global session: {call_id}")
+            cleaned_count += 1
+        
+        if cleaned_count > 0:
+            print(f"✅ Cleaned up {cleaned_count} orphaned/expired payment sessions")
+        
+        print(f"   Remaining app sessions: {len(app.payment_sessions)}")
+        print(f"   Remaining global sessions: {len(payment_sessions_global)}")
         
         return cleaned_count
         
@@ -4558,6 +4652,59 @@ def debug_cleanup_sessions():
             'success': True,
             'message': f'Cleaned up {cleaned_count} orphaned sessions',
             'remaining_sessions': len(getattr(app, 'payment_sessions', {}))
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/debug/cleanup-status', methods=['GET'])
+def debug_cleanup_status():
+    """Debug endpoint to check payment session cleanup status"""
+    try:
+        global payment_sessions_global
+        
+        app_sessions = getattr(app, 'payment_sessions', {})
+        global_sessions = payment_sessions_global if 'payment_sessions_global' in globals() else {}
+        
+        # Calculate session ages
+        now = datetime.now()
+        app_session_info = []
+        for call_id, session in app_sessions.items():
+            started_at = session.get('started_at', now)
+            age_minutes = (now - started_at).total_seconds() / 60
+            app_session_info.append({
+                'call_id': call_id,
+                'age_minutes': round(age_minutes, 1),
+                'reservation_number': session.get('reservation_number', 'N/A')
+            })
+        
+        global_session_info = []
+        for call_id, session in global_sessions.items():
+            started_at = session.get('started_at', now)
+            age_minutes = (now - started_at).total_seconds() / 60
+            global_session_info.append({
+                'call_id': call_id,
+                'age_minutes': round(age_minutes, 1),
+                'reservation_number': session.get('reservation_number', 'N/A')
+            })
+        
+        return jsonify({
+            'success': True,
+            'cleanup_system': 'active',
+            'automatic_cleanup': 'every 5 minutes',
+            'session_timeout': '30 minutes',
+            'app_sessions': {
+                'count': len(app_sessions),
+                'sessions': app_session_info
+            },
+            'global_sessions': {
+                'count': len(global_sessions),
+                'sessions': global_session_info
+            },
+            'timestamp': now.isoformat()
         })
         
     except Exception as e:
@@ -4655,6 +4802,46 @@ def calendar_events_stream():
         }
     )
 
+# Add automatic cleanup scheduler
+def start_payment_session_cleanup_scheduler():
+    """Start background thread to periodically clean up orphaned payment sessions"""
+    def cleanup_worker():
+        while True:
+            try:
+                time.sleep(300)  # Run every 5 minutes
+                cleanup_orphaned_payment_sessions()
+            except Exception as e:
+                print(f"❌ Payment session cleanup error: {e}")
+    
+    cleanup_thread = threading.Thread(target=cleanup_worker, daemon=True)
+    cleanup_thread.start()
+    print("🧹 Started automatic payment session cleanup (every 5 minutes)")
+
+def cleanup_payment_sessions_on_startup():
+    """Clean up all payment sessions on application startup"""
+    try:
+        global payment_sessions_global
+        
+        # Clear all in-memory sessions on startup
+        if hasattr(app, 'payment_sessions'):
+            session_count = len(app.payment_sessions)
+            app.payment_sessions.clear()
+            print(f"🧹 Cleared {session_count} payment sessions from app memory on startup")
+        
+        if 'payment_sessions_global' in globals():
+            global_count = len(payment_sessions_global)
+            payment_sessions_global.clear()
+            print(f"🧹 Cleared {global_count} payment sessions from global memory on startup")
+        
+        # Initialize clean session storage
+        app.payment_sessions = {}
+        payment_sessions_global = {}
+        
+        print("✅ Payment session cleanup completed on startup")
+        
+    except Exception as e:
+        print(f"❌ Error during startup payment session cleanup: {e}")
+
 if __name__ == '__main__':
     print("🍽️  Starting Bobby's Table Restaurant System")
     print("=" * 50)
@@ -4663,6 +4850,12 @@ if __name__ == '__main__':
     print("🍳 Kitchen Dashboard: http://0.0.0.0:8080/kitchen")
     print("Press Ctrl+C to stop the service")
     print("-" * 50)
+    
+    # Clean up any orphaned payment sessions from previous runs
+    cleanup_payment_sessions_on_startup()
+    
+    # Start automatic cleanup scheduler
+    start_payment_session_cleanup_scheduler()
     
     # Start the Flask development server
     app.run(host='0.0.0.0', port=8080, debug=False)
