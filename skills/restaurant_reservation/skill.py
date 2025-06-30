@@ -1204,8 +1204,29 @@ class RestaurantReservationSkill(SkillBase):
                     return SwaigFunctionResult(f"Invalid date or time format: {str(e)}. Please provide date and time in a clear format.")
 
                 # Check if reservation is in the past
-                if reservation_datetime < datetime.now():
+                # Use timezone-aware comparison to avoid timezone issues
+                import pytz
+                
+                # Use the same timezone as configured in app.py
+                LOCAL_TIMEZONE = pytz.timezone("America/New_York")
+                
+                # Get current time in the configured timezone
+                now = datetime.now(LOCAL_TIMEZONE).replace(tzinfo=None)
+                
+                # Add some debugging output
+                print(f"🔍 Reservation datetime: {reservation_datetime}")
+                print(f"🔍 Current datetime: {now}")
+                print(f"🔍 Is in past? {reservation_datetime < now}")
+                
+                # Add a small buffer (1 minute) to account for processing time
+                from datetime import timedelta
+                buffer_time = now - timedelta(minutes=1)
+                
+                if reservation_datetime < buffer_time:
+                    print(f"❌ Reservation is in the past: {reservation_datetime} < {buffer_time}")
                     return SwaigFunctionResult("I can't make a reservation for a time in the past. Please choose a future date and time.")
+                
+                print(f"✅ Reservation time is valid: {reservation_datetime} >= {buffer_time}")
 
                 # No duplicate prevention - allow all reservation requests
                 # Customers should be free to make multiple reservations as needed
