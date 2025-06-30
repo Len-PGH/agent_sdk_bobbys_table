@@ -10,7 +10,8 @@ def get_local_now():
     """
     Get the current time in the configured local timezone.
     """
-    local_tz = pytz.timezone(current_app.config['local_tz'])
+    local_tz_name = current_app.config.get('local_tz', 'America/New_York')
+    local_tz = pytz.timezone(local_tz_name)
     return datetime.now(local_tz)
 
 class Reservation(db.Model):
