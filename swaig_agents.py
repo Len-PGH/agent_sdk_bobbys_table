@@ -298,7 +298,7 @@ When customers ask you to "surprise them" with menu items:
                 "type": "object",
                 "properties": {
                     "phone_number": {"type": "string", "description": "Customer phone number for callback"},
-                    "preferred_time": {"type": "string", "description": "Preferred callback time"},
+                    "preferred_time": {"type": "string", "description": "Reason for callback"},
                     "reason": {"type": "string", "description": "Reason for callback"}
                 },
                 "required": ["phone_number", "preferred_time", "reason"]
@@ -334,6 +334,9 @@ When customers ask you to "surprise them" with menu items:
 
         # FIXED: Add function registry validation for debugging
         self._validate_function_registry()
+
+        # Register skills
+        self._register_skills()
 
     def send_reservation_sms(self, reservation_data, phone_number):
         """Send SMS confirmation for reservation - matches Flask route implementation"""
@@ -506,6 +509,67 @@ When customers ask you to "surprise them" with menu items:
             import traceback
             traceback.print_exc()
 
+    def _register_skills(self):
+        """Register all skills with the agent"""
+        try:
+            # Import and register reservation skill
+            from skills.restaurant_reservation.skill import RestaurantReservationSkill
+
+            skill_params = {
+                "swaig_fields": {
+                    "secure": True,
+                    "fillers": {
+                        "en-US": [
+                            "Let me check our reservation system...",
+                            "Looking up your reservation...",
+                            "Processing your reservation request...",
+                            "Checking availability..."
+                        ]
+                    }
+                }
+            }
+            reservation_skill = RestaurantReservationSkill(self, skill_params)
+
+            if reservation_skill.setup():
+                reservation_skill.register_tools()
+                print("✅ Reservation skill registered")
+            else:
+                print("⚠️ Reservation skill setup failed")
+
+            # Import and register menu skill
+            from skills.restaurant_menu.skill import RestaurantMenuSkill
+
+            skill_params = {
+                "swaig_fields": {
+                    "secure": True,
+                    "fillers": {
+                        "en-US": [
+                            "Let me check our menu...",
+                            "Looking up menu items...",
+                            "Processing your order...",
+                            "Checking our kitchen..."
+                        ]
+                    }
+                }
+            }
+            menu_skill = RestaurantMenuSkill(self, skill_params)
+
+            if menu_skill.setup():
+                menu_skill.register_tools()
+                print("✅ Menu skill registered")
+            else:
+                print("⚠️ Menu skill setup failed")
+
+
+        except Exception as e:
+            print(f"❌ Error registering skills: {e}")
+            import traceback
+            traceback.print_exc()
+
+    # Initialize the reservations storage
+        self.reservations = {}
+
+
 def send_swml_to_signalwire(swml_payload, signalwire_endpoint, signalwire_project, signalwire_token):
     """
     Send SWML JSON to SignalWire endpoint.
@@ -526,6 +590,9 @@ def send_swml_to_signalwire(swml_payload, signalwire_endpoint, signalwire_projec
         return response.json()
     except Exception:
         return {'status_code': response.status_code, 'text': response.text}
+
+# Create alias for compatibility with app.py
+RestaurantReceptionistAgent = FullRestaurantReceptionistAgent
 
 # When run directly, create and serve the agent
 if __name__ == "__main__":
