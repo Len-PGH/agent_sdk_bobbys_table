@@ -1,7 +1,17 @@
+# Updated models to use local timezone for created_at fields.
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
+import pytz
+from flask import current_app
 
 db = SQLAlchemy()
+
+def get_local_now():
+    """
+    Get the current time in the configured local timezone.
+    """
+    local_tz = pytz.timezone(current_app.config['local_tz'])
+    return datetime.now(local_tz)
 
 class Reservation(db.Model):
     __tablename__ = 'reservations'
@@ -14,7 +24,7 @@ class Reservation(db.Model):
     phone_number = db.Column(db.String(20), nullable=False)
     status = db.Column(db.String(20), default='confirmed')
     special_requests = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: get_local_now().replace(tzinfo=None))
     payment_status = db.Column(db.String(20), default='unpaid')  # 'unpaid', 'paid', 'refunded'
     payment_intent_id = db.Column(db.String(100))  # Stripe payment intent ID
     payment_amount = db.Column(db.Float)  # Total amount paid
@@ -105,7 +115,7 @@ class Order(db.Model):
     payment_date = db.Column(db.DateTime)  # When payment was completed
     confirmation_number = db.Column(db.String(20))  # Payment confirmation number
     payment_method = db.Column(db.String(50))  # Payment method used (e.g., 'credit_card', 'cash', 'signalwire_pay')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: get_local_now().replace(tzinfo=None))
     items = db.relationship('OrderItem', backref='order', lazy=True)
 
     def to_dict(self):
@@ -151,4 +161,4 @@ class OrderItem(db.Model):
             'price_at_time': self.price_at_time,
             'notes': self.notes,
             'menu_item': self.menu_item.to_dict() if self.menu_item else None
-        } 
+        }
