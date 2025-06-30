@@ -21,6 +21,7 @@ app = Flask(__name__, static_folder=None)
 app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{os.path.join(os.getcwd(), "instance", "restaurant.db")}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'devsecret')
+app.config['local_tz'] = os.getenv('LOCAL_TZ', 'America/New_York')
 
 # Global payment session storage for persistence across Flask contexts
 payment_sessions_global = {}
