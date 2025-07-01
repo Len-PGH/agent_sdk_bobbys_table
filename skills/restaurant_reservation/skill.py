@@ -599,10 +599,45 @@ class RestaurantReservationSkill(SkillBase):
                 # Check meta_data for recently created reservation
                 reservation_created = meta_data.get('reservation_created')
                 session_reservation_number = meta_data.get('reservation_number')
+                payment_needed = meta_data.get('payment_needed')
+                
+                print(f"🔍 Auto-detection check:")
+                print(f"   reservation_created: {reservation_created}")
+                print(f"   session_reservation_number: {session_reservation_number}")
+                print(f"   payment_needed: {payment_needed}")
+                
+                # Enhanced: Check for affirmative response to payment after reservation creation
+                if (reservation_created and session_reservation_number and payment_needed and 
+                    not args.get('reservation_number')):
+                    # Check if user gave an affirmative response recently
+                    call_log = raw_data.get('call_log', []) if raw_data else []
+                    if self._detect_affirmative_response(call_log, "payment"):
+                        print(f"🔍 Detected affirmative payment response after reservation creation")
+                        # Auto-fill ALL payment information from session
+                        reservation_number = session_reservation_number
+                        if not cardholder_name and meta_data.get('customer_name'):
+                            cardholder_name = meta_data.get('customer_name')
+                        if not phone_number and meta_data.get('phone_number'):
+                            phone_number = meta_data.get('phone_number')
+                        print(f"🔍 Auto-filled payment info: res#{reservation_number}, name={cardholder_name}, phone={phone_number}")
                 
                 if reservation_created and session_reservation_number:
                     reservation_number = session_reservation_number
                     print(f"🔍 Auto-detected new reservation from session: #{reservation_number}")
+                    
+                    # Also auto-fill cardholder name if available
+                    if not cardholder_name:
+                        session_customer_name = meta_data.get('customer_name')
+                        if session_customer_name:
+                            cardholder_name = session_customer_name
+                            print(f"🔍 Auto-detected cardholder name: {cardholder_name}")
+                    
+                    # Auto-fill phone number if available
+                    if not phone_number:
+                        session_phone = meta_data.get('phone_number')
+                        if session_phone:
+                            phone_number = session_phone
+                            print(f"🔍 Auto-detected phone number: {phone_number}")
                 else:
                     # Try to detect from conversation history
                     call_log = raw_data.get('call_log', []) if raw_data else []
@@ -619,7 +654,20 @@ class RestaurantReservationSkill(SkillBase):
                                 print(f"🔍 Auto-detected reservation from conversation: #{reservation_number}")
                                 break
             
-            # Validate required information
+            # ENHANCED: Also check if we have session context but parameters were not auto-filled
+            if not reservation_number and meta_data.get('reservation_number'):
+                reservation_number = meta_data.get('reservation_number')
+                print(f"🔍 Using reservation_number from meta_data: #{reservation_number}")
+                
+            if not cardholder_name and meta_data.get('customer_name'):
+                cardholder_name = meta_data.get('customer_name')
+                print(f"🔍 Using customer_name as cardholder_name from meta_data: {cardholder_name}")
+                
+            if not phone_number and meta_data.get('phone_number'):
+                phone_number = meta_data.get('phone_number')
+                print(f"🔍 Using phone_number from meta_data: {phone_number}")
+            
+            # Validate required information - but be smarter about what we ask for
             if not reservation_number:
                 result = SwaigFunctionResult(
                     "I need your reservation number to process the payment. "
@@ -632,17 +680,44 @@ class RestaurantReservationSkill(SkillBase):
                 })
                 return result
             
+            # For newly created reservations, be smarter about auto-filling cardholder name
             if not cardholder_name:
-                result = SwaigFunctionResult(
-                    "I need the name on your credit card to process the payment. "
-                    "What name appears on your credit card?"
-                )
-                result.set_metadata({
-                    "payment_step": "need_cardholder_name",
-                    "reservation_number": reservation_number,
-                    "phone_number": phone_number
-                })
-                return result
+                # Check if this is a newly created reservation with immediate payment request
+                if (meta_data.get('reservation_created') and 
+                    meta_data.get('customer_name') and 
+                    meta_data.get('payment_needed')):
+                    
+                    # For immediate payment after reservation creation, assume cardholder name = customer name
+                    cardholder_name = meta_data.get('customer_name')
+                    print(f"🔍 Auto-assuming cardholder name equals customer name for immediate payment: {cardholder_name}")
+                    
+                elif meta_data.get('reservation_created') and meta_data.get('customer_name'):
+                    customer_name = meta_data.get('customer_name')
+                    result = SwaigFunctionResult(
+                        f"Perfect! I have your reservation #{reservation_number} for {customer_name}. "
+                        f"To process the payment for ${meta_data.get('payment_amount', 0):.2f}, "
+                        f"I just need the name that appears on your credit card. "
+                        f"Is it the same as your reservation name ({customer_name}), or different?"
+                    )
+                    result.set_metadata({
+                        "payment_step": "need_cardholder_name",
+                        "reservation_number": reservation_number,
+                        "phone_number": phone_number,
+                        **{k: v for k, v in meta_data.items() if k.startswith(('reservation_', 'customer_', 'payment_'))}
+                    })
+                    return result
+                else:
+                    result = SwaigFunctionResult(
+                        "I need the name on your credit card to process the payment. "
+                        "What name appears on your credit card?"
+                    )
+                    result.set_metadata({
+                        "payment_step": "need_cardholder_name",
+                        "reservation_number": reservation_number,
+                        "phone_number": phone_number,
+                        **{k: v for k, v in meta_data.items() if k.startswith(('reservation_', 'customer_', 'payment_'))}
+                    })
+                    return result
             
             # Look up reservation and calculate total
             import sys
@@ -697,12 +772,19 @@ class RestaurantReservationSkill(SkillBase):
                     parameters_array.append({"name": "call_id", "value": call_id})
                     print(f"🔍 Added call_id to parameters: {call_id}")
                 
-                # Create response message
-                message = f"💳 Ready to process payment for Reservation #{reservation_number}\n"
-                message += f"Customer: {cardholder_name}\n"
-                message += f"Party of {reservation.party_size} on {reservation.date} at {reservation.time}\n"
-                message += f"Total amount: ${total_amount:.2f}\n\n"
-                message += f"Please enter your credit card information when prompted."
+                # Create response message - make it more natural for newly created reservations
+                if meta_data.get('reservation_created'):
+                    message = f"✅ Excellent! Let me process the payment for your pre-order.\n\n"
+                    message += f"Reservation #{reservation_number} for {cardholder_name}\n"
+                    message += f"Party of {reservation.party_size} on {reservation.date} at {reservation.time}\n"
+                    message += f"Pre-order total: ${total_amount:.2f}\n\n"
+                    message += f"I'll now collect your credit card information for secure payment processing."
+                else:
+                    message = f"💳 Ready to process payment for Reservation #{reservation_number}\n"
+                    message += f"Customer: {cardholder_name}\n"
+                    message += f"Party of {reservation.party_size} on {reservation.date} at {reservation.time}\n"
+                    message += f"Total amount: ${total_amount:.2f}\n\n"
+                    message += f"Please enter your credit card information when prompted."
                 
                 # Create SwaigFunctionResult
                 result = SwaigFunctionResult(message)
@@ -2363,6 +2445,7 @@ class RestaurantReservationSkill(SkillBase):
                     
                     # 1. Get caller ID from raw_data
                     if raw_data and isinstance(raw_data, dict):
+                        pass  # Continue with existing logic
                         caller_phone = (
                             raw_data.get('caller_id_num') or 
                             raw_data.get('caller_id_number') or
@@ -2661,14 +2744,14 @@ class RestaurantReservationSkill(SkillBase):
                 return (
                     SwaigFunctionResult("Sorry, there was an error looking up your reservation.")
                     .add_action("error_data", {
-                        "success": False,
+                                                "success": False,
                         "error": str(e),
                         "message": "Error looking up reservation"
                     })
                 )
             else:
                 return SwaigFunctionResult(f"Sorry, there was an error looking up your reservation: {str(e)}")
-    
+
     def _update_reservation_handler(self, args, raw_data):
         """Handler for update_reservation tool"""
         try:
