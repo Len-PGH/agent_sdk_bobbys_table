@@ -711,8 +711,9 @@ def get_menu():
             'price': item.price
         }
         menu_data[item.category].append(menu_item)
-    
-    return jsonify(menu_data)
+
+    # Database should always have menu data - if it doesn't, that's a setup issue
+    return render_template('menu.html', menu=menu_data)
 
 @app.route('/menu')
 def menu():
@@ -732,7 +733,8 @@ def menu():
             'price': item.price
         }
         menu_data[item.category].append(menu_item)
-    
+
+    # Database should always have menu data - if it doesn't, that's a setup issue
     return render_template('menu.html', menu=menu_data)
 
 @app.route('/api/order', methods=['POST'])
@@ -1026,13 +1028,7 @@ def should_block_function_call(ai_session_id, function_name):
             if time_since_last < 30:
                 return True, f"Function {function_name} was called {time_since_last:.1f} seconds ago. Please use the previous response."
 
-    # Special rules for specific functions
-    if function_name == 'get_menu':
-        # Block if menu was already retrieved recently (within 60 seconds)
-        if memory['menu_data'] is not None and function_name in memory['last_function_time']:
-            time_since_menu = current_time - memory['last_function_time'][function_name]
-            if time_since_menu < 60:
-                return True, "Menu data already available from previous call. Use existing menu information."
+    # Special rules for specific functions removed - using skill-based menu now
 
     return False, None
 
@@ -1048,9 +1044,7 @@ def record_function_call(ai_session_id, function_name, result=None):
     })
     memory['last_function_time'][function_name] = current_time
 
-    # Store menu data for reuse
-    if function_name == 'get_menu' and result:
-        memory['menu_data'] = result
+    # Menu data now handled by skill-based system with meta_data caching
 
     # Store reservation context from get_reservation results
     if function_name == 'get_reservation' and result:
@@ -1294,7 +1288,7 @@ def swaig_receptionist():
                     'get_reservation', 
                     'update_reservation',
                     'cancel_reservation',
-                    'get_menu',
+        
                     'create_order',
                     'get_order_status',
                     'update_order_status',
@@ -1416,14 +1410,6 @@ def swaig_receptionist():
                             'phone_number': {'type': 'string', 'description': 'Customer phone number for verification'}
                         },
                         'required': []
-                    }
-                },
-                'get_menu': {
-                    'function': 'get_menu',
-                    'purpose': 'Get the restaurant menu',
-                    'argument': {
-                        'type': 'object',
-                        'properties': {}
                     }
                 },
                 'create_order': {
@@ -2028,16 +2014,7 @@ def swaig_receptionist_info():
                                         "required": ["reservation_id"]
                                     }
                                 },
-                                {
-                                    "function": "get_menu",
-                                    "purpose": "Get restaurant menu items and categories",
-                                    "argument": {
-                                        "type": "object",
-                                        "properties": {
-                                            "category": {"type": "string", "description": "Optional menu category: 'breakfast', 'appetizers', 'main-courses', 'desserts', or 'drinks'. Leave empty for full menu"}
-                                        }
-                                    }
-                                },
+
                                 {
                                     "function": "create_order",
                                     "purpose": "Create a new food order. Extract menu items and quantities from natural language. If user says 'I want the salmon' or 'One cheesecake', extract that information. This will generate a unique order ID. Always ask customers if they want to pay now or at pickup/delivery.",
