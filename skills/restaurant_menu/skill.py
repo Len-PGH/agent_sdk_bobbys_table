@@ -583,6 +583,91 @@ class RestaurantMenuSkill(SkillBase):
         
         return parameters
 
+    def _get_random_party_orders(self, raw_data, party_names, food_per_person=1, drinks_per_person=1):
+        """Generate random menu selections for a party - used by workflow tests"""
+        try:
+            import random
+            import sys
+            import os
+            
+            # Add the parent directory to sys.path to import app
+            parent_dir = os.path.dirname(os.path.dirname(__file__))
+            if parent_dir not in sys.path:
+                sys.path.insert(0, parent_dir)
+            
+            from app import app
+            from models import MenuItem
+            
+            with app.app_context():
+                # Get all available menu items organized by category
+                food_items = MenuItem.query.filter(
+                    MenuItem.category.in_(['appetizers', 'main-courses', 'breakfast']),
+                    MenuItem.is_available == True
+                ).all()
+                
+                drink_items = MenuItem.query.filter_by(
+                    category='drinks', 
+                    is_available=True
+                ).all()
+                
+                if not food_items or not drink_items:
+                    return {
+                        'success': False,
+                        'error': 'Insufficient menu items available for random selection'
+                    }
+                
+                party_orders = []
+                total_amount = 0.0
+                
+                for person_name in party_names:
+                    person_items = []
+                    person_total = 0.0
+                    
+                    # Select random food items
+                    selected_foods = random.sample(food_items, min(food_per_person, len(food_items)))
+                    for food_item in selected_foods:
+                        person_items.append({
+                            'menu_item_id': food_item.id,
+                            'quantity': 1,
+                            'name': food_item.name,
+                            'price': float(food_item.price),
+                            'category': food_item.category
+                        })
+                        person_total += float(food_item.price)
+                    
+                    # Select random drink items
+                    selected_drinks = random.sample(drink_items, min(drinks_per_person, len(drink_items)))
+                    for drink_item in selected_drinks:
+                        person_items.append({
+                            'menu_item_id': drink_item.id,
+                            'quantity': 1,
+                            'name': drink_item.name,
+                            'price': float(drink_item.price),
+                            'category': drink_item.category
+                        })
+                        person_total += float(drink_item.price)
+                    
+                    party_orders.append({
+                        'person_name': person_name,
+                        'items': person_items,
+                        'person_total': person_total
+                    })
+                    
+                    total_amount += person_total
+                
+                return {
+                    'success': True,
+                    'party_orders': party_orders,
+                    'total_amount': total_amount
+                }
+                
+        except Exception as e:
+            print(f"❌ Error generating random party orders: {e}")
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
     def register_tools(self) -> None:
         """Register menu and ordering tools with the agent"""
         
@@ -1824,16 +1909,24 @@ class RestaurantMenuSkill(SkillBase):
                 
                 # Add order items
                 for item_data in args['items']:
-                    # Find menu item by name with fuzzy matching
-                    menu_item = self._find_menu_item_fuzzy(item_data['name'])
+                    # Find menu item by name with fuzzy matching using cached menu if available
+                    cached_menu = meta_data.get('cached_menu', [])
+                    menu_item = self._find_menu_item_fuzzy(item_data['name'], cached_menu)
                     if not menu_item:
-                        return SwaigFunctionResult(f"Sorry, '{item_data['name']}' is not available on our menu.")
+                        # Show available items to help customer
+                        available_items = [item['name'] for item in cached_menu[:5]] if cached_menu else ['Buffalo Wings', 'Draft Beer', 'House Wine', 'Ribeye Steak', 'Grilled Salmon']
+                        return SwaigFunctionResult(f"Sorry, '{item_data['name']}' is not available on our menu. Available items include: {', '.join(available_items)}. Would you like to order one of these instead?")
                     
                     # Log if we corrected the spelling
                     if menu_item.name.lower() != item_data['name'].lower():
-                        print(f"🔄 Corrected '{item_data['name']}' to '{menu_item.name}'")
+                        print(f"🔄 Corrected '{item_data['name']}' to '{menu_item.name}' (ID: {menu_item.id})")
                     
                     quantity = item_data.get('quantity', 1)
+                    
+                    # Validate the menu item has proper attributes
+                    if not hasattr(menu_item, 'id') or not hasattr(menu_item, 'price'):
+                        print(f"❌ Menu item {menu_item.name} missing required attributes")
+                        continue
                     
                     order_item = OrderItem(
                         order_id=order.id,
