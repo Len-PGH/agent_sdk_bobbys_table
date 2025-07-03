@@ -712,7 +712,12 @@ def get_menu():
         }
         menu_data[item.category].append(menu_item)
 
-    # Database should always have menu data - if it doesn't, that's a setup issue
+    # Check if menu data was found and log error if empty
+    if not menu_data:
+        print("❌ ERROR: No menu items found in database!")
+        print("   This indicates a database setup issue.")
+        print("   Run 'python init_test_data.py' to populate menu items.")
+    
     return render_template('menu.html', menu=menu_data)
 
 @app.route('/menu')
@@ -734,7 +739,12 @@ def menu():
         }
         menu_data[item.category].append(menu_item)
 
-    # Database should always have menu data - if it doesn't, that's a setup issue
+    # Check if menu data was found and log error if empty
+    if not menu_data:
+        print("❌ ERROR: No menu items found in database!")
+        print("   This indicates a database setup issue.")
+        print("   Run 'python init_test_data.py' to populate menu items.")
+    
     return render_template('menu.html', menu=menu_data)
 
 @app.route('/api/order', methods=['POST'])
@@ -1873,6 +1883,12 @@ def swaig_receptionist_info():
         "sections": {
             "main": [
                 {
+                    "record_call": {
+                        "format": "wav",
+                        "stereo": "true"
+                    }
+                },
+                {
                     "ai": {
                         "languages": [
                             {
@@ -2673,6 +2689,36 @@ def payment_processor():
 
                         db.session.commit()
                         print(f"✅ Reservation {reservation.reservation_number} updated with payment info")
+
+                        # 🚀 INSTANT CALENDAR UPDATE: Trigger calendar refresh for payment completion
+                        try:
+                            calendar_refresh_url = "http://localhost:8080/api/calendar/refresh-trigger"
+                            refresh_data = {
+                                "event_type": "payment_completed",
+                                "reservation_id": reservation.id,
+                                "reservation_number": reservation.reservation_number,
+                                "customer_name": reservation.name,
+                                "payment_status": "paid",
+                                "payment_amount": reservation.payment_amount,
+                                "confirmation_number": confirmation_number,
+                                "source": "payment_processor"
+                            }
+                            
+                            # Non-blocking request with short timeout
+                            response = requests.post(
+                                calendar_refresh_url, 
+                                json=refresh_data, 
+                                timeout=2
+                            )
+                            
+                            if response.status_code == 200:
+                                print(f"📅 Calendar refresh notification sent successfully for payment completion")
+                            else:
+                                print(f"⚠️ Calendar refresh notification failed: {response.status_code}")
+                                
+                        except Exception as refresh_error:
+                            # Don't fail the payment if calendar refresh fails
+                            print(f"⚠️ Calendar refresh notification error (non-critical): {refresh_error}")
 
                         # Call SWAIG send_payment_receipt function for reservation
                         print(f"📱 Calling SWAIG send_payment_receipt function for reservation {reservation_number}")
@@ -4547,6 +4593,10 @@ def calendar_refresh_trigger():
         if event_type not in ['reservation_created', 'reservation_updated', 'reservation_cancelled']:
             return jsonify({'success': False, 'error': 'Invalid event type'}), 400
 
+        # 📱 SMS SENDING IS NOW OPTIONAL - Agent will ask user for consent
+        sms_result = {'success': False, 'sms_sent': False}
+        print(f"📅 Calendar updated for {event_type} - SMS sending is now handled by agent consent")
+
         # 🚀 BROADCAST TO ALL CONNECTED CLIENTS VIA SSE
         sse_event = {
             'type': 'calendar_refresh',
@@ -4557,7 +4607,8 @@ def calendar_refresh_trigger():
             'date': data.get('date'),
             'time': data.get('time'),
             'source': source,
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'sms_sent': sms_result.get('sms_sent', False)
         }
 
         # Add event to queue (non-blocking)
@@ -4574,7 +4625,9 @@ def calendar_refresh_trigger():
             'message': 'Calendar refresh notification received and broadcasted',
             'event_type': event_type,
             'timestamp': datetime.now().isoformat(),
-            'sse_broadcasted': True
+            'sse_broadcasted': True,
+            'sms_sent': sms_result.get('sms_sent', False),
+            'sms_status': sms_result.get('success', False)
         })
 
     except Exception as e:
@@ -4652,6 +4705,201 @@ def cleanup_payment_sessions_on_startup():
 
     except Exception as e:
         print(f"❌ Error during startup payment session cleanup: {e}")
+
+# Add the missing reservation payment API endpoint
+@app.route('/api/reservations/payment', methods=['POST'])
+def update_reservation_payment():
+    """Update reservation payment status and send SMS receipt"""
+    try:
+        data = request.get_json()
+        
+        reservation_id = data.get('reservation_id')
+        payment_intent_id = data.get('payment_intent_id')
+        amount = data.get('amount')
+        status = data.get('status', 'paid')
+        sms_number = data.get('sms_number')
+        
+        print(f"📝 Updating reservation payment status:")
+        print(f"   - Reservation ID: {reservation_id}")
+        print(f"   - Payment Intent ID: {payment_intent_id}")
+        print(f"   - Amount: ${amount}")
+        print(f"   - Status: {status}")
+        print(f"   - SMS Number: {sms_number}")
+        
+        # Find the reservation
+        reservation = Reservation.query.get(reservation_id)
+        if not reservation:
+            return jsonify({'success': False, 'error': 'Reservation not found'}), 404
+        
+        # Generate confirmation number if not already set
+        if not reservation.confirmation_number:
+            import random
+            import string
+            confirmation_number = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+        else:
+            confirmation_number = reservation.confirmation_number
+        
+        # Update reservation payment details
+        reservation.payment_status = status
+        reservation.payment_method = 'credit-card'
+        reservation.payment_date = datetime.now()
+        reservation.payment_amount = float(amount)
+        reservation.payment_intent_id = payment_intent_id
+        reservation.confirmation_number = confirmation_number
+        
+        # Also update associated orders
+        orders = Order.query.filter_by(reservation_id=reservation.id).all()
+        for order in orders:
+            order.payment_status = status
+            order.payment_method = 'credit-card'
+            order.payment_date = datetime.now()
+            order.payment_amount = order.total_amount
+            order.payment_intent_id = payment_intent_id
+            order.confirmation_number = confirmation_number
+        
+        db.session.commit()
+        
+        print(f"✅ Updated reservation #{reservation.reservation_number} payment status")
+        print(f"   - Payment Status: {reservation.payment_status}")
+        print(f"   - Payment Amount: ${reservation.payment_amount}")
+        print(f"   - Confirmation Number: {confirmation_number}")
+        
+        # 🚀 INSTANT CALENDAR UPDATE: Trigger calendar refresh for payment completion
+        try:
+            calendar_refresh_url = "http://localhost:8080/api/calendar/refresh-trigger"
+            refresh_data = {
+                "event_type": "payment_completed",
+                "reservation_id": reservation.id,
+                "reservation_number": reservation.reservation_number,
+                "customer_name": reservation.name,
+                "payment_status": "paid",
+                "payment_amount": reservation.payment_amount,
+                "confirmation_number": confirmation_number,
+                "source": "reservation_payment_api"
+            }
+            
+            # Non-blocking request with short timeout
+            response = requests.post(
+                calendar_refresh_url, 
+                json=refresh_data, 
+                timeout=2
+            )
+            
+            if response.status_code == 200:
+                print(f"📅 Calendar refresh notification sent successfully for payment completion")
+            else:
+                print(f"⚠️ Calendar refresh notification failed: {response.status_code}")
+                
+        except Exception as refresh_error:
+            # Don't fail the payment if calendar refresh fails
+            print(f"⚠️ Calendar refresh notification error (non-critical): {refresh_error}")
+        
+        # Send SMS receipt
+        sms_result = {'success': False, 'sms_sent': False}
+        try:
+            phone_number = sms_number or reservation.phone_number
+            print(f"📱 Sending SMS receipt to {phone_number}")
+            
+            # Use the existing SMS receipt function
+            sms_result = send_payment_receipt_sms(
+                reservation=reservation,
+                payment_amount=float(amount),
+                phone_number=phone_number,
+                confirmation_number=confirmation_number
+            )
+            
+            if sms_result.get('success'):
+                print(f"✅ SMS receipt sent successfully")
+            else:
+                print(f"⚠️ SMS receipt failed: {sms_result.get('error', 'Unknown error')}")
+                
+        except Exception as sms_error:
+            print(f"❌ Error sending SMS receipt: {sms_error}")
+            sms_result = {'success': False, 'sms_sent': False, 'error': str(sms_error)}
+        
+        return jsonify({
+            'success': True,
+            'message': f'Payment status updated for reservation #{reservation.reservation_number}',
+            'reservation_number': reservation.reservation_number,
+            'payment_status': reservation.payment_status,
+            'payment_amount': reservation.payment_amount,
+            'payment_date': reservation.payment_date.isoformat() if reservation.payment_date else None,
+            'confirmation_number': confirmation_number,
+            'sms_result': sms_result
+        })
+        
+    except Exception as e:
+        print(f"❌ Error updating reservation payment: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+# Add utility function to trigger SMS receipts for paid reservations
+def trigger_sms_receipt_for_paid_reservation(reservation_number):
+    """Trigger SMS receipt for a paid reservation"""
+    try:
+        reservation = Reservation.query.filter_by(reservation_number=reservation_number).first()
+        if not reservation:
+            return {'success': False, 'error': f'Reservation {reservation_number} not found'}
+        
+        if reservation.payment_status != 'paid':
+            return {'success': False, 'error': f'Reservation {reservation_number} is not paid'}
+        
+        if not reservation.confirmation_number:
+            # Generate confirmation number if missing
+            import random
+            import string
+            confirmation_number = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+            reservation.confirmation_number = confirmation_number
+            db.session.commit()
+        else:
+            confirmation_number = reservation.confirmation_number
+        
+        # Send SMS receipt
+        sms_result = send_payment_receipt_sms(
+            reservation=reservation,
+            payment_amount=reservation.payment_amount or 0.0,
+            phone_number=reservation.phone_number,
+            confirmation_number=confirmation_number
+        )
+        
+        return {
+            'success': True,
+            'sms_result': sms_result,
+            'reservation_number': reservation_number,
+            'confirmation_number': confirmation_number
+        }
+        
+    except Exception as e:
+        print(f"❌ Error triggering SMS receipt: {e}")
+        return {'success': False, 'error': str(e)}
+
+@app.route('/debug/trigger-sms-receipt', methods=['POST'])
+def debug_trigger_sms_receipt():
+    """Debug endpoint to manually trigger SMS receipt for paid reservations"""
+    try:
+        data = request.get_json()
+        reservation_number = data.get('reservation_number')
+        
+        if not reservation_number:
+            return jsonify({'success': False, 'error': 'reservation_number is required'}), 400
+        
+        result = trigger_sms_receipt_for_paid_reservation(reservation_number)
+        
+        if result['success']:
+            return jsonify({
+                'success': True,
+                'message': f'SMS receipt triggered for reservation #{reservation_number}',
+                'details': result
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': result['error']
+            }), 400
+            
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 if __name__ == '__main__':
     print("🍽️  Starting Bobby's Table Restaurant System")

@@ -474,6 +474,22 @@ class RestaurantReservationSkill(SkillBase):
             **self.swaig_fields
         )
 
+        # SMS confirmation with user consent tool
+        self.agent.define_tool(
+            name="offer_sms_confirmation",
+            description="Ask the user if they would like reservation details sent via SMS. If they agree, send the SMS with reservation details and calendar link. Use this AFTER creating a reservation when calendar details are sent.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "reservation_number": {"type": "string", "description": "6-digit reservation number"},
+                    "user_wants_sms": {"type": "boolean", "description": "True if user confirmed they want SMS details, False if they declined"}
+                },
+                "required": ["reservation_number", "user_wants_sms"]
+            },
+            handler=self._offer_sms_confirmation_handler,
+            **self.swaig_fields
+        )
+
         # Add to reservation tool
         self.agent.define_tool(
             name="add_to_reservation",
@@ -1066,6 +1082,96 @@ class RestaurantReservationSkill(SkillBase):
                 "Please try again or contact us for assistance."
             )
 
+    def _show_order_summary_and_confirm(self, args, raw_data):
+        """Show order summary and ask for confirmation before creating reservation"""
+        try:
+            # Import Flask app and models locally to avoid circular import
+            import sys
+            import os
+            
+            # Add the parent directory to sys.path to import app
+            parent_dir = os.path.dirname(os.path.dirname(__file__))
+            if parent_dir not in sys.path:
+                sys.path.insert(0, parent_dir)
+            
+            from app import app
+            from models import MenuItem
+            
+            with app.app_context():
+                # Cache menu in meta_data for performance
+                meta_data = self._cache_menu_in_metadata(raw_data)
+                
+                party_orders = args.get('party_orders', [])
+                if not party_orders:
+                    return SwaigFunctionResult("No order details found to summarize.")
+                
+                # Use cached menu for fast lookups
+                cached_menu = meta_data.get('cached_menu', [])
+                menu_lookup = {item['id']: item for item in cached_menu} if cached_menu else {}
+                
+                if not menu_lookup:
+                    # Fallback to database if no cached menu
+                    menu_items = MenuItem.query.filter_by(is_available=True).all()
+                    menu_lookup = {item.id: {'id': item.id, 'name': item.name, 'price': float(item.price)} for item in menu_items}
+                
+                # Build order summary
+                summary_lines = []
+                summary_lines.append("📋 **Order Summary:**")
+                summary_lines.append("")
+                
+                total_amount = 0.0
+                
+                for person_order in party_orders:
+                    person_name = person_order.get('person_name', 'Customer')
+                    person_items = person_order.get('items', [])
+                    
+                    if person_items:
+                        summary_lines.append(f"👤 **{person_name}:**")
+                        person_total = 0.0
+                        
+                        for item_data in person_items:
+                            menu_item_id = int(item_data['menu_item_id'])
+                            quantity = int(item_data.get('quantity', 1))
+                            
+                            # Get menu item info
+                            if menu_item_id in menu_lookup:
+                                menu_info = menu_lookup[menu_item_id]
+                                item_name = menu_info['name']
+                                item_price = float(menu_info['price'])
+                                
+                                item_total = item_price * quantity
+                                person_total += item_total
+                                
+                                if quantity > 1:
+                                    summary_lines.append(f"   • {item_name} x{quantity} - ${item_total:.2f}")
+                                else:
+                                    summary_lines.append(f"   • {item_name} - ${item_price:.2f}")
+                        
+                        summary_lines.append(f"   💰 **{person_name} Total: ${person_total:.2f}**")
+                        summary_lines.append("")
+                        total_amount += person_total
+                
+                summary_lines.append(f"🎯 **Grand Total: ${total_amount:.2f}**")
+                summary_lines.append("")
+                summary_lines.append("Is this order correct? Please respond with:")
+                summary_lines.append("✅ **'Yes, that's correct'** to confirm")
+                summary_lines.append("🔄 **'Change [item]'** to modify")
+                summary_lines.append("❌ **'Cancel'** to start over")
+                
+                # Store pending reservation data in meta_data
+                updated_meta_data = meta_data.copy()
+                updated_meta_data['pending_reservation'] = args
+                updated_meta_data['workflow_step'] = 'awaiting_order_confirmation'
+                updated_meta_data['order_summary_shown'] = True
+                
+                result = SwaigFunctionResult("\n".join(summary_lines))
+                result.set_metadata(updated_meta_data)
+                return result
+                
+        except Exception as e:
+            print(f"❌ Error in _show_order_summary_and_confirm: {e}")
+            return SwaigFunctionResult(f"Error showing order summary: {str(e)}")
+
     def _create_reservation_handler(self, args, raw_data):
         """Handler for create_reservation tool"""
         try:
@@ -1095,6 +1201,273 @@ class RestaurantReservationSkill(SkillBase):
             with app.app_context():
                 # Cache menu in meta_data for performance
                 meta_data = self._cache_menu_in_metadata(raw_data)
+                
+                # NEW PREORDER WORKFLOW CHECK
+                # Check if this is a preorder that needs summarization first
+                current_meta_data = raw_data.get('meta_data', {}) if raw_data else {}
+                party_orders = args.get('party_orders', [])
+                
+                # If party_orders exist but no confirmation yet, show order summary for confirmation
+                if (party_orders and 
+                    not current_meta_data.get('order_confirmed') and 
+                    not current_meta_data.get('order_summary_shown') and
+                    not args.get('skip_summary', False)):
+                    
+                    return self._show_order_summary_and_confirm(args, raw_data)
+                
+                # Check if user is confirming their order details from previous summary
+                if current_meta_data.get('workflow_step') == 'awaiting_order_confirmation':
+                    call_log = raw_data.get('call_log', []) if raw_data else []
+                    user_confirmed = False
+                    
+                    print(f"🔍 WORKFLOW: In awaiting_order_confirmation state")
+                    print(f"🔍 WORKFLOW: Checking last {min(5, len(call_log))} conversation entries for confirmation")
+                    
+                    # Check last user message for order confirmation - be more strict
+                    recent_user_messages = []
+                    for entry in reversed(call_log[-10:]):  # Check more entries for confirmation
+                        if entry.get('role') == 'user' and entry.get('content'):
+                            recent_user_messages.append(entry.get('content', ''))
+                    
+                    print(f"🔍 WORKFLOW: Recent user messages: {recent_user_messages}")
+                    
+                    # Look for explicit confirmation in the most recent messages
+                    for content in recent_user_messages[:3]:  # Only check last 3 user messages
+                        content_lower = content.lower().strip()
+                        
+                        # Enhanced confirmation phrases - more natural language patterns
+                        explicit_confirmations = [
+                            'yes, that\'s correct', 'yes that\'s correct', 'that\'s correct',
+                            'yes, create', 'yes create', 'create reservation', 'create it',
+                            'looks good', 'looks right', 'that\'s right', 'perfect',
+                            'confirm', 'confirmed', 'proceed', 'go ahead',
+                            # NEW: More natural responses
+                            'sounds good', 'that works', 'let\'s do it', 'make it',
+                            'book it', 'reserve it', 'yes please', 'absolutely',
+                            'that\'s perfect', 'exactly right', 'all good'
+                        ]
+                        
+                        # Check for explicit confirmation
+                        if any(phrase in content_lower for phrase in explicit_confirmations):
+                            user_confirmed = True
+                            print(f"✅ WORKFLOW: User explicitly confirmed with: '{content}'")
+                            break
+                        
+                        # Check for simple "yes" but only if it's a standalone response
+                        elif content_lower in ['yes', 'yes.', 'yep', 'yeah', 'sure', 'ok', 'okay']:
+                            # Additional check: make sure the previous assistant message was asking for confirmation
+                            for entry in reversed(call_log[-5:]):
+                                if (entry.get('role') == 'assistant' and 
+                                    entry.get('content') and 
+                                    ('confirm' in entry.get('content', '').lower() or 
+                                     'correct' in entry.get('content', '').lower())):
+                                    user_confirmed = True
+                                    print(f"✅ WORKFLOW: User confirmed with simple '{content}' after confirmation prompt")
+                                    break
+                            if user_confirmed:
+                                break
+                        
+                        # Check for modification requests
+                        elif ('change' in content_lower or 'wrong' in content_lower or 
+                              'not right' in content_lower or 'different' in content_lower):
+                            print(f"🔄 WORKFLOW: User wants to modify order: '{content}'")
+                            return SwaigFunctionResult(
+                                "I'd be happy to help you modify your order! "
+                                "Please tell me what you'd like to change or add."
+                            )
+                        
+                        # Check for cancellation
+                        elif 'cancel' in content_lower or 'start over' in content_lower:
+                            print(f"❌ WORKFLOW: User wants to cancel: '{content}'")
+                            result = SwaigFunctionResult("No problem! Let's start fresh. How can I help you today?")
+                            result.set_metadata({})  # Clear meta_data
+                            return result
+                    
+                    # Also check if user is trying to pay (which implies confirmation)
+                    if not user_confirmed:
+                        for content in recent_user_messages[:2]:  # Only check last 2 messages
+                            content_lower = content.lower()
+                            if ('pay' in content_lower or 'payment' in content_lower or 
+                                'card' in content_lower or 'credit' in content_lower):
+                                user_confirmed = True
+                                print(f"✅ WORKFLOW: User implied confirmation by requesting payment: '{content}'")
+                                break
+                    
+                    # If no confirmation found, ask for it
+                    if not user_confirmed:
+                        print("❌ WORKFLOW: No confirmation detected, asking user to confirm")
+                        # Check if we already showed the summary
+                        if not current_meta_data.get('order_summary_shown'):
+                            # Show summary first
+                            pending_reservation = current_meta_data.get('pending_reservation', {})
+                            if pending_reservation:
+                                return self._show_order_summary_and_confirm(pending_reservation, raw_data)
+                        
+                        return SwaigFunctionResult(
+                            "I need you to confirm your order before I can create the reservation.\n\n"
+                            "Please review the order details above and respond with:\n"
+                            "✅ **'Yes, that's correct'** if the order is right\n"
+                            "🔄 **'Change [item]'** to modify your order\n"
+                            "❌ **'Cancel'** to start over\n\n"
+                            "What would you like to do?"
+                        )
+                    
+                    # User confirmed their order, but re-validate against conversation to ensure accuracy
+                    print("✅ WORKFLOW: User confirmed order, re-validating against conversation")
+                    
+                    # Re-extract items from conversation to ensure accuracy
+                    conversation_text = ' '.join([
+                        entry.get('content', '') 
+                        for entry in call_log 
+                        if entry.get('role') == 'user'
+                    ])
+                    
+                    re_extracted_items = self._extract_food_items_from_conversation(conversation_text, meta_data)
+                    print(f"🔍 WORKFLOW: Re-extracted items from conversation: {re_extracted_items}")
+                    
+                    if re_extracted_items:
+                        # CRITICAL FIX: Also re-parse person assignments, don't just use cached assignments
+                        customer_name = args.get('name', 'Customer')
+                        party_size = args.get('party_size', 2)
+                        
+                        # Re-parse individual orders using conversation
+                        corrected_party_orders = self._parse_individual_orders(
+                            conversation_text, customer_name, party_size, re_extracted_items
+                        )
+                        
+                        print(f"🔄 WORKFLOW: Re-assigned items to people:")
+                        for order in corrected_party_orders:
+                            person_name = order.get('person_name', 'Unknown')
+                            items = order.get('items', [])
+                            print(f"   {person_name}: {len(items)} items")
+                        
+                        # Update args with corrected assignments
+                        args['party_orders'] = corrected_party_orders
+                        args['order_confirmed'] = True
+                        print("✅ WORKFLOW: Updated pending reservation with corrected items")
+                    
+                    # Update meta_data with corrected information
+                    if meta_data and 'pending_reservation' in meta_data:
+                        meta_data['pending_reservation'].update(args)
+                        print("✅ WORKFLOW: Using validated pending reservation data")
+                
+                # INTELLIGENT ITEM PROCESSING: Handle both confirmation and addition scenarios
+                party_orders = args.get('party_orders', [])
+                order_confirmed = args.get('order_confirmed', False)
+                
+                # Check user intent from recent conversation
+                call_log = raw_data.get('call_log', []) if raw_data else []
+                recent_user_messages = [
+                    entry.get('content', '').lower() 
+                    for entry in call_log[-3:] 
+                    if entry.get('role') == 'user'
+                ]
+                latest_user_message = recent_user_messages[-1] if recent_user_messages else ""
+                
+                # Detect if user is adding items vs confirming existing order
+                adding_items_phrases = [
+                    'i want to add', 'can i add', 'i also want', 'also get', 'and also',
+                    'i\'d like to also', 'can i also get', 'add to that', 'plus',
+                    'i also need', 'can we add', 'let me add', 'i want more'
+                ]
+                
+                confirmation_phrases = [
+                    'yes that\'s correct', 'that\'s right', 'that sounds good', 'perfect',
+                    'yes please', 'that\'s perfect', 'correct', 'exactly', 'that\'s it',
+                    'yes', 'yep', 'yeah', 'sounds good', 'looks good'
+                ]
+                
+                is_adding_items = any(phrase in latest_user_message for phrase in adding_items_phrases)
+                is_confirming_order = any(phrase in latest_user_message for phrase in confirmation_phrases)
+                
+                print(f"🔍 User intent analysis:")
+                print(f"   Latest message: '{latest_user_message}'")
+                print(f"   Is adding items: {is_adding_items}")
+                print(f"   Is confirming order: {is_confirming_order}")
+                print(f"   Has pending orders: {bool(party_orders)}")
+                print(f"   Order confirmed flag: {order_confirmed}")
+                
+                if party_orders and (order_confirmed or is_confirming_order) and not is_adding_items:
+                    # Scenario 1: User is confirming their existing pending order
+                    print("✅ WORKFLOW: User confirming existing order - preserving confirmed items")
+                    
+                elif party_orders and is_adding_items:
+                    # Scenario 2: User wants to add items to existing pending order
+                    print("🔄 WORKFLOW: User adding items to existing order - merging with conversation extraction")
+                    
+                    conversation_text = ' '.join([
+                        entry.get('content', '') 
+                        for entry in call_log 
+                        if entry.get('role') == 'user'
+                    ])
+                    
+                    # Extract NEW items from conversation
+                    new_items = self._extract_food_items_from_conversation(conversation_text, meta_data)
+                    print(f"🔍 Extracted new items from conversation: {new_items}")
+                    
+                    if new_items:
+                        # Add new items to existing party orders
+                        for order in party_orders:
+                            if 'items' in order:
+                                existing_items = order['items']
+                                print(f"🔄 Adding new items to {order.get('person_name', 'Unknown')}'s order")
+                                print(f"   Existing items: {existing_items}")
+                                
+                                # Add new items to existing ones
+                                for new_item in new_items:
+                                    order['items'].append({
+                                        'menu_item_id': new_item['menu_item_id'],
+                                        'quantity': new_item['quantity']
+                                    })
+                                
+                                print(f"   Updated items: {order['items']}")
+                        
+                        args['party_orders'] = party_orders
+                        print(f"✅ Added new items to existing party orders")
+                
+                elif party_orders and not order_confirmed:
+                    # Scenario 3: AI provided wrong menu item IDs - fix them with proper person-item assignment
+                    print("🔍 [Summary] Validating menu item IDs in party_orders...")
+                    conversation_text = ' '.join([
+                        entry.get('content', '') 
+                        for entry in call_log 
+                        if entry.get('role') == 'user'
+                    ])
+                    
+                    # Extract correct menu items from conversation
+                    correct_items = self._extract_food_items_from_conversation(conversation_text, meta_data)
+                    print(f"🔍 [Summary] Extracted correct items from conversation: {correct_items}")
+                    
+                    if correct_items:
+                        # Use intelligent parsing to assign items to specific people
+                        customer_name = args.get('name', 'Customer')
+                        party_size = args.get('party_size', 2)
+                        
+                        # Parse individual orders using the existing sophisticated method
+                        corrected_party_orders = self._parse_individual_orders(
+                            conversation_text, customer_name, party_size, correct_items
+                        )
+                        
+                        print(f"🔄 [Summary] Intelligently assigned items to people:")
+                        for order in corrected_party_orders:
+                            person_name = order.get('person_name', 'Unknown')
+                            items = order.get('items', [])
+                            print(f"   {person_name}: {len(items)} items")
+                            
+                            # Convert items to the format expected by args
+                            formatted_items = []
+                            for item in items:
+                                if isinstance(item, dict) and 'menu_item_id' in item:
+                                    formatted_items.append({
+                                        'menu_item_id': item['menu_item_id'],
+                                        'quantity': item.get('quantity', 1)
+                                    })
+                            order['items'] = formatted_items
+                        
+                        args['party_orders'] = corrected_party_orders
+                        print(f"✅ [Summary] Fixed party_orders with correct menu item IDs and proper person assignment")
+                
+                # Extract caller phone number from various sources
                 caller_phone = None
                 
                 # Try to get caller's phone number from various sources
@@ -1112,9 +1485,6 @@ class RestaurantReservationSkill(SkillBase):
                             global_data.get('caller_id_number') or
                             global_data.get('caller_id_num')
                         )
-                
-                # Enhanced context extraction from conversation
-                call_log = raw_data.get('call_log', []) if raw_data else []
                 
                 # Log call_id for tracking function execution
                 call_id = raw_data.get('call_id') if raw_data else None
@@ -1328,7 +1698,7 @@ class RestaurantReservationSkill(SkillBase):
                     if not existing:
                         break
                 
-                # Create reservation with exact same structure as Flask route
+                # Create reservation with exact same structure as Flask route and init_test_data.py
                 reservation = Reservation(
                     reservation_number=reservation_number,
                     name=args['name'],
@@ -1337,7 +1707,8 @@ class RestaurantReservationSkill(SkillBase):
                     time=args['time'],
                     phone_number=args['phone_number'],
                     status='confirmed',  # Match Flask route default
-                    special_requests=args.get('special_requests', '')
+                    special_requests=args.get('special_requests', ''),
+                    payment_status='unpaid'  # Match init_test_data.py structure
                 )
                 
                 db.session.add(reservation)
@@ -1346,7 +1717,73 @@ class RestaurantReservationSkill(SkillBase):
                 # Process party orders if provided (matching Flask route logic)
                 party_orders = args.get('party_orders', [])
                 pre_order = args.get('pre_order', [])  # Handle alternative format from AI
+                order_items = args.get('order_items', [])  # Handle order_items format from test/AI
                 total_reservation_amount = 0.0
+                
+                # Convert order_items format to party_orders format if needed
+                if order_items and not party_orders and not pre_order:
+                    print(f"🔄 Converting order_items format to party_orders format")
+                    from models import MenuItem
+                    
+                    # Convert order_items to party_orders format using exact matching only
+                    converted_items = []
+                    for item in order_items:
+                        item_name = item.get('name', '')
+                        quantity = item.get('quantity', 1)
+                        person_name = item.get('person_name', args.get('name', 'Customer'))
+                        
+                        # Find menu item by exact name match first
+                        menu_item = self._find_menu_item_exact(item_name)
+                        
+                        if menu_item:
+                            converted_items.append({
+                                'menu_item_id': menu_item.id,
+                                'quantity': quantity,
+                                'person_name': person_name
+                            })
+                            print(f"   ✅ Added exact match: '{item_name}' (menu item ID {menu_item.id}) for {person_name}")
+                        else:
+                            print(f"   ❌ Exact match not found for '{item_name}' - trying conversation extraction")
+                            # Try to find the item using conversation extraction
+                            call_log = raw_data.get('call_log', []) if raw_data else []
+                            conversation_text = ' '.join([entry.get('content', '') for entry in call_log if entry.get('content')])
+                            
+                            # Use the conversation extraction to find the correct menu item
+                            conversation_items = self._extract_food_items_from_conversation(conversation_text, meta_data)
+                            
+                            # Look for a match based on the item name
+                            for conv_item in conversation_items:
+                                if item_name.lower() in conv_item.get('name', '').lower() or conv_item.get('name', '').lower() in item_name.lower():
+                                    converted_items.append({
+                                        'menu_item_id': conv_item['menu_item_id'],
+                                        'quantity': quantity,
+                                        'person_name': person_name
+                                    })
+                                    print(f"   ✅ Found via conversation: '{item_name}' -> {conv_item['name']} (ID {conv_item['menu_item_id']}) for {person_name}")
+                                    break
+                            else:
+                                print(f"   ❌ Could not find '{item_name}' in menu or conversation - skipping")
+                    
+                    if converted_items:
+                        # Group items by person
+                        person_groups = {}
+                        for item in converted_items:
+                            person = item['person_name']
+                            if person not in person_groups:
+                                person_groups[person] = []
+                            person_groups[person].append({
+                                'menu_item_id': item['menu_item_id'],
+                                'quantity': item['quantity']
+                            })
+                        
+                        party_orders = []
+                        for person_name, items in person_groups.items():
+                            party_orders.append({
+                                'person_name': person_name,
+                                'items': items
+                            })
+                        
+                        print(f"   Created party_orders from order_items: {party_orders}")
                 
                 # Convert pre_order format to party_orders format if needed
                 if pre_order and not party_orders:
@@ -1381,8 +1818,9 @@ class RestaurantReservationSkill(SkillBase):
                 # Debug logging for order processing
                 print(f"🔍 Order processing debug:")
                 print(f"   old_school: {args.get('old_school', False)}")
-                print(f"   party_orders: {party_orders}")
-                print(f"   pre_order: {pre_order}")
+                print(f"   party_orders: {len(party_orders)} items")
+                print(f"   pre_order: {len(pre_order)} items")
+                print(f"   order_items: {len(order_items)} items")
                 
                 # CRITICAL FIX: Always process orders regardless of payment context
                 # The payment protection system was incorrectly blocking reservation creation
@@ -1394,142 +1832,124 @@ class RestaurantReservationSkill(SkillBase):
                     from models import Order, OrderItem, MenuItem
                     print(f"✅ Processing {len(party_orders)} party orders")
                     
-                    # SIMPLE DATABASE-DRIVEN ORDER PROCESSING
-                    # Instead of trying to correct wrong IDs, just extract items from conversation directly
-                    call_log = raw_data.get('call_log', []) if raw_data else []
-                    conversation_text = ' '.join([entry.get('content', '') for entry in call_log if entry.get('content')])
+                    # SIMPLIFIED PROCESSING: Trust the provided menu IDs and use cached menu data
+                    print(f"🔧 SIMPLIFIED: Using provided menu IDs directly with cached menu validation")
                     
-                    # Get menu items directly from conversation using database/cached menu
-                    conversation_items = self._extract_food_items_from_conversation(conversation_text, meta_data)
-                    print(f"🔍 Found {len(conversation_items)} menu items from conversation: {conversation_items}")
+                    # Use cached menu for fast lookups and accurate pricing
+                    cached_menu = meta_data.get('cached_menu', [])
+                    menu_lookup = {item['id']: item for item in cached_menu} if cached_menu else {}
                     
-                    # CRITICAL FIX: Validate and correct AI agent's menu item IDs
-                    # Check if AI agent used invalid sequential IDs (1, 2, 3, 4, etc.) instead of real database IDs
-                    invalid_ids_detected = False
+                    if not menu_lookup:
+                        print("⚠️ No cached menu available, querying database directly")
+                        # Fallback to database if no cached menu
+                        menu_items = MenuItem.query.filter_by(is_available=True).all()
+                        menu_lookup = {item.id: {'id': item.id, 'name': item.name, 'price': float(item.price), 'category': item.category} for item in menu_items}
+                    
+                    print(f"📊 Using menu data with {len(menu_lookup)} items for pricing")
+                    
+                    total_reservation_amount = 0.0
+                    
                     for person_order in party_orders:
-                        for item in person_order.get('items', []):
-                            menu_item_id = item.get('menu_item_id')
-                            if menu_item_id and menu_item_id < 100:  # Real menu IDs start from 101+
-                                invalid_ids_detected = True
-                                break
-                        if invalid_ids_detected:
-                            break
-                    
-                    if invalid_ids_detected:
-                        print(f"🚨 INVALID MENU IDs DETECTED: AI agent used sequential IDs (1,2,3,4...) instead of real database IDs")
-                        print(f"   🔧 FIXING: Using conversation extraction to get correct menu items")
+                        person_name = person_order.get('person_name', 'Customer')
+                        person_items = person_order.get('items', [])
                         
-                        # Replace party_orders with corrected items from conversation
-                        if conversation_items:
-                            # Distribute conversation items among party members
-                            corrected_party_orders = []
-                            items_per_person = len(conversation_items) // len(party_orders)
-                            remaining_items = len(conversation_items) % len(party_orders)
-                            
-                            item_index = 0
-                            for i, person_order in enumerate(party_orders):
-                                person_name = person_order.get('person_name', f'Person {i+1}')
-                                person_items = []
-                                
-                                # Give each person their share of items
-                                items_for_this_person = items_per_person + (1 if i < remaining_items else 0)
-                                for j in range(items_for_this_person):
-                                    if item_index < len(conversation_items):
-                                        person_items.append(conversation_items[item_index])
-                                        item_index += 1
-                                
-                                if person_items:
-                                    corrected_party_orders.append({
-                                        'person_name': person_name,
-                                        'items': person_items
-                                    })
-                                    print(f"   ✅ {person_name}: {len(person_items)} items assigned")
-                            
-                            party_orders = corrected_party_orders
-                            print(f"   🔧 Fixed party_orders with {len(party_orders)} people and real menu IDs")
-                        else:
-                            print(f"   ❌ No conversation items found to replace invalid IDs - orders will be empty")
-                    
-                    # FIXED: Use set to track already processed items and avoid duplicates
-                    processed_items = set()
-                    
-                    if conversation_items:
-                        # FIXED: Use conversation_items WITH party_orders structure for proper multi-person distribution
-                        customer_name = args.get('name', 'Customer')
-                        party_size = args.get('party_size', 1)
+                        if not person_items:
+                            print(f"   ⚠️ No items for {person_name}, skipping order creation")
+                            continue
                         
-                        print(f"🔍 Processing {len(conversation_items)} conversation items for party of {party_size}")
+                        print(f"   👤 Creating order for {person_name} with {len(person_items)} items")
                         
-                        if party_size > 1 and party_orders:
-                            # Multi-person reservation: distribute conversation_items using party_orders structure
-                            print(f"   🔄 Multi-person reservation: Using party_orders structure with validated conversation items")
+                        # Create order for this person
+                        order = Order(
+                            order_number=self._generate_order_number(),
+                            reservation_id=reservation.id,
+                            table_id=None,
+                            person_name=person_name,
+                            status='pending',
+                            total_amount=0.0
+                        )
+                        db.session.add(order)
+                        db.session.flush()  # Get order.id
+                        
+                        order_total = 0.0
+                        for item_data in person_items:
+                            menu_item_id = int(item_data['menu_item_id'])
+                            quantity = int(item_data.get('quantity', 1))
                             
-                            # Validate conversation_items against party_orders and create orders per person
-                            for person_order in party_orders:
-                                person_name = person_order.get('person_name', '')
-                                person_items = person_order.get('items', [])
-                                
-                                if not person_items:
+                            # Get menu item info from cached data or database
+                            if menu_item_id in menu_lookup:
+                                menu_info = menu_lookup[menu_item_id]
+                                menu_item_name = menu_info['name']
+                                menu_item_price = float(menu_info['price'])
+                                print(f"      ✅ Using cached data: {menu_item_name} x{quantity} @ ${menu_item_price}")
+                            else:
+                                # Fallback to database query
+                                menu_item = MenuItem.query.get(menu_item_id)
+                                if menu_item:
+                                    menu_item_name = menu_item.name
+                                    menu_item_price = float(menu_item.price)
+                                    print(f"      ✅ Using database: {menu_item_name} x{quantity} @ ${menu_item_price}")
+                                else:
+                                    print(f"      ❌ Menu item ID {menu_item_id} not found, skipping")
                                     continue
-                                    
-                                # Create order for this person
-                                order = Order(
-                                    order_number=self._generate_order_number(),
-                                    reservation_id=reservation.id,
-                                    table_id=None,
-                                    person_name=person_name,
-                                    status='pending',
-                                    total_amount=0.0,
-                                    target_date=args['date'],  # Match reservation date
-                                    target_time=args['time'],  # Match reservation time
-                                    payment_status='unpaid'    # Match init_test_data.py structure
-                                )
-                                db.session.add(order)
-                                db.session.flush()  # Get order.id
-                                
-                                order_total = 0.0
-                                for item_data in person_items:
-                                    menu_item_id = int(item_data['menu_item_id'])
-                                    quantity = int(item_data.get('quantity', 1))
-                                    
-                                    # FIXED: Check if item already processed to avoid duplicates
-                                    item_key = f"{menu_item_id}_{quantity}_{person_name}"
-                                    if item_key in processed_items:
-                                        print(f"      ⚠️ Skipping duplicate item for {person_name}: menu_item_id={menu_item_id}, quantity={quantity}")
-                                        continue
-                                    processed_items.add(item_key)
-                                    
-                                    # Just use the items assigned to this person in party_orders
-                                    menu_item = MenuItem.query.get(menu_item_id)
-                                    if menu_item:
-                                        print(f"      ✅ Adding for {person_name}: {menu_item.name} x{quantity} @ ${menu_item.price}")
-                                        
-                                        order_total += menu_item.price * quantity
-                                        order_item = OrderItem(
-                                            order_id=order.id,
-                                            menu_item_id=menu_item.id,
-                                            quantity=quantity,
-                                            price_at_time=menu_item.price
-                                        )
-                                        db.session.add(order_item)
-                                    else:
-                                        print(f"      ❌ Menu item ID {menu_item_id} not found in database")
-                                
-                                order.total_amount = order_total
-                                total_reservation_amount += order_total
-                                print(f"   ✅ Order total for {person_name}: ${order_total:.2f}")
-                        else:
-                            # Single person or no party_orders: create single order with all conversation items
+                            
+                            # Create order item with accurate pricing
+                            order_item = OrderItem(
+                                order_id=order.id,
+                                menu_item_id=menu_item_id,
+                                quantity=quantity,
+                                price_at_time=menu_item_price  # Use the accurate price from cache/database
+                            )
+                            db.session.add(order_item)
+                            
+                            item_total = menu_item_price * quantity
+                            order_total += item_total
+                            print(f"         💰 Item total: ${item_total:.2f}")
+                        
+                        order.total_amount = order_total
+                        total_reservation_amount += order_total
+                        print(f"   💰 Order total for {person_name}: ${order_total:.2f}")
+                    
+                    print(f"💰 Total reservation amount: ${total_reservation_amount:.2f}")
+                
+                # Fallback: If no party_orders but conversation indicates food items, extract them
+                elif not args.get('old_school', False) and not party_orders:
+                    print("🔍 No party_orders provided, checking conversation for food items...")
+                    
+                    # Get conversation text for extraction
+                    call_log = raw_data.get('call_log', []) if raw_data else []
+                    conversation_text = ' '.join([
+                        entry.get('content', '') for entry in call_log 
+                        if entry.get('role') == 'user'
+                    ])
+                    
+                    # Check for food keywords
+                    food_keywords = [
+                        'burger', 'pizza', 'salad', 'chicken', 'steak', 'fish', 'wings', 'fries',
+                        'drink', 'beer', 'wine', 'water', 'soda', 'pepsi', 'coke', 'tea', 'coffee',
+                        'appetizer', 'dessert', 'soup', 'sandwich', 'pasta', 'rice'
+                    ]
+                    
+                    conversation_lower = conversation_text.lower()
+                    has_food_mention = any(keyword in conversation_lower for keyword in food_keywords)
+                    
+                    if has_food_mention:
+                        print(f"🔄 FALLBACK: Detected food mentions in conversation, attempting extraction")
+                        conversation_items = self._extract_food_items_from_conversation(conversation_text, meta_data)
+                        
+                        if conversation_items:
+                            print(f"   ✅ Found {len(conversation_items)} items via fallback conversation extraction")
+                            
+                            # Create a single order with all conversation items
+                            from models import Order, OrderItem, MenuItem
+                            
                             order = Order(
                                 order_number=self._generate_order_number(),
                                 reservation_id=reservation.id,
                                 table_id=None,
-                                person_name=customer_name,
+                                person_name=args.get('name', 'Customer'),
                                 status='pending',
-                                total_amount=0.0,
-                                target_date=args['date'],  # Match reservation date
-                                target_time=args['time'],  # Match reservation time
-                                payment_status='unpaid'    # Match init_test_data.py structure
+                                total_amount=0.0
                             )
                             db.session.add(order)
                             db.session.flush()  # Get order.id
@@ -1539,16 +1959,9 @@ class RestaurantReservationSkill(SkillBase):
                                 menu_item_id = int(item_data['menu_item_id'])
                                 quantity = int(item_data.get('quantity', 1))
                                 
-                                # FIXED: Check if item already processed to avoid duplicates
-                                item_key = f"{menu_item_id}_{quantity}"
-                                if item_key in processed_items:
-                                    print(f"      ⚠️ Skipping duplicate item: menu_item_id={menu_item_id}, quantity={quantity}")
-                                    continue
-                                processed_items.add(item_key)
-                                
                                 menu_item = MenuItem.query.get(menu_item_id)
                                 if menu_item:
-                                    print(f"      ✅ Adding: {menu_item.name} x{quantity} @ ${menu_item.price}")
+                                    print(f"      ✅ Fallback adding: {menu_item.name} x{quantity} @ ${menu_item.price}")
                                     
                                     order_total += menu_item.price * quantity
                                     order_item = OrderItem(
@@ -1558,68 +1971,14 @@ class RestaurantReservationSkill(SkillBase):
                                         price_at_time=menu_item.price
                                     )
                                     db.session.add(order_item)
-                                else:
-                                    print(f"      ❌ Menu item ID {menu_item_id} not found")
                             
                             order.total_amount = order_total
                             total_reservation_amount += order_total
-                            print(f"   ✅ Single order total: ${order_total:.2f}")
-                        
-                        print(f"   ✅ Processed conversation items with proper person distribution")
+                            print(f"   ✅ Fallback order total: ${order_total:.2f}")
+                        else:
+                            print(f"   ❌ No items found via fallback conversation extraction")
                     else:
-                        # Legacy fallback: process party_orders only if no conversation items found
-                        print(f"   🔄 Fallback: Processing party_orders from agent")
-                        for person_order in party_orders:
-                            person_name = person_order.get('person_name', '')
-                            items = person_order.get('items', [])
-                            
-                            # Create order for this person
-                            order = Order(
-                                order_number=self._generate_order_number(),
-                                reservation_id=reservation.id,
-                                table_id=None,  # Table assignment logic can be added
-                                person_name=person_name,
-                                status='pending',
-                                total_amount=0.0,
-                                target_date=args['date'],  # Match reservation date
-                                target_time=args['time'],  # Match reservation time
-                                payment_status='unpaid'    # Match init_test_data.py structure
-                            )
-                            db.session.add(order)
-                            db.session.flush()  # Get order.id
-                            
-                            order_total = 0.0
-                            for item_data in items:
-                                menu_item_id = int(item_data['menu_item_id'])
-                                
-                                # FIXED: Check for duplicates in party_orders too
-                                quantity = int(item_data['quantity'])
-                                item_key = f"{menu_item_id}_{quantity}"
-                                if item_key in processed_items:
-                                    print(f"      ⚠️ Skipping duplicate party order item: menu_item_id={menu_item_id}, quantity={quantity}")
-                                    continue
-                                processed_items.add(item_key)
-                                
-                                menu_item = MenuItem.query.get(menu_item_id)
-                                
-                                if menu_item and quantity > 0:
-                                    print(f"      ✅ Adding: {menu_item.name} x{quantity} @ ${menu_item.price}")
-                                    order_total += menu_item.price * quantity
-                                    order_item = OrderItem(
-                                        order_id=order.id,
-                                        menu_item_id=menu_item.id,
-                                        quantity=quantity,
-                                        price_at_time=menu_item.price
-                                    )
-                                    db.session.add(order_item)
-                                else:
-                                    print(f"      ⚠️ Skipped item - Menu item not found or qty=0")
-                            
-                            order.total_amount = order_total
-                            total_reservation_amount += order_total
-                            print(f"   Order total for {person_name}: ${order_total:.2f}")
-                else:
-                    print(f"⚠️ No orders processed - old_school: {args.get('old_school', False)}, party_orders: {bool(party_orders)}")
+                        print(f"   ℹ️ No food keywords detected in conversation - truly an old-school reservation")
                 
                 # Send SMS confirmation using the same method as Flask route
                 receptionist_agent = get_receptionist_agent()
@@ -1709,9 +2068,13 @@ class RestaurantReservationSkill(SkillBase):
                 message += f"\n🎯 IMPORTANT: Your reservation number is {reservation.reservation_number}\n"
                 message += f"Please save this number for your records: {reservation.reservation_number}\n\n"
                 message += f"Thank you for choosing Bobby's Table! We look forward to serving you. "
-                message += f"Please arrive on time and let us know if you need to make any changes."
+                message += f"Please arrive on time and let us know if you need to make any changes.\n\n"
                 
-                # Set meta_data with reservation information for potential payment processing
+                # AGENT INSTRUCTION: Ask user about SMS confirmation
+                message += f"📱 Would you like me to send your reservation details to your phone via text message? "
+                message += f"The SMS will include all your reservation information and a link to view it online."
+                
+                # Set meta_data with reservation information for potential payment processing and SMS confirmation
                 meta_data_for_next_function = {
                     "reservation_created": True,
                     "reservation_number": reservation.reservation_number,
@@ -1722,7 +2085,9 @@ class RestaurantReservationSkill(SkillBase):
                     "phone_number": args['phone_number'],
                     "has_pre_orders": total_reservation_amount > 0,
                     "pre_order_total": total_reservation_amount,
-                    "reservation_id": reservation.id
+                    "reservation_id": reservation.id,
+                    "sms_confirmation_pending": True,
+                    "calendar_updated": True
                 }
                 
                 # ONLY offer payment if there are pre-orders with amounts due
@@ -1746,6 +2111,38 @@ class RestaurantReservationSkill(SkillBase):
                 print(f"   Reservation number: {reservation.reservation_number}")
                 print(f"   Customer: {reservation.name}")
                 print(f"   Total amount: ${total_reservation_amount:.2f}")
+                
+                # 🚀 INSTANT CALENDAR UPDATE: Trigger calendar refresh for web interface
+                try:
+                    import requests
+                    # Notify web interface to refresh calendar immediately
+                    calendar_refresh_url = "http://localhost:8080/api/calendar/refresh-trigger"
+                    refresh_data = {
+                        "event_type": "reservation_created",
+                        "reservation_id": reservation.id,
+                        "reservation_number": reservation.reservation_number,
+                        "customer_name": reservation.name,
+                        "party_size": reservation.party_size,
+                        "date": reservation.date,
+                        "time": reservation.time,
+                        "source": "phone_swaig"
+                    }
+                    
+                    # Non-blocking request with short timeout
+                    response = requests.post(
+                        calendar_refresh_url, 
+                        json=refresh_data, 
+                        timeout=2
+                    )
+                    
+                    if response.status_code == 200:
+                        print(f"📅 Calendar refresh notification sent successfully")
+                    else:
+                        print(f"⚠️ Calendar refresh notification failed: {response.status_code}")
+                        
+                except Exception as refresh_error:
+                    # Don't fail the reservation if calendar refresh fails
+                    print(f"⚠️ Calendar refresh notification error (non-critical): {refresh_error}")
                 
                 return result
                 
@@ -3519,6 +3916,29 @@ class RestaurantReservationSkill(SkillBase):
                 
                 message += "We're sorry to see you cancel and hope to serve you again soon!"
                 
+                # 🚀 INSTANT CALENDAR UPDATE: Trigger calendar refresh for cancellation
+                try:
+                    import requests
+                    calendar_refresh_url = "http://localhost:8080/api/calendar/refresh-trigger"
+                    refresh_data = {
+                        "event_type": "reservation_cancelled",
+                        "reservation_id": reservation.id,
+                        "reservation_number": reservation.reservation_number,
+                        "customer_name": reservation.name,
+                        "party_size": reservation.party_size,
+                        "date": reservation.date,
+                        "time": reservation.time,
+                        "source": "phone_swaig"
+                    }
+                    
+                    response = requests.post(calendar_refresh_url, json=refresh_data, timeout=2)
+                    if response.status_code == 200:
+                        print(f"📅 Calendar refresh notification sent for cancellation")
+                    else:
+                        print(f"⚠️ Calendar refresh notification failed for cancellation: {response.status_code}")
+                except Exception as refresh_error:
+                    print(f"⚠️ Calendar refresh notification error for cancellation (non-critical): {refresh_error}")
+                
                 # Convert numbers to words for better TTS pronunciation
                 from number_utils import numbers_to_words
                 message = numbers_to_words(message)
@@ -4122,6 +4542,89 @@ class RestaurantReservationSkill(SkillBase):
         
         return segments
 
+    def _offer_sms_confirmation_handler(self, args, raw_data):
+        """Handle SMS confirmation request with user consent"""
+        try:
+            from models import Reservation, Order
+            from signalwire_agents.core.function_result import SwaigFunctionResult
+            
+            reservation_number = args.get('reservation_number')
+            user_wants_sms = args.get('user_wants_sms', False)
+            
+            print(f"📱 SMS confirmation request for reservation #{reservation_number}")
+            print(f"   User wants SMS: {user_wants_sms}")
+            
+            if not reservation_number:
+                return SwaigFunctionResult("I need a reservation number to send SMS details.")
+            
+            # Get reservation from database
+            from app import app  # Import app for database context
+            with app.app_context():
+                reservation = Reservation.query.filter_by(reservation_number=reservation_number).first()
+                
+                if not reservation:
+                    return SwaigFunctionResult(f"I couldn't find reservation #{reservation_number}.")
+                
+                if not user_wants_sms:
+                    # User declined SMS
+                    return SwaigFunctionResult(
+                        f"No problem! Your reservation #{reservation_number} is confirmed and saved. "
+                        f"You can always view your reservation details on our website calendar."
+                    )
+                
+                # User wants SMS - send it
+                print(f"✅ User consented to SMS for reservation #{reservation_number}")
+                
+                # Get pre-order information
+                orders = Order.query.filter_by(reservation_id=reservation.id).all()
+                total_preorder_amount = sum(order.total_amount or 0 for order in orders)
+                
+                # Prepare reservation data for SMS
+                reservation_data = {
+                    'id': reservation.id,
+                    'reservation_number': reservation.reservation_number,
+                    'name': reservation.name,
+                    'date': str(reservation.date),
+                    'time': str(reservation.time),
+                    'party_size': reservation.party_size,
+                    'special_requests': reservation.special_requests,
+                    'has_preorders': total_preorder_amount > 0,
+                    'preorder_total': total_preorder_amount
+                }
+                
+                # Send SMS confirmation
+                sms_result = self._send_reservation_sms(reservation_data, reservation.phone_number)
+                
+                if sms_result.get('success'):
+                    response = f"Perfect! I've sent your reservation details to {reservation.phone_number}. "
+                    response += f"The SMS includes your reservation #{reservation_number} details and a link to view it online. "
+                    if reservation_data.get('has_preorders') and reservation_data.get('preorder_total', 0) > 0:
+                        response += f"Your pre-order total of ${reservation_data['preorder_total']:.2f} is also included. "
+                    response += "Thank you for choosing Bobby's Table!"
+                    
+                    print(f"✅ SMS sent successfully to {reservation.phone_number}")
+                    if sms_result.get('calendar_link'):
+                        print(f"   Calendar link included: {sms_result['calendar_link']}")
+                        
+                else:
+                    response = f"I tried to send the SMS but encountered an issue. "
+                    response += f"Don't worry - your reservation #{reservation_number} is still confirmed! "
+                    response += f"You can view your reservation details on our website calendar."
+                    
+                    print(f"⚠️ SMS failed: {sms_result.get('error', 'Unknown error')}")
+                
+                return SwaigFunctionResult(response)
+                
+        except Exception as e:
+            print(f"❌ Error in SMS confirmation handler: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            return SwaigFunctionResult(
+                f"I'm sorry, I encountered an error while processing your SMS request. "
+                f"Your reservation is still confirmed! Please contact us if you need assistance."
+            )
+
     def _add_to_reservation_handler(self, args, raw_data):
         """Handler for add_to_reservation tool"""
         try:
@@ -4346,8 +4849,53 @@ class RestaurantReservationSkill(SkillBase):
         except Exception as e:
             return SwaigFunctionResult(f"Error adding items to reservation: {str(e)}")
 
+    def _get_party_orders_for_sms(self, reservation_number):
+        """Get detailed party orders for SMS display"""
+        try:
+            from models import Reservation, Order, OrderItem
+            from app import app
+            
+            with app.app_context():
+                reservation = Reservation.query.filter_by(reservation_number=reservation_number).first()
+                if not reservation:
+                    return None
+                
+                orders = Order.query.filter_by(reservation_id=reservation.id).all()
+                if not orders:
+                    return None
+                
+                party_orders = []
+                for order in orders:
+                    # Get order items for this order
+                    order_items = OrderItem.query.filter_by(order_id=order.id).all()
+                    if not order_items:
+                        continue
+                    
+                    items_detail = []
+                    for item in order_items:
+                        # Get menu item name through the relationship
+                        menu_item_name = item.menu_item.name if item.menu_item else f"Item #{item.menu_item_id}"
+                        items_detail.append({
+                            'name': menu_item_name,
+                            'price': float(item.price_at_time),
+                            'quantity': item.quantity
+                        })
+                    
+                    if items_detail:
+                        party_orders.append({
+                            'name': order.person_name,
+                            'items': items_detail,
+                            'total': float(order.total_amount or 0)
+                        })
+                
+                return party_orders if party_orders else None
+                
+        except Exception as e:
+            print(f"⚠️ Error getting party orders for SMS: {e}")
+            return None
+
     def _send_reservation_sms(self, reservation_data, phone_number):
-        """Send SMS confirmation for reservation"""
+        """Send SMS confirmation for reservation with calendar link"""
         try:
             # Convert time to 12-hour format for SMS
             try:
@@ -4356,19 +4904,51 @@ class RestaurantReservationSkill(SkillBase):
             except (ValueError, TypeError):
                 time_12hr = str(reservation_data['time'])
             
+            # Get base URL for calendar link
+            import os
+            base_url = os.getenv('BASE_URL', 'https://localhost:8080')
+            reservation_number = reservation_data.get('reservation_number', reservation_data.get('id'))
+            
+            # Create calendar link where users can view their reservation
+            calendar_link = f"{base_url}/calendar"
+            
             sms_body = f"🍽️ Bobby's Table Reservation Confirmed!\n\n"
-            sms_body += f"Name: {reservation_data['name']}\n"
-            sms_body += f"Date: {reservation_data['date']}\n"
-            sms_body += f"Time: {time_12hr}\n"
+            sms_body += f"🎯 RESERVATION #{reservation_number}\n\n"
+            sms_body += f"📋 Details:\n"
+            sms_body += f"• Name: {reservation_data['name']}\n"
+            sms_body += f"• Date: {reservation_data['date']}\n"
+            sms_body += f"• Time: {time_12hr}\n"
             party_text = "person" if reservation_data['party_size'] == 1 else "people"
-            sms_body += f"Party Size: {reservation_data['party_size']} {party_text}\n"
-            sms_body += f"Reservation Number: {reservation_data.get('reservation_number', reservation_data['id'])}\n"
+            sms_body += f"• Party Size: {reservation_data['party_size']} {party_text}\n"
             
             if reservation_data.get('special_requests'):
-                sms_body += f"Special Requests: {reservation_data['special_requests']}\n"
+                sms_body += f"• Special Requests: {reservation_data['special_requests']}\n"
             
-            sms_body += f"\nWe look forward to serving you!\nBobby's Table Restaurant"
-            sms_body += f"\nReply STOP to stop."
+            # Add detailed pre-order information if available
+            if reservation_data.get('has_preorders') and reservation_data.get('preorder_total', 0) > 0:
+                sms_body += f"\n🍽️ Pre-Orders:\n"
+                
+                # Try to get detailed party orders from database
+                party_orders_detail = self._get_party_orders_for_sms(reservation_number)
+                if party_orders_detail:
+                    for person_order in party_orders_detail:
+                        sms_body += f"• {person_order['name']}: "
+                        items_list = []
+                        for item in person_order['items']:
+                            items_list.append(f"{item['name']} (${item['price']:.2f})")
+                        sms_body += ", ".join(items_list)
+                        sms_body += f" = ${person_order['total']:.2f}\n"
+                    sms_body += f"\n💰 Total Pre-Order: ${reservation_data['preorder_total']:.2f}\n"
+                else:
+                    sms_body += f"💰 Pre-Order Total: ${reservation_data['preorder_total']:.2f}\n"
+                
+                sms_body += f"Your food will be ready when you arrive!\n"
+            
+            sms_body += f"\n🔗 View Reservations Calendar:\n{calendar_link}\n"
+            sms_body += f"\n📞 Questions? Call us or reply to this message.\n"
+            sms_body += f"\nWe look forward to serving you!\n"
+            sms_body += f"Bobby's Table Restaurant\n"
+            sms_body += f"Reply STOP to stop."
             
             # Send SMS using SignalWire Agents SDK
             sms_function_result = SwaigFunctionResult().send_sms(
@@ -4377,9 +4957,14 @@ class RestaurantReservationSkill(SkillBase):
                 body=sms_body
             )
             
-            return {'success': True, 'sms_sent': True}
+            print(f"✅ Reservation SMS sent successfully to {phone_number}")
+            print(f"   Reservation: #{reservation_number}")
+            print(f"   Calendar Link: {calendar_link}")
+            print(f"   SMS result type: {type(sms_function_result)}")
+            return {'success': True, 'sms_sent': True, 'calendar_link': calendar_link}
             
         except Exception as e:
+            print(f"❌ Error sending reservation SMS: {str(e)}")
             return {'success': False, 'sms_sent': False, 'error': str(e)}
     
     def _send_payment_confirmation_sms(self, reservation_data, payment_data, phone_number):
@@ -4412,6 +4997,19 @@ class RestaurantReservationSkill(SkillBase):
             
             if reservation_data.get('special_requests'):
                 sms_body += f"Special requests: {reservation_data['special_requests']}\n"
+            
+            # Add detailed pre-order breakdown to payment receipt
+            if reservation_data.get('has_preorders'):
+                party_orders_detail = self._get_party_orders_for_sms(reservation_data['reservation_number'])
+                if party_orders_detail:
+                    sms_body += f"\n🍽️ Paid Pre-Orders:\n"
+                    for person_order in party_orders_detail:
+                        sms_body += f"• {person_order['name']}: "
+                        items_list = []
+                        for item in person_order['items']:
+                            items_list.append(f"{item['name']} (${item['price']:.2f})")
+                        sms_body += ", ".join(items_list)
+                        sms_body += f" = ${person_order['total']:.2f}\n"
             
             sms_body += f"\n✅ Pre-orders paid - ready for your visit!\n"
             sms_body += f"Thank you!\nBobby's Table Restaurant"
