@@ -1093,7 +1093,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 }); 
 
-// Auto-refresh calendar every 30 seconds to catch SWAIG reservations
+// Auto-refresh calendar every 60 seconds to catch SWAIG reservations (reduced from 30s)
 let autoRefreshInterval = null;
 let lastReservationCount = 0;
 let initialCountSet = false; // Track if we've set the initial count
@@ -1101,7 +1101,7 @@ let initialCountSet = false; // Track if we've set the initial count
 function startAutoRefresh() {
     // Only start auto-refresh if calendar exists and we're on the calendar page
     if (typeof calendar !== 'undefined' && document.getElementById('calendar')) {
-        console.log('📅 Starting auto-refresh for SWAIG reservations (30s interval)');
+        console.log('📅 Starting auto-refresh for SWAIG reservations (60s interval)');
         
         autoRefreshInterval = setInterval(() => {
             console.log('🔄 Auto-refreshing calendar for new phone reservations...');
@@ -1109,7 +1109,7 @@ function startAutoRefresh() {
             
             // Check for new reservations and show notification
             checkForNewReservations();
-        }, 30000); // 30 seconds - reasonable refresh rate
+        }, 60000); // 60 seconds - more reasonable refresh rate
     }
 }
 
@@ -1226,23 +1226,17 @@ document.addEventListener('DOMContentLoaded', function() {
             // 🚀 PRIORITY: Start real-time updates first (instant)
             initializeRealTimeUpdates();
             
-            // Keep auto-refresh as fallback (30-second polling)
+            // Keep auto-refresh as fallback (60-second polling)
             startAutoRefresh();
             
             // Initialize reservation count
             checkForNewReservations();
             
-            // Do an immediate refresh after 3 seconds to catch any recent reservations
+            // Do one initial refresh after 5 seconds (reduced from multiple refreshes)
             setTimeout(() => {
                 console.log('🔄 Initial refresh for recent reservations');
                 refreshCalendarNow();
-            }, 3000);
-            
-            // Also do another check after 10 seconds to catch any reservations that might have been created
-            setTimeout(() => {
-                console.log('🔄 Secondary refresh for recent reservations');
-                refreshCalendarNow();
-            }, 10000);
+            }, 5000);
         }
     }, 2000);
     

@@ -591,8 +591,11 @@ def api_update_reservation(res_id):
         # Handle party orders if provided
         if 'party_orders' in data and data['party_orders']:
             try:
+                print(f"🔄 Processing party orders for reservation {res_id}")
+                
                 # Delete existing orders for this reservation
                 existing_orders = Order.query.filter_by(reservation_id=reservation.id).all()
+                print(f"🗑️ Deleting {len(existing_orders)} existing orders")
                 for order in existing_orders:
                     # Delete order items first
                     OrderItem.query.filter_by(order_id=order.id).delete()
@@ -600,89 +603,177 @@ def api_update_reservation(res_id):
 
                 # Create new orders from party_orders data
                 party_orders_data = data['party_orders']
+                
+                # Handle string JSON data
                 if isinstance(party_orders_data, str):
-                    party_orders = json.loads(party_orders_data)
+                    try:
+                        party_orders = json.loads(party_orders_data)
+                    except json.JSONDecodeError as e:
+                        print(f"❌ JSON decode error for party_orders: {e}")
+                        print(f"   Raw data: {party_orders_data}")
+                        return jsonify({'success': False, 'error': f'Invalid JSON format in party_orders: {str(e)}'}), 400
                 else:
                     party_orders = party_orders_data
 
                 print(f"DEBUG: Processing party orders: {party_orders}")
+                
+                # Validate party_orders structure
+                if not isinstance(party_orders, (list, dict)):
+                    print(f"❌ Invalid party_orders format - expected list or dict, got {type(party_orders)}")
+                    return jsonify({'success': False, 'error': 'party_orders must be a list or dictionary'}), 400
 
                 # Handle both formats: array of {name, items} or dict with person names as keys
                 if isinstance(party_orders, list):
                     # New format: array of {name, items}
                     for person_order in party_orders:
+                        if not isinstance(person_order, dict):
+                            print(f"❌ Invalid person order format - expected dict, got {type(person_order)}")
+                            continue
+                            
                         person_name = person_order.get('name', '') or f"Person {party_orders.index(person_order) + 1}"
                         items = person_order.get('items', [])
+                        
+                        if not isinstance(items, list):
+                            print(f"❌ Invalid items format for {person_name} - expected list, got {type(items)}")
+                            continue
 
                         if items and len(items) > 0:  # Only create order if there are items
+                            print(f"👤 Creating order for {person_name} with {len(items)} items")
                             order = Order(
                                 order_number=generate_order_number(),
                                 reservation_id=reservation.id,
                                 person_name=person_name,
-                                status='pending'
+                                status='pending',
+                                target_date=str(reservation.date),
+                                target_time=str(reservation.time),
+                                order_type='reservation',
+                                payment_status='unpaid',
+                                customer_phone=reservation.phone_number
                             )
                             db.session.add(order)
                             db.session.flush()  # Get order ID
 
                             total_amount = 0
+                            processed_items = 0
                             for oi in items:
                                 try:
-                                    menu_item = MenuItem.query.get(int(oi['menu_item_id']))
+                                    # Validate item structure
+                                    if not isinstance(oi, dict):
+                                        print(f"❌ Invalid order item format - expected dict, got {type(oi)}")
+                                        continue
+                                        
+                                    if 'menu_item_id' not in oi or 'quantity' not in oi:
+                                        print(f"❌ Missing required fields in order item: {oi}")
+                                        continue
+                                        
+                                    menu_item_id = int(oi['menu_item_id'])
+                                    quantity = int(oi['quantity'])
+                                    
+                                    if quantity <= 0:
+                                        print(f"❌ Invalid quantity {quantity} for menu item {menu_item_id}")
+                                        continue
+                                        
+                                    menu_item = MenuItem.query.get(menu_item_id)
                                     if menu_item:
                                         order_item = OrderItem(
                                             order_id=order.id,
                                             menu_item_id=menu_item.id,
-                                            quantity=int(oi['quantity']),
+                                            quantity=quantity,
                                             price_at_time=menu_item.price
                                         )
                                         db.session.add(order_item)
-                                        total_amount += menu_item.price * int(oi['quantity'])
-                                except (ValueError, KeyError) as e:
-                                    print(f"Error processing order item: {e}")
+                                        total_amount += menu_item.price * quantity
+                                        processed_items += 1
+                                        print(f"✅ Added {quantity}x {menu_item.name} (${menu_item.price * quantity:.2f})")
+                                    else:
+                                        print(f"❌ Menu item {menu_item_id} not found")
+                                        
+                                except (ValueError, KeyError, TypeError) as e:
+                                    print(f"❌ Error processing order item {oi}: {e}")
                                     continue
 
                             order.total_amount = total_amount
-                            print(f"DEBUG: Created order for {person_name} with {len(items)} items, total: ${total_amount}")
+                            print(f"✅ Created order for {person_name} with {processed_items} items, total: ${total_amount:.2f}")
                 else:
                     # Old format: dict with person names as keys
                     for person_name, orders in party_orders.items():
+                        if not isinstance(orders, list):
+                            print(f"❌ Invalid orders format for {person_name} - expected list, got {type(orders)}")
+                            continue
+                            
                         if orders and len(orders) > 0:  # Only create order if there are items
+                            print(f"👤 Creating order for {person_name} with {len(orders)} items")
                             order = Order(
                                 order_number=generate_order_number(),
                                 reservation_id=reservation.id,
                                 person_name=person_name,
-                                status='pending'
+                                status='pending',
+                                target_date=str(reservation.date),
+                                target_time=str(reservation.time),
+                                order_type='reservation',
+                                payment_status='unpaid',
+                                customer_phone=reservation.phone_number
                             )
                             db.session.add(order)
                             db.session.flush()  # Get order ID
 
                             total_amount = 0
+                            processed_items = 0
                             for oi in orders:
                                 try:
-                                    menu_item = MenuItem.query.get(int(oi['menu_item_id']))
+                                    # Validate item structure
+                                    if not isinstance(oi, dict):
+                                        print(f"❌ Invalid order item format - expected dict, got {type(oi)}")
+                                        continue
+                                        
+                                    if 'menu_item_id' not in oi or 'quantity' not in oi:
+                                        print(f"❌ Missing required fields in order item: {oi}")
+                                        continue
+                                        
+                                    menu_item_id = int(oi['menu_item_id'])
+                                    quantity = int(oi['quantity'])
+                                    
+                                    if quantity <= 0:
+                                        print(f"❌ Invalid quantity {quantity} for menu item {menu_item_id}")
+                                        continue
+                                        
+                                    menu_item = MenuItem.query.get(menu_item_id)
                                     if menu_item:
                                         order_item = OrderItem(
                                             order_id=order.id,
                                             menu_item_id=menu_item.id,
-                                            quantity=int(oi['quantity']),
+                                            quantity=quantity,
                                             price_at_time=menu_item.price
                                         )
                                         db.session.add(order_item)
-                                        total_amount += menu_item.price * int(oi['quantity'])
-                                except (ValueError, KeyError) as e:
-                                    print(f"Error processing order item: {e}")
+                                        total_amount += menu_item.price * quantity
+                                        processed_items += 1
+                                        print(f"✅ Added {quantity}x {menu_item.name} (${menu_item.price * quantity:.2f})")
+                                    else:
+                                        print(f"❌ Menu item {menu_item_id} not found")
+                                        
+                                except (ValueError, KeyError, TypeError) as e:
+                                    print(f"❌ Error processing order item {oi}: {e}")
                                     continue
 
                             order.total_amount = total_amount
+                            print(f"✅ Created order for {person_name} with {processed_items} items, total: ${total_amount:.2f}")
+                            
             except Exception as e:
-                print(f"Error handling party orders: {e}")
-                # Continue without party orders if there's an error
+                print(f"❌ Error handling party orders: {e}")
+                import traceback
+                traceback.print_exc()
+                return jsonify({'success': False, 'error': f'Failed to process party orders: {str(e)}'}), 500
 
         db.session.commit()
+        print(f"✅ Successfully updated reservation {res_id}")
         return jsonify({'success': True, 'reservation': reservation.to_dict()})
 
     except Exception as e:
         db.session.rollback()
+        print(f"❌ Error updating reservation {res_id}: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/reservations/<int:res_id>', methods=['DELETE'])
@@ -4932,6 +5023,79 @@ def debug_trigger_sms_receipt():
             
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+def log_function_call(function_name, params, call_context, result=None, error=None):
+    """
+    Enhanced logging for SWAIG function calls, especially order-related functions
+    """
+    try:
+        call_id = call_context.get('call_id', 'unknown')
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S EDT')
+        
+        print(f"📋 FUNCTION CALL LOG [{timestamp}]")
+        print(f"   Function: {function_name}")
+        print(f"   Call ID: {call_id}")
+        print(f"   Parameters: {json.dumps(params, indent=2, default=str) if params else 'None'}")
+        
+        # Special logging for order/reservation functions
+        if function_name in ['create_reservation', 'update_reservation', 'add_to_reservation']:
+            print(f"🍽️  ORDER CREATION LOGGING:")
+            
+            # Log party orders if present
+            if params and 'party_orders' in params:
+                party_orders = params['party_orders']
+                print(f"   Party Orders Type: {type(party_orders)}")
+                print(f"   Party Orders Content: {json.dumps(party_orders, indent=2, default=str)}")
+                
+                # Validate menu item IDs
+                if isinstance(party_orders, list):
+                    for person_order in party_orders:
+                        if isinstance(person_order, dict) and 'items' in person_order:
+                            for item in person_order['items']:
+                                if isinstance(item, dict) and 'menu_item_id' in item:
+                                    menu_item_id = item['menu_item_id']
+                                    print(f"   🔍 Checking menu item ID: {menu_item_id}")
+                                    
+                                    # Validate the menu item exists
+                                    from models import MenuItem
+                                    menu_item = MenuItem.query.get(menu_item_id)
+                                    if menu_item:
+                                        print(f"   ✅ Menu item {menu_item_id}: {menu_item.name} (${menu_item.price:.2f})")
+                                    else:
+                                        print(f"   ❌ Menu item {menu_item_id}: NOT FOUND")
+            
+            # Log available menu items count
+            try:
+                from models import MenuItem
+                total_menu_items = MenuItem.query.count()
+                available_menu_items = MenuItem.query.filter_by(is_available=True).count()
+                print(f"   📊 Database Status: {available_menu_items}/{total_menu_items} menu items available")
+                
+                # Log sample menu item IDs for debugging
+                sample_items = MenuItem.query.limit(5).all()
+                if sample_items:
+                    print(f"   📋 Sample menu item IDs: {[item.id for item in sample_items]}")
+                else:
+                    print(f"   ❌ No menu items found in database!")
+                    
+            except Exception as menu_error:
+                print(f"   ❌ Error checking menu items: {menu_error}")
+        
+        # Log result or error
+        if error:
+            print(f"   ❌ Error: {error}")
+        elif result:
+            print(f"   ✅ Result Type: {type(result)}")
+            if hasattr(result, 'to_dict'):
+                result_dict = result.to_dict()
+                print(f"   📤 Result Preview: {str(result_dict)[:200]}...")
+            else:
+                print(f"   📤 Result Preview: {str(result)[:200]}...")
+        
+        print(f"📋 END FUNCTION CALL LOG")
+        
+    except Exception as log_error:
+        print(f"❌ Error in function call logging: {log_error}")
 
 if __name__ == '__main__':
     print("🍽️  Starting Bobby's Table Restaurant System")
