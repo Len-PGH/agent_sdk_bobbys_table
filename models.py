@@ -1,18 +1,7 @@
-# Updated models to use local timezone for created_at fields.
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
-import pytz
-from flask import current_app
 
 db = SQLAlchemy()
-
-def get_local_now():
-    """
-    Get the current time in the configured local timezone.
-    """
-    local_tz_name = current_app.config.get('local_tz', 'America/New_York')
-    local_tz = pytz.timezone(local_tz_name)
-    return datetime.now(local_tz)
 
 class Reservation(db.Model):
     __tablename__ = 'reservations'
@@ -25,7 +14,7 @@ class Reservation(db.Model):
     phone_number = db.Column(db.String(20), nullable=False)
     status = db.Column(db.String(20), default='confirmed')
     special_requests = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=lambda: get_local_now().replace(tzinfo=None))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
     payment_status = db.Column(db.String(20), default='unpaid')  # 'unpaid', 'paid', 'refunded'
     payment_intent_id = db.Column(db.String(100))  # Stripe payment intent ID
     payment_amount = db.Column(db.Float)  # Total amount paid
@@ -98,7 +87,7 @@ class MenuItem(db.Model):
 class Order(db.Model):
     __tablename__ = 'orders'
     id = db.Column(db.Integer, primary_key=True)
-    order_number = db.Column(db.String(6), unique=True, nullable=False)  # 6-digit random number
+    order_number = db.Column(db.String(5), unique=True, nullable=False)  # 5-digit random number
     reservation_id = db.Column(db.Integer, db.ForeignKey('reservations.id'))
     table_id = db.Column(db.Integer, db.ForeignKey('tables.id'))
     person_name = db.Column(db.String(80))  # Name of the person for this order
@@ -116,7 +105,7 @@ class Order(db.Model):
     payment_date = db.Column(db.DateTime)  # When payment was completed
     confirmation_number = db.Column(db.String(20))  # Payment confirmation number
     payment_method = db.Column(db.String(50))  # Payment method used (e.g., 'credit_card', 'cash', 'signalwire_pay')
-    created_at = db.Column(db.DateTime, default=lambda: get_local_now().replace(tzinfo=None))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
     items = db.relationship('OrderItem', backref='order', lazy=True)
 
     def to_dict(self):
@@ -162,4 +151,4 @@ class OrderItem(db.Model):
             'price_at_time': self.price_at_time,
             'notes': self.notes,
             'menu_item': self.menu_item.to_dict() if self.menu_item else None
-        }
+        } 

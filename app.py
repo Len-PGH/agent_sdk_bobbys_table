@@ -137,7 +137,7 @@ with app.app_context():
 
     try:
         db.create_all()
-        print("✅ Database tables created/verified")
+        print("SUCCESS: Database tables created/verified")
 
         # Database migration: Add missing payment columns to orders table
         def migrate_orders_table():
@@ -151,7 +151,7 @@ with app.app_context():
 
                 # Check if database file exists
                 if not os.path.exists(db_path):
-                    print("⚠️ Database file doesn't exist, creating new one")
+                    print("WARNING: Database file doesn't exist, creating new one")
                     return
 
                 # Direct SQLite connection for migration
@@ -161,7 +161,7 @@ with app.app_context():
                 # Check if orders table exists
                 cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='orders'")
                 if not cursor.fetchone():
-                    print("⚠️ Orders table doesn't exist yet, skipping migration")
+                    print("WARNING: Orders table doesn't exist yet, skipping migration")
                     conn.close()
                     return
 
@@ -191,19 +191,19 @@ with app.app_context():
                     # Update existing orders to have 'unpaid' status
                     cursor.execute("UPDATE orders SET payment_status = 'unpaid' WHERE payment_status IS NULL")
                     conn.commit()
-                    print("✅ Orders table migration completed")
+                    print("SUCCESS: Orders table migration completed")
 
                     # Verify the migration
                     cursor.execute("PRAGMA table_info(orders)")
                     updated_columns = [col[1] for col in cursor.fetchall()]
                     print(f"📋 Updated orders table columns: {updated_columns}")
                 else:
-                    print("✅ Orders table already has all payment columns")
+                    print("SUCCESS: Orders table already has all payment columns")
 
                 conn.close()
 
             except Exception as e:
-                print(f"⚠️ Orders table migration error: {e}")
+                print(f"WARNING: Orders table migration error: {e}")
                 import traceback
                 traceback.print_exc()
 
@@ -218,7 +218,7 @@ with app.app_context():
 
                 # Check if database file exists
                 if not os.path.exists(db_path):
-                    print("⚠️ Database file doesn't exist, creating new one")
+                    print("WARNING: Database file doesn't exist, creating new one")
                     return
 
                 # Direct SQLite connection for migration
@@ -228,7 +228,7 @@ with app.app_context():
                 # Check if reservations table exists
                 cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='reservations'")
                 if not cursor.fetchone():
-                    print("⚠️ Reservations table doesn't exist yet, skipping migration")
+                    print("WARNING: Reservations table doesn't exist yet, skipping migration")
                     conn.close()
                     return
 
@@ -252,19 +252,19 @@ with app.app_context():
 
                 if migration_needed:
                     conn.commit()
-                    print("✅ Reservations table migration completed")
+                    print("SUCCESS: Reservations table migration completed")
 
                     # Verify the migration
                     cursor.execute("PRAGMA table_info(reservations)")
                     updated_columns = [col[1] for col in cursor.fetchall()]
                     print(f"📋 Updated reservations table columns: {updated_columns}")
                 else:
-                    print("✅ Reservations table already has all required columns")
+                    print("SUCCESS: Reservations table already has all required columns")
 
                 conn.close()
 
             except Exception as e:
-                print(f"⚠️ Reservations table migration error: {e}")
+                print(f"WARNING: Reservations table migration error: {e}")
                 import traceback
                 traceback.print_exc()
 
@@ -273,7 +273,7 @@ with app.app_context():
         migrate_reservations_table()
 
     except Exception as e:
-        print(f"⚠️ Database initialization error: {e}")
+        print(f"WARNING: Database initialization error: {e}")
         import traceback
         traceback.print_exc()
 
@@ -345,7 +345,7 @@ def new_reservation():
                 sms_result = receptionist_agent.send_reservation_sms(reservation_data, phone_number)
 
                 # Console logging for SMS status
-                print(f"📱 WEB FORM SMS Status for reservation {reservation.id}:")
+                print(f"SMS: WEB FORM SMS Status for reservation {reservation.id}:")
                 print(f"   Phone: {phone_number}")
                 print(f"   Success: {sms_result.get('success', False)}")
                 print(f"   SMS Sent: {sms_result.get('sms_sent', False)}")
@@ -360,7 +360,7 @@ def new_reservation():
                     flash('Reservation created! (SMS confirmation could not be sent)', 'warning')
 
             except Exception as e:
-                print(f"📱 WEB FORM SMS Exception for reservation {reservation.id}: {e}")
+                print(f"SMS: WEB FORM SMS Exception for reservation {reservation.id}: {e}")
                 flash('Reservation created! (SMS confirmation could not be sent)', 'warning')
         else:
             flash('Reservation created!', 'success')
@@ -548,7 +548,7 @@ def api_create_reservation():
                 sms_result = receptionist_agent.send_reservation_sms(reservation_data, phone_number)
 
                 # Console logging for SMS status
-                print(f"📱 WEB API SMS Status for reservation {reservation.id}:")
+                print(f"SMS: WEB API SMS Status for reservation {reservation.id}:")
                 print(f"   Phone: {phone_number}")
                 print(f"   Success: {sms_result.get('success', False)}")
                 print(f"   SMS Sent: {sms_result.get('sms_sent', False)}")
@@ -558,7 +558,7 @@ def api_create_reservation():
                     print(f"   Result: {sms_result.get('sms_result', 'SMS sent')}")
 
             except Exception as e:
-                print(f"📱 WEB API SMS Exception for reservation {reservation.id}: {e}")
+                print(f"SMS: WEB API SMS Exception for reservation {reservation.id}: {e}")
                 # Don't fail the reservation if SMS fails
                 sms_result = {'success': False, 'error': str(e)}
 
@@ -714,7 +714,7 @@ def get_menu():
 
     # Check if menu data was found and log error if empty
     if not menu_data:
-        print("❌ ERROR: No menu items found in database!")
+        print("ERROR: ERROR: No menu items found in database!")
         print("   This indicates a database setup issue.")
         print("   Run 'python init_test_data.py' to populate menu items.")
     
@@ -741,7 +741,7 @@ def menu():
 
     # Check if menu data was found and log error if empty
     if not menu_data:
-        print("❌ ERROR: No menu items found in database!")
+        print("ERROR: ERROR: No menu items found in database!")
         print("   This indicates a database setup issue.")
         print("   Run 'python init_test_data.py' to populate menu items.")
     
@@ -865,11 +865,11 @@ def create_standalone_order():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 def generate_order_number():
-    """Generate a unique 6-digit order number"""
+    """Generate a unique 5-digit order number"""
     import random
     while True:
-        # Generate a 6-digit number (100000 to 999999)
-        number = str(random.randint(100000, 999999))
+        # Generate a 5-digit number (10000 to 99999)
+        number = str(random.randint(10000, 99999))
 
         # Check if this number already exists (only if we're in an app context)
         try:
@@ -900,8 +900,10 @@ def kitchen_orders():
         start_datetime = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         end_datetime = datetime.now().replace(hour=23, minute=59, second=59, microsecond=999999)
 
-    # Query orders with target date/time filters
-    base_query = Order.query.filter(
+    # Query orders with target date/time filters and include reservation data
+    from sqlalchemy.orm import joinedload
+    
+    base_query = Order.query.options(joinedload(Order.reservation)).filter(
         Order.target_date == filter_date,
         Order.target_time >= start_time,
         Order.target_time <= end_time
@@ -1074,7 +1076,7 @@ def record_function_call(ai_session_id, function_name, result=None):
                     }
                     print(f"💾 Stored reservation context: {reservation_number}")
         except Exception as e:
-            print(f"⚠️ Error storing reservation context: {e}")
+            print(f"WARNING: Error storing reservation context: {e}")
 
     # Store reservation context from create_reservation results
     if function_name == 'create_reservation' and result:
@@ -1094,7 +1096,7 @@ def record_function_call(ai_session_id, function_name, result=None):
                     }
                     print(f"💾 Stored new reservation context: {reservation_number}")
         except Exception as e:
-            print(f"⚠️ Error storing new reservation context: {e}")
+            print(f"WARNING: Error storing new reservation context: {e}")
 
     print(f"📝 Recorded function call: {function_name} for session {ai_session_id}")
     print(f"   Total calls in session: {len(memory['function_calls'])}")
@@ -1208,7 +1210,7 @@ def preprocess_reservation_params(params):
         return processed_params
 
     except Exception as e:
-        print(f"❌ Error preprocessing reservation params: {e}")
+        print(f"ERROR: Error preprocessing reservation params: {e}")
         # Return original params if preprocessing fails
         return params
 
@@ -1223,9 +1225,9 @@ def get_receptionist_agent():
             # Import here to avoid circular import
             from swaig_agents import FullRestaurantReceptionistAgent
             _agent_instance = FullRestaurantReceptionistAgent()
-            print("✅ SignalWire agent initialized successfully")
+            print("SUCCESS: SignalWire agent initialized successfully")
         except Exception as e:
-            print(f"❌ Failed to initialize SignalWire agent: {e}")
+            print(f"ERROR: Failed to initialize SignalWire agent: {e}")
             return None
     return _agent_instance
 
@@ -1243,7 +1245,7 @@ def swaig_receptionist():
 
         agent = get_receptionist_agent()
         if not agent:
-            print("❌ Agent not available")
+            print("ERROR: Agent not available")
             return jsonify({'error': 'Agent not available'}), 503
 
         # Enhanced raw data logging
@@ -1261,14 +1263,14 @@ def swaig_receptionist():
             else:
                 print("📋 Parsed JSON data: None")
         except Exception as json_error:
-            print(f"❌ JSON parsing error: {json_error}")
+            print(f"ERROR: JSON parsing error: {json_error}")
             print(f"   Raw data type: {type(raw_data)}")
             print(f"   Raw data length: {len(raw_data) if raw_data else 0}")
             return jsonify({'error': f'Invalid JSON: {str(json_error)}'}), 400
 
         # Validate required SWAIG fields
         if not data:
-            print("❌ No JSON data received")
+            print("ERROR: No JSON data received")
             # Try to get form data as fallback
             form_data = request.form.to_dict()
             print(f"   Form data: {form_data}")
@@ -1456,7 +1458,7 @@ def swaig_receptionist():
                     'argument': {
                         'type': 'object',
                         'properties': {
-                            'order_number': {'type': 'string', 'description': '6-digit order number (preferred method)'},
+                            'order_number': {'type': 'string', 'description': '5-digit order number (preferred method)'},
                             'order_id': {'type': 'integer', 'description': 'Order ID (alternative method)'},
                             'reservation_id': {'type': 'integer', 'description': 'Reservation ID (alternative method)'},
                             'customer_phone': {'type': 'string', 'description': 'Customer phone number for verification'}
@@ -1469,7 +1471,7 @@ def swaig_receptionist():
                     'argument': {
                         'type': 'object',
                         'properties': {
-                            'order_number': {'type': 'string', 'description': '6-digit order number (preferred method)'},
+                            'order_number': {'type': 'string', 'description': '5-digit order number (preferred method)'},
                             'order_id': {'type': 'integer', 'description': 'Order ID (alternative method)'},
                             'status': {'type': 'string', 'description': 'New order status'}
                         },
@@ -1484,7 +1486,7 @@ def swaig_receptionist():
                     'argument': {
                         'type': 'object',
                         'properties': {
-                            'order_number': {'type': 'string', 'description': '6-digit order number to pay for'},
+                            'order_number': {'type': 'string', 'description': '5-digit order number to pay for'},
                             'order_id': {'type': 'integer', 'description': 'Order ID (alternative to order_number)'},
                             'customer_name': {'type': 'string', 'description': 'Customer name for verification'},
                             'phone_number': {'type': 'string', 'description': 'Phone number for SMS receipt (will use caller ID if not provided)'}
@@ -1521,7 +1523,7 @@ def swaig_receptionist():
                 if func_name in all_signatures:
                     signatures[func_name] = all_signatures[func_name]
                 else:
-                    print(f"⚠️  Requested function '{func_name}' not found")
+                    print(f"WARNING:  Requested function '{func_name}' not found")
 
             return jsonify(signatures)
 
@@ -1543,7 +1545,7 @@ def swaig_receptionist():
 
             # Handle different call states
             if call_state == 'created':
-                print(f"✅ Call {call_id} created - inbound call from {from_number}")
+                print(f"SUCCESS: Call {call_id} created - inbound call from {from_number}")
 
                 # Return SWML document to start the conversation
                 print(f"📞 Returning SWML document to start conversation for call {call_id}")
@@ -1559,7 +1561,7 @@ def swaig_receptionist():
                     print(f"📋 Returning SWML document for call initialization")
                     return jsonify(swml_data)
                 except Exception as e:
-                    print(f"❌ Error generating SWML document: {e}")
+                    print(f"ERROR: Error generating SWML document: {e}")
                     # Fallback SWML response
                     return jsonify({
                         "version": "1.0.0",
@@ -1583,13 +1585,13 @@ def swaig_receptionist():
                     })
 
             elif call_state == 'answered':
-                print(f"✅ Call {call_id} answered")
+                print(f"SUCCESS: Call {call_id} answered")
             elif call_state == 'ended':
-                print(f"✅ Call {call_id} ended - cleaning up any payment sessions")
+                print(f"SUCCESS: Call {call_id} ended - cleaning up any payment sessions")
                 try:
                     end_payment_session(call_id)
                 except Exception as e:
-                    print(f"⚠️ Error cleaning up payment session: {e}")
+                    print(f"WARNING: Error cleaning up payment session: {e}")
 
             # Return success response for other call state notifications
             return jsonify({
@@ -1601,7 +1603,7 @@ def swaig_receptionist():
         # Extract function name and parameters from the request
         function_name = data.get('function')
         if not function_name:
-            print("❌ No function name provided")
+            print("ERROR: No function name provided")
             return jsonify({'error': 'Function name required'}), 400
 
         print(f"🔧 Function requested: {function_name}")
@@ -1626,7 +1628,7 @@ def swaig_receptionist():
                         import json as json_module
                         params = json_module.loads(argument['raw'])
                     except json_module.JSONDecodeError:
-                        print(f"⚠️  Failed to parse raw argument: {argument['raw']}")
+                        print(f"WARNING:  Failed to parse raw argument: {argument['raw']}")
                         params = {}
                 else:
                     params = argument
@@ -1643,7 +1645,7 @@ def swaig_receptionist():
         print(f"   Meta Data: {meta_data}")
         print(f"   Meta Data Token: {meta_data_token}")
 
-        print(f"✅ Function blocking disabled - allowing {function_name} to proceed")
+        print(f"SUCCESS: Function blocking disabled - allowing {function_name} to proceed")
 
         # Get call ID for payment session tracking
         call_id = data.get('call_id', 'unknown')
@@ -1666,7 +1668,7 @@ def swaig_receptionist():
                 hasattr(agent._tool_registry, '_swaig_functions') and 
                 function_name in agent._tool_registry._swaig_functions):
 
-                print(f"✅ Calling agent function: {function_name}")
+                print(f"SUCCESS: Calling agent function: {function_name}")
 
                 # FIXED: Enhanced call context extraction and validation
                 from skills.utils import extract_call_context, log_function_call
@@ -1731,15 +1733,15 @@ def swaig_receptionist():
 
                 # Get the function handler from the tool registry
                 if not hasattr(agent, '_tool_registry') or not agent._tool_registry:
-                    print(f"❌ Agent tool registry not initialized")
+                    print(f"ERROR: Agent tool registry not initialized")
                     return jsonify({'success': False, 'message': f'Agent tool registry not available'}), 500
 
                 if not hasattr(agent._tool_registry, '_swaig_functions') or not agent._tool_registry._swaig_functions:
-                    print(f"❌ Agent SWAIG functions not initialized")
+                    print(f"ERROR: Agent SWAIG functions not initialized")
                     return jsonify({'success': False, 'message': f'Agent functions not available'}), 500
 
                 if function_name not in agent._tool_registry._swaig_functions:
-                    print(f"❌ Function {function_name} not found in registry")
+                    print(f"ERROR: Function {function_name} not found in registry")
                     available_functions = list(agent._tool_registry._swaig_functions.keys())
                     print(f"   Available functions: {available_functions}")
                     return jsonify({'success': False, 'message': f'Function {function_name} not available'}), 400
@@ -1752,19 +1754,19 @@ def swaig_receptionist():
                     # This is a dict with a handler key
                     function_handler = func['handler']
                 else:
-                    print(f"❌ No handler found for function {function_name}")
+                    print(f"ERROR: No handler found for function {function_name}")
                     return jsonify({'success': False, 'message': f'No handler found for function: {function_name}'}), 400
 
                 # FIXED: Enhanced error handling and result validation
                 try:
                     result = function_handler(params, data)
 
-                    print(f"✅ Function execution completed")
+                    print(f"SUCCESS: Function execution completed")
                     print(f"📤 Function result type: {type(result)}")
 
                     # FIXED: Validate result before processing
                     if result is None:
-                        print(f"⚠️ Function {function_name} returned None")
+                        print(f"WARNING: Function {function_name} returned None")
                         from skills.utils import create_error_response
                         result = create_error_response(
                             "I'm sorry, there was an issue processing your request. Please try again.",
@@ -1783,8 +1785,38 @@ def swaig_receptionist():
                     if hasattr(result, 'to_dict'):
                         # This is a SwaigFunctionResult object - convert to proper SWAIG format
                         swaig_response = result.to_dict()
-                        print(f"📋 SWAIG response (full):")
-                        print(json_module.dumps(swaig_response, indent=2))
+                        
+                        # CRITICAL FIX: Add response size validation to prevent fragmentation
+                        try:
+                            response_json = json_module.dumps(swaig_response)
+                            response_size = len(response_json)
+                            
+                            # Limit response size to prevent fragmentation (100KB limit)
+                            if response_size > 100000:
+                                print(f"WARNING: Large SWAIG response detected: {response_size} bytes")
+                                # Truncate large menu data if present
+                                if 'action' in swaig_response:
+                                    for action_item in swaig_response['action']:
+                                        if isinstance(action_item, dict):
+                                            for key, value in action_item.items():
+                                                if isinstance(value, dict) and 'items' in value:
+                                                    original_count = len(value['items'])
+                                                    if original_count > 50:  # Limit menu items
+                                                        value['items'] = value['items'][:50]
+                                                        value['truncated'] = True
+                                                        value['original_count'] = original_count
+                                                        print(f"🔧 Truncated menu items from {original_count} to 50")
+                                
+                                # Re-serialize after truncation
+                                response_json = json_module.dumps(swaig_response)
+                                print(f"SUCCESS: Response size after truncation: {len(response_json)} bytes")
+                            
+                            print(f"📋 SWAIG response size: {len(response_json)} bytes")
+                            print(f"📋 SWAIG response preview: {response_json[:200]}...")
+                            
+                        except Exception as size_error:
+                            print(f"WARNING: Error validating response size: {size_error}")
+                        
                         return jsonify(swaig_response)
                     elif hasattr(result, 'response'):
                         # Legacy handling for direct response access
@@ -1815,7 +1847,7 @@ def swaig_receptionist():
                         return jsonify({"response": str(result)})
 
                 except Exception as func_error:
-                    print(f"❌ Function {function_name} execution failed: {func_error}")
+                    print(f"ERROR: Function {function_name} execution failed: {func_error}")
                     import traceback
                     traceback.print_exc()
 
@@ -1837,7 +1869,7 @@ def swaig_receptionist():
                     else:
                         return jsonify(result)
             else:
-                print(f"❌ Function {function_name} not found in agent tool registry")
+                print(f"ERROR: Function {function_name} not found in agent tool registry")
 
                 # FIXED: Enhanced debugging for missing functions
                 if hasattr(agent, '_tool_registry') and hasattr(agent._tool_registry, '_swaig_functions'):
@@ -1856,15 +1888,15 @@ def swaig_receptionist():
                 }), 400
 
         except AttributeError as attr_err:
-            print(f"⚠️ AttributeError when checking agent functions: {attr_err}")
-            print(f"❌ Function {function_name} not available")
+            print(f"WARNING: AttributeError when checking agent functions: {attr_err}")
+            print(f"ERROR: Function {function_name} not available")
             return jsonify({'success': False, 'message': f'Function not available: {function_name}'}), 400
         else:
-            print(f"❌ Unknown function: {function_name}")
+            print(f"ERROR: Unknown function: {function_name}")
             return jsonify({'success': False, 'message': f'Unknown function: {function_name}'}), 400
 
     except Exception as e:
-        print(f"❌ Exception in SWAIG endpoint: {str(e)}")
+        print(f"ERROR: Exception in SWAIG endpoint: {str(e)}")
         print(f"   Exception type: {type(e)}")
         import traceback
         print(f"   Traceback: {traceback.format_exc()}")
@@ -2100,7 +2132,7 @@ def swaig_receptionist_info():
                                     "argument": {
                                         "type": "object",
                                         "properties": {
-                                            "order_number": {"type": "string", "description": "6-digit order number to pay for"},
+                                            "order_number": {"type": "string", "description": "5-digit order number to pay for"},
                                             "order_id": {"type": "integer", "description": "Order ID (alternative to order_number)"},
                                             "customer_name": {"type": "string", "description": "Customer name for verification"},
                                             "phone_number": {"type": "string", "description": "Phone number for SMS receipt (will use caller ID if not provided)"}
@@ -2111,7 +2143,7 @@ def swaig_receptionist_info():
                             ]
                         },
                         "prompt": {
-                            "text": "Hi there! I'm Bobby from Bobby's Table. Great to have you call us today! How can I help you out? Whether you're looking to make a reservation, check on an existing one, hear about our menu, or place an order, I'm here to help make it easy for you.\n\nIMPORTANT CONVERSATION GUIDELINES:\n\n**RESERVATION LOOKUPS - CRITICAL:**\n- When customers want to check their reservation, ALWAYS ask for their reservation number FIRST\n- Say: 'Do you have your reservation number? It's a 6-digit number we sent you when you made the reservation.'\n- Only if they don't have it, then ask for their name as backup\n- Reservation numbers are the fastest and most accurate way to find reservations\n- Handle spoken numbers like 'seven eight nine zero one two' which becomes '789012'\n\n**🚨 PAYMENTS - SIMPLE PAYMENT RULE 🚨:**\n**Use the pay_reservation function for all existing reservation payments!**\n\n**SIMPLE PAYMENT FLOW:**\n1. Customer explicitly asks to pay (\"I want to pay\", \"Pay now\", \"Can I pay?\") → IMMEDIATELY call pay_reservation function\n2. pay_reservation handles everything: finds reservation, shows bill total, collects card details, and processes payment\n3. The function will guide the customer through each step conversationally and securely\n\n**PAYMENT EXAMPLES:**\n- Customer: 'I want to pay my bill' → YOU: Call pay_reservation function\n- Customer: 'Pay now' → YOU: Call pay_reservation function\n- Customer: 'Can I pay for my reservation?' → YOU: Call pay_reservation function\n\n**CRITICAL: Use pay_reservation for existing reservations only!**\n- ❌ NEVER use pay_reservation for new reservation creation (use create_reservation instead)\n- ❌ NEVER call pay_reservation when customer is just confirming order details\n\n**PRICING AND PRE-ORDERS - CRITICAL:**\n- When customers mention food items, ALWAYS provide the price immediately\n- Example: 'Buffalo Wings are twelve dollars and ninety-nine cents'\n- When creating reservations with pre-orders, ALWAYS mention the total cost\n- Example: 'Your Buffalo Wings and Draft Beer total sixteen dollars and ninety-eight cents'\n- ALWAYS ask if customers want to pay for their pre-order after confirming the total\n- Example: 'Would you like to pay for your pre-order now to complete your reservation?'\n\n**🔄 CORRECT PREORDER WORKFLOW:**\n- When customers want to create reservations with pre-orders, show them an order confirmation FIRST\n- The order confirmation shows: reservation details, each person's food items, individual prices, and total cost\n- Wait for customer to confirm their order details before proceeding (say 'Yes, that's correct')\n- After order confirmation, CREATE THE RESERVATION IMMEDIATELY\n- The correct flow is: Order Details → Customer Confirms → Create Reservation → Give Number → Offer Payment\n- After creating the reservation:\n  1. Give the customer their reservation number clearly\n  1.1 Ask the user if the user would like the reservation details sent to the user via sms. If the user confirms with yes, send the reservation details via sms message.\n 2. Ask if they want to pay now: 'Would you like to pay for your pre-order now?'\n- Payment is OPTIONAL - customers can always pay when they arrive\n\n**🔄 ORDER CONFIRMATION vs PAYMENT REQUESTS - CRITICAL:**\n- \"Yes, that's correct\" = Order confirmation → Call create_reservation function\n- \"Yes, create my reservation\" = Order confirmation → Call create_reservation function\n- \"That looks right\" = Order confirmation → Call create_reservation function\n- \"Pay now\" = Payment request → Call pay_reservation function\n- \"I want to pay\" = Payment request → Call pay_reservation function\n- \"Can I pay?\" = Payment request → Call pay_reservation function\n\n**🚨 CRITICAL: NEVER CALL pay_reservation WHEN USER IS CONFIRMING ORDER DETAILS 🚨:**\n- If user says \"Yes\" after order summary → Call create_reservation function\n- If user says \"That's correct\" after order summary → Call create_reservation function\n- If user says \"Looks good\" after order summary → Call create_reservation function\n- If user says \"Perfect\" after order summary → Call create_reservation function\n- ONLY call pay_reservation when user explicitly asks to pay AFTER reservation is created\n\n**OTHER GUIDELINES:**\n- When making reservations, ALWAYS ask if customers want to pre-order from the menu\n- For parties larger than one person, ask for each person's name and their individual food preferences\n- Always say numbers as words (say 'one' instead of '1', 'two' instead of '2', etc.)\n- Extract food items mentioned during reservation requests and include them in party_orders\n- Be conversational and helpful - guide customers through the pre-ordering process naturally\n- Remember: The system now has a confirmation step for preorders - embrace this workflow!"
+                            "text": "Hi there! I'm Bobby from Bobby's Table. Great to have you call us today! How can I help you out? Whether you're looking to make a reservation, check on an existing one, hear about our menu, or place an order, I'm here to help make it easy for you.\n\nIMPORTANT CONVERSATION GUIDELINES:\n\n**RESERVATION LOOKUPS - CRITICAL:**\n- When customers want to check their reservation, ALWAYS ask for their reservation number FIRST\n- Say: 'Do you have your reservation number? It's a 6-digit number we sent you when you made the reservation.'\n- Only if they don't have it, then ask for their name as backup\n- Reservation numbers are the fastest and most accurate way to find reservations\n- Handle spoken numbers like 'seven eight nine zero one two' which becomes '789012'\n\n**🚨 PAYMENTS - SIMPLE PAYMENT RULE 🚨:**\n**Use the pay_reservation function for all existing reservation payments!**\n\n**SIMPLE PAYMENT FLOW:**\n1. Customer explicitly asks to pay (\"I want to pay\", \"Pay now\", \"Can I pay?\") → IMMEDIATELY call pay_reservation function\n2. pay_reservation handles everything: finds reservation, shows bill total, collects card details, and processes payment\n3. The function will guide the customer through each step conversationally and securely\n\n**PAYMENT EXAMPLES:**\n- Customer: 'I want to pay my bill' → YOU: Call pay_reservation function\n- Customer: 'Pay now' → YOU: Call pay_reservation function\n- Customer: 'Can I pay for my reservation?' → YOU: Call pay_reservation function\n\n**CRITICAL: Use pay_reservation for existing reservations only!**\n- ERROR: NEVER use pay_reservation for new reservation creation (use create_reservation instead)\n- ERROR: NEVER call pay_reservation when customer is just confirming order details\n\n**PRICING AND PRE-ORDERS - CRITICAL:**\n- When customers mention food items, ALWAYS provide the price immediately\n- Example: 'Buffalo Wings are twelve dollars and ninety-nine cents'\n- When creating reservations with pre-orders, ALWAYS mention the total cost\n- Example: 'Your Buffalo Wings and Draft Beer total sixteen dollars and ninety-eight cents'\n- ALWAYS ask if customers want to pay for their pre-order after confirming the total\n- Example: 'Would you like to pay for your pre-order now to complete your reservation?'\n\n**🔄 CORRECT PREORDER WORKFLOW:**\n- When customers want to create reservations with pre-orders, show them an order confirmation FIRST\n- The order confirmation shows: reservation details, each person's food items, individual prices, and total cost\n- Wait for customer to confirm their order details before proceeding (say 'Yes, that's correct')\n- After order confirmation, CREATE THE RESERVATION IMMEDIATELY\n- The correct flow is: Order Details → Customer Confirms → Create Reservation → Give Number → Offer Payment\n- After creating the reservation:\n  1. Give the customer their reservation number clearly\n  1.1 Ask the user if the user would like the reservation details sent to the user via sms. If the user confirms with yes, send the reservation details via sms message.\n 2. Ask if they want to pay now: 'Would you like to pay for your pre-order now?'\n- Payment is OPTIONAL - customers can always pay when they arrive\n\n**🔄 ORDER CONFIRMATION vs PAYMENT REQUESTS - CRITICAL:**\n- \"Yes, that's correct\" = Order confirmation → Call create_reservation function\n- \"Yes, create my reservation\" = Order confirmation → Call create_reservation function\n- \"That looks right\" = Order confirmation → Call create_reservation function\n- \"Pay now\" = Payment request → Call pay_reservation function\n- \"I want to pay\" = Payment request → Call pay_reservation function\n- \"Can I pay?\" = Payment request → Call pay_reservation function\n\n**🚨 CRITICAL: NEVER CALL pay_reservation WHEN USER IS CONFIRMING ORDER DETAILS 🚨:**\n- If user says \"Yes\" after order summary → Call create_reservation function\n- If user says \"That's correct\" after order summary → Call create_reservation function\n- If user says \"Looks good\" after order summary → Call create_reservation function\n- If user says \"Perfect\" after order summary → Call create_reservation function\n- ONLY call pay_reservation when user explicitly asks to pay AFTER reservation is created\n\n**OTHER GUIDELINES:**\n- When making reservations, ALWAYS ask if customers want to pre-order from the menu\n- For parties larger than one person, ask for each person's name and their individual food preferences\n- Always say numbers as words (say 'one' instead of '1', 'two' instead of '2', etc.)\n- Extract food items mentioned during reservation requests and include them in party_orders\n- Be conversational and helpful - guide customers through the pre-ordering process naturally\n- Remember: The system now has a confirmation step for preorders - embrace this workflow!"
                         }
                     }
                 }
@@ -2207,13 +2239,13 @@ def send_payment_receipt_sms(reservation, payment_amount, phone_number=None, con
                 'parsed': [{
                     'reservation_number': reservation.reservation_number,
                     'phone_number': to_number,
-                    'amount': float(payment_amount),
+                    'payment_amount': float(payment_amount),
                     'confirmation_number': confirmation_number or 'N/A'
                 }],
                 'raw': json.dumps({
                     'reservation_number': reservation.reservation_number,
                     'phone_number': to_number,
-                    'amount': float(payment_amount),
+                    'payment_amount': float(payment_amount),
                     'confirmation_number': confirmation_number or 'N/A'
                 })
             },
@@ -2223,7 +2255,7 @@ def send_payment_receipt_sms(reservation, payment_amount, phone_number=None, con
             'caller_id_num': to_number
         }
 
-        print(f"📱 Calling SWAIG send_payment_receipt function for reservation {reservation.reservation_number}")
+        print(f"SMS: Calling SWAIG send_payment_receipt function for reservation {reservation.reservation_number}")
         response = requests.post(
             'http://localhost:8080/receptionist',
             json=swaig_data,
@@ -2239,17 +2271,17 @@ def send_payment_receipt_sms(reservation, payment_amount, phone_number=None, con
                     if 'SWML' in action_item and 'sections' in action_item['SWML']:
                         for section_action in action_item['SWML']['sections']['main']:
                             if 'send_sms' in section_action:
-                                print(f"✅ SMS receipt SWAIG function called successfully - SWML send_sms action generated")
+                                print(f"SUCCESS: SMS receipt SWAIG function called successfully - SWML send_sms action generated")
                                 return {'success': True, 'sms_sent': True, 'sms_result': 'Payment receipt SMS SWML action generated via SWAIG'}
 
-            print(f"✅ SMS receipt SWAIG function called successfully")
+            print(f"SUCCESS: SMS receipt SWAIG function called successfully")
             return {'success': True, 'sms_sent': True, 'sms_result': 'Payment receipt SMS function called via SWAIG'}
         else:
-            print(f"⚠️ SMS SWAIG function failed: {response.status_code} - {response.text}")
+            print(f"WARNING: SMS SWAIG function failed: {response.status_code} - {response.text}")
             return {'success': False, 'sms_sent': False, 'error': f'SWAIG function failed: {response.status_code}'}
 
     except Exception as e:
-        print(f"❌ SMS Error: Failed to call SWAIG send_payment_receipt function: {e}")
+        print(f"ERROR: SMS Error: Failed to call SWAIG send_payment_receipt function: {e}")
         return {'success': False, 'sms_sent': False, 'error': str(e)}
 
 def send_order_payment_receipt_sms(order, payment_amount, phone_number=None, confirmation_number=None):
@@ -2265,12 +2297,12 @@ def send_order_payment_receipt_sms(order, payment_amount, phone_number=None, con
             time_12hr = str(order.target_time)
 
         # Build SMS body
-        sms_body = f"💳 Bobby's Table Payment Receipt\n\n"
-        sms_body += f"✅ Payment Successful!\n\n"
+        sms_body = f"PAYMENT: Bobby's Table Payment Receipt\n\n"
+        sms_body += f"SUCCESS: Payment Successful!\n\n"
 
         # Add confirmation number if provided
         if confirmation_number:
-            sms_body += f"🎫 CONFIRMATION: {confirmation_number}\n\n"
+            sms_body += f"CONFIRMATION: CONFIRMATION: {confirmation_number}\n\n"
 
         sms_body += f"Order Details:\n"
         sms_body += f"• Customer: {order.person_name}\n"
@@ -2296,9 +2328,9 @@ def send_order_payment_receipt_sms(order, payment_amount, phone_number=None, con
             sms_body += f"• Payment ID: N/A\n\n"
 
         if order.order_type == 'pickup':
-            sms_body += f"📍 Please come to Bobby's Table to collect your order at {time_12hr}.\n"
+            sms_body += f"LOCATION: Please come to Bobby's Table to collect your order at {time_12hr}.\n"
         else:
-            sms_body += f"🚚 Your order will be delivered to {order.customer_address} around {time_12hr}.\n"
+            sms_body += f"DELIVERY: Your order will be delivered to {order.customer_address} around {time_12hr}.\n"
 
         sms_body += f"\nThank you for your payment!\n"
         sms_body += f"We look forward to serving you.\n\n"
@@ -2329,7 +2361,7 @@ def send_order_payment_receipt_sms(order, payment_amount, phone_number=None, con
 
             # If REST API credentials are not available, fall back to the SDK approach
             if not all([project_id, auth_token, space_url]):
-                print("⚠️ SignalWire REST API credentials not found, using SDK approach")
+                print("WARNING: SignalWire REST API credentials not found, using SDK approach")
                 # Use SignalWire Agents SDK
                 from signalwire_agents.core.function_result import SwaigFunctionResult
                 result = SwaigFunctionResult()
@@ -2338,7 +2370,7 @@ def send_order_payment_receipt_sms(order, payment_amount, phone_number=None, con
                     from_number=signalwire_from_number,
                     body=sms_body
                 )
-                print(f"📱 SMS sent using SignalWire Agents SDK")
+                print(f"SMS: SMS sent using SignalWire Agents SDK")
                 return {'success': True, 'sms_sent': True, 'sms_result': 'Order payment receipt SMS sent via SDK'}
 
             # Use SignalWire REST API
@@ -2357,10 +2389,10 @@ def send_order_payment_receipt_sms(order, payment_amount, phone_number=None, con
             )
 
             if response.status_code == 201:
-                print(f"✅ SMS sent successfully via SignalWire REST API")
+                print(f"SUCCESS: SMS sent successfully via SignalWire REST API")
                 return {'success': True, 'sms_sent': True, 'sms_result': 'Order payment receipt SMS sent via REST API'}
             else:
-                print(f"❌ Failed to send SMS via REST API: {response.status_code} - {response.text}")
+                print(f"ERROR: Failed to send SMS via REST API: {response.status_code} - {response.text}")
                 # Fall back to SDK approach
                 from signalwire_agents.core.function_result import SwaigFunctionResult
                 result = SwaigFunctionResult()
@@ -2369,15 +2401,15 @@ def send_order_payment_receipt_sms(order, payment_amount, phone_number=None, con
                     from_number=signalwire_from_number,
                     body=sms_body
                 )
-                print(f"📱 SMS sent using SignalWire Agents SDK (fallback)")
+                print(f"SMS: SMS sent using SignalWire Agents SDK (fallback)")
                 return {'success': True, 'sms_sent': True, 'sms_result': 'Order payment receipt SMS sent via SDK (fallback)'}
 
         except Exception as sms_error:
-            print(f"❌ SMS sending error: {sms_error}")
+            print(f"ERROR: SMS sending error: {sms_error}")
             return {'success': False, 'sms_sent': False, 'error': str(sms_error)}
 
     except Exception as e:
-        print(f"❌ SMS Error: Failed to send order payment receipt SMS to {phone_number or order.customer_phone}: {e}")
+        print(f"ERROR: SMS Error: Failed to send order payment receipt SMS to {phone_number or order.customer_phone}: {e}")
         return {'success': False, 'sms_sent': False, 'error': str(e)}
 
 @app.route('/api/payment-processor', methods=['POST'])
@@ -2395,7 +2427,7 @@ def payment_processor():
         payment_data = request.get_json()
 
         if not payment_data:
-            print("❌ No payment data received")
+            print("ERROR: No payment data received")
             return jsonify({
                 "charge_id": None,
                 "error_code": "MISSING_DATA",
@@ -2475,7 +2507,7 @@ def payment_processor():
         if not payment_type:
             payment_type = payment_data.get('payment_type')
 
-        print(f"💳 Processing payment:")
+        print(f"PAYMENT: Processing payment:")
         print(f"   Card: ****{card_number[-4:] if card_number else 'N/A'}")
         print(f"   Expiry: {exp_month}/{exp_year}")
         print(f"   Amount: ${amount}")
@@ -2501,7 +2533,7 @@ def payment_processor():
 
         # Validate required fields
         if not amount:
-            print("❌ Amount is required but not provided")
+            print("ERROR: Amount is required but not provided")
             print(f"🔍 Available amount fields in payment_data:")
             amount_fields = [k for k in payment_data.keys() if 'amount' in k.lower() or 'charge' in k.lower()]
             print(f"   - Amount-related fields: {amount_fields}")
@@ -2524,7 +2556,7 @@ def payment_processor():
             print(f"💰 Amount converted from dollars to cents: ${amount_float} -> {amount_cents} cents")
 
         except (ValueError, TypeError) as e:
-            print(f"❌ Invalid amount format: {amount} - {e}")
+            print(f"ERROR: Invalid amount format: {amount} - {e}")
             return jsonify({
                 "status": "failed",
                 "error": f"Invalid amount format: {amount}"
@@ -2536,7 +2568,7 @@ def payment_processor():
             stripe.api_key = os.getenv('STRIPE_API_KEY')
 
             if not stripe.api_key:
-                print("⚠️ No Stripe API key configured, using test mode")
+                print("WARNING: No Stripe API key configured, using test mode")
                 stripe.api_key = 'sk_test_51234567890abcdef'  # Fallback for testing
 
             print(f"🔑 Using Stripe API key: {stripe.api_key[:12]}...")
@@ -2564,23 +2596,23 @@ def payment_processor():
                     }
                 )
                 payment_method_id = payment_method.id
-                print(f"✅ Payment method created: {payment_method_id}")
+                print(f"SUCCESS: Payment method created: {payment_method_id}")
 
             except stripe.error.CardError as e:
-                print(f"❌ Payment method creation error: {str(e)}")
+                print(f"ERROR: Payment method creation error: {str(e)}")
                 if "raw card data" in str(e) or "empty string" in str(e):
-                    print("⚠️ Raw card data not allowed or empty, using test payment method token")
+                    print("WARNING: Raw card data not allowed or empty, using test payment method token")
                     # Use Stripe's test payment method instead
                     payment_method_id = "pm_card_visa"
                 else:
-                    print(f"❌ Card error: {e.user_message}")
+                    print(f"ERROR: Card error: {e.user_message}")
                     return jsonify({
                         "status": "failed",
                         "error": e.user_message,
                         "decline_code": e.decline_code if hasattr(e, 'decline_code') else None
                     })
             except Exception as e:
-                print(f"❌ Payment method creation error: {str(e)}")
+                print(f"ERROR: Payment method creation error: {str(e)}")
                 # Fallback to test payment method
                 payment_method_id = "pm_card_visa"
                 print(f"🔄 Using fallback payment method: {payment_method_id}")
@@ -2592,7 +2624,7 @@ def payment_processor():
             elif reservation_number:
                 description = f"Bobby's Table Reservation #{reservation_number}"
 
-            print(f"💳 Creating payment intent for {description}")
+            print(f"PAYMENT: Creating payment intent for {description}")
 
             payment_intent = stripe.PaymentIntent.create(
                 amount=amount_cents,
@@ -2615,7 +2647,7 @@ def payment_processor():
                 }
             )
 
-            print(f"✅ Payment intent created: {payment_intent.id}")
+            print(f"SUCCESS: Payment intent created: {payment_intent.id}")
             print(f"   Status: {payment_intent.status}")
 
             if payment_intent.status == 'succeeded':
@@ -2625,7 +2657,7 @@ def payment_processor():
                 import random
                 import string
                 confirmation_number = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-                print(f"🎫 Generated confirmation number: {confirmation_number}")
+                print(f"CONFIRMATION: Generated confirmation number: {confirmation_number}")
 
                 # Update database based on payment type
                 if payment_type == 'order' and (order_number or order_id):
@@ -2645,7 +2677,7 @@ def payment_processor():
                         order.confirmation_number = confirmation_number
 
                         db.session.commit()
-                        print(f"✅ Order {order.order_number} updated with payment info")
+                        print(f"SUCCESS: Order {order.order_number} updated with payment info")
 
                         # Send SMS receipt
                         try:
@@ -2658,11 +2690,11 @@ def payment_processor():
 
                             # SMS result already handled in the function
                             if sms_result.get('success'):
-                                print(f"✅ SMS receipt sent: {sms_result.get('sms_result', 'Success')}")
+                                print(f"SUCCESS: SMS receipt sent: {sms_result.get('sms_result', 'Success')}")
                             else:
-                                print(f"⚠️ SMS receipt failed: {sms_result.get('error', 'Unknown error')}")
+                                print(f"WARNING: SMS receipt failed: {sms_result.get('error', 'Unknown error')}")
                         except Exception as sms_error:
-                            print(f"⚠️ Failed to send SMS receipt: {sms_error}")
+                            print(f"WARNING: Failed to send SMS receipt: {sms_error}")
 
                         return jsonify({
                             "status": "success",
@@ -2679,7 +2711,7 @@ def payment_processor():
                     print(f"🔍 Processing reservation payment: type={payment_type}, number={reservation_number}")
                     reservation = Reservation.query.filter_by(reservation_number=reservation_number).first()
                     if reservation:
-                        print(f"✅ Found reservation: {reservation.name} for {reservation.party_size} people")
+                        print(f"SUCCESS: Found reservation: {reservation.name} for {reservation.party_size} people")
                         reservation.payment_status = 'paid'
                         reservation.payment_method = 'credit-card'
                         reservation.payment_date = datetime.now()
@@ -2688,7 +2720,7 @@ def payment_processor():
                         reservation.confirmation_number = confirmation_number
 
                         db.session.commit()
-                        print(f"✅ Reservation {reservation.reservation_number} updated with payment info")
+                        print(f"SUCCESS: Reservation {reservation.reservation_number} updated with payment info")
 
                         # 🚀 INSTANT CALENDAR UPDATE: Trigger calendar refresh for payment completion
                         try:
@@ -2714,14 +2746,14 @@ def payment_processor():
                             if response.status_code == 200:
                                 print(f"📅 Calendar refresh notification sent successfully for payment completion")
                             else:
-                                print(f"⚠️ Calendar refresh notification failed: {response.status_code}")
+                                print(f"WARNING: Calendar refresh notification failed: {response.status_code}")
                                 
                         except Exception as refresh_error:
                             # Don't fail the payment if calendar refresh fails
-                            print(f"⚠️ Calendar refresh notification error (non-critical): {refresh_error}")
+                            print(f"WARNING: Calendar refresh notification error (non-critical): {refresh_error}")
 
                         # Call SWAIG send_payment_receipt function for reservation
-                        print(f"📱 Calling SWAIG send_payment_receipt function for reservation {reservation_number}")
+                        print(f"SMS: Calling SWAIG send_payment_receipt function for reservation {reservation_number}")
                         try:
                             # Make a SWAIG function call to send the SMS receipt
                             swaig_data = {
@@ -2730,13 +2762,13 @@ def payment_processor():
                                     "parsed": [{
                                         "reservation_number": reservation_number,
                                         "phone_number": phone_number or reservation.phone_number,
-                                        "amount": amount_cents / 100.0,  # Convert cents to dollars for SMS
+                                        "payment_amount": amount_cents / 100.0,  # Convert cents to dollars for SMS
                                         "confirmation_number": confirmation_number
                                     }],
                                     "raw": json.dumps({
                                         "reservation_number": reservation_number,
                                         "phone_number": phone_number or reservation.phone_number,
-                                        "amount": amount_cents / 100.0,  # Convert cents to dollars for SMS
+                                        "payment_amount": amount_cents / 100.0,  # Convert cents to dollars for SMS
                                         "confirmation_number": confirmation_number
                                     })
                                 },
@@ -2752,14 +2784,14 @@ def payment_processor():
 
                             if response.status_code == 200:
                                 swaig_result = response.json()
-                                print(f"✅ SMS receipt SWAIG function called successfully - SWML send_sms action generated")
+                                print(f"SUCCESS: SMS receipt SWAIG function called successfully - SWML send_sms action generated")
                                 sms_status = "SMS receipt sent: Payment receipt SMS SWML action generated via SWAIG"
                             else:
-                                print(f"⚠️ SWAIG SMS function call failed: {response.status_code}")
+                                print(f"WARNING: SWAIG SMS function call failed: {response.status_code}")
                                 sms_status = f"SMS receipt failed: SWAIG call returned {response.status_code}"
 
                         except Exception as sms_error:
-                            print(f"⚠️ Failed to call SWAIG SMS function: {sms_error}")
+                            print(f"WARNING: Failed to call SWAIG SMS function: {sms_error}")
                             sms_status = f"SMS receipt failed: {str(sms_error)}"
 
                         # Return comprehensive response with confirmation number
@@ -2777,7 +2809,7 @@ def payment_processor():
                             "error_message": None  # Keep for SignalWire compatibility
                         })
                     else:
-                        print(f"❌ Reservation {reservation_number} not found")
+                        print(f"ERROR: Reservation {reservation_number} not found")
                         return jsonify({
                             "status": "failed",
                             "error": f"Reservation {reservation_number} not found"
@@ -2788,7 +2820,7 @@ def payment_processor():
                 import random
                 import string
                 confirmation_number = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-                print(f"🎫 Generated generic confirmation number: {confirmation_number}")
+                print(f"CONFIRMATION: Generated generic confirmation number: {confirmation_number}")
 
                 return jsonify({
                     "status": "success",
@@ -2803,7 +2835,7 @@ def payment_processor():
                 })
 
             elif payment_intent.status == 'requires_action':
-                print("⚠️ Payment requires additional action")
+                print("WARNING: Payment requires additional action")
                 return jsonify({
                     "status": "requires_action",
                     "payment_intent_id": payment_intent.id,
@@ -2811,7 +2843,7 @@ def payment_processor():
                     "message": "Payment requires additional authentication"
                 })
             else:
-                print(f"❌ Payment failed with status: {payment_intent.status}")
+                print(f"ERROR: Payment failed with status: {payment_intent.status}")
                 return jsonify({
                     "status": "failed",
                     "payment_intent_id": payment_intent.id,
@@ -2819,21 +2851,21 @@ def payment_processor():
                 })
 
         except stripe.error.CardError as e:
-            print(f"❌ Stripe card error: {e.user_message}")
+            print(f"ERROR: Stripe card error: {e.user_message}")
             return jsonify({
                 "charge_id": None,
                 "error_code": e.decline_code if hasattr(e, 'decline_code') else "CARD_DECLINED",
                 "error_message": e.user_message
             })
         except stripe.error.StripeError as e:
-            print(f"❌ Stripe API error: {str(e)}")
+            print(f"ERROR: Stripe API error: {str(e)}")
             return jsonify({
                 "charge_id": None,
                 "error_code": "STRIPE_ERROR",
                 "error_message": str(e)
             })
         except Exception as e:
-            print(f"❌ Unexpected error in payment processing: {str(e)}")
+            print(f"ERROR: Unexpected error in payment processing: {str(e)}")
             import traceback
             traceback.print_exc()
             return jsonify({
@@ -2843,7 +2875,7 @@ def payment_processor():
             })
 
     except Exception as e:
-        print(f"❌ Critical error in payment processor: {str(e)}")
+        print(f"ERROR: Critical error in payment processor: {str(e)}")
         import traceback
         traceback.print_exc()
         return jsonify({
@@ -2878,7 +2910,7 @@ def is_payment_in_progress(call_id):
         return is_active
 
     except Exception as e:
-        print(f"❌ Error checking payment session: {e}")
+        print(f"ERROR: Error checking payment session: {e}")
         return False
 
 def start_payment_session(call_id, reservation_number):
@@ -2912,7 +2944,7 @@ def start_payment_session(call_id, reservation_number):
                     if total_amount > 0:
                         amount = total_amount
         except Exception as db_error:
-            print(f"⚠️ Could not get additional reservation data: {db_error}")
+            print(f"WARNING: Could not get additional reservation data: {db_error}")
 
         # ENHANCED: Force creation within app context
         with app.app_context():
@@ -2972,16 +3004,16 @@ def start_payment_session(call_id, reservation_number):
             global_has_session = call_id in payment_sessions_global
 
             if app_has_session and global_has_session:
-                print(f"✅ Payment session {call_id} successfully created and verified in BOTH storages")
+                print(f"SUCCESS: Payment session {call_id} successfully created and verified in BOTH storages")
                 print(f"   App session data: {app.payment_sessions[call_id]}")
                 print(f"   Global session data: {payment_sessions_global[call_id]}")
             else:
-                print(f"❌ Payment session {call_id} creation issue:")
-                print(f"   App storage: {'✅' if app_has_session else '❌'}")
-                print(f"   Global storage: {'✅' if global_has_session else '❌'}")
+                print(f"ERROR: Payment session {call_id} creation issue:")
+                print(f"   App storage: {'SUCCESS:' if app_has_session else 'ERROR:'}")
+                print(f"   Global storage: {'SUCCESS:' if global_has_session else 'ERROR:'}")
 
     except Exception as e:
-        print(f"❌ Error starting payment session: {e}")
+        print(f"ERROR: Error starting payment session: {e}")
         import traceback
         traceback.print_exc()
 
@@ -2996,10 +3028,10 @@ def update_payment_step(call_id, step):
             app.payment_sessions[call_id]['last_updated'] = datetime.now()
             print(f"🔄 Payment session {call_id} updated to step: {step}")
         else:
-            print(f"⚠️ Payment session {call_id} not found for step update")
+            print(f"WARNING: Payment session {call_id} not found for step update")
 
     except Exception as e:
-        print(f"❌ Error updating payment session: {e}")
+        print(f"ERROR: Error updating payment session: {e}")
 
 def end_payment_session(call_id):
     """End a payment session"""
@@ -3009,15 +3041,15 @@ def end_payment_session(call_id):
 
         if call_id in app.payment_sessions:
             session = app.payment_sessions.pop(call_id)
-            print(f"✅ Ended payment session for call {call_id}")
+            print(f"SUCCESS: Ended payment session for call {call_id}")
             print(f"🔍 Remaining active payment sessions: {len(app.payment_sessions)}")
             return session
         else:
-            print(f"⚠️ Payment session {call_id} not found for ending")
+            print(f"WARNING: Payment session {call_id} not found for ending")
             return None
 
     except Exception as e:
-        print(f"❌ Error ending payment session: {e}")
+        print(f"ERROR: Error ending payment session: {e}")
         return None
 
 def get_payment_session_data(call_id):
@@ -3085,7 +3117,7 @@ def get_payment_session_data(call_id):
                     app.payment_sessions[call_id] = mapped_session
                     payment_sessions_global[call_id] = mapped_session.copy()
 
-                    print(f"✅ Created fallback session mapping: {call_id} -> {most_recent_call_id}")
+                    print(f"SUCCESS: Created fallback session mapping: {call_id} -> {most_recent_call_id}")
                     return mapped_session
 
             print(f"🔍 No payment session data found for {call_id} in either storage or fallbacks")
@@ -3095,7 +3127,7 @@ def get_payment_session_data(call_id):
             return None
 
     except Exception as e:
-        print(f"❌ Error getting payment session data: {e}")
+        print(f"ERROR: Error getting payment session data: {e}")
         import traceback
         traceback.print_exc()
         return None
@@ -3116,7 +3148,7 @@ def cleanup_old_payment_sessions():
             print(f"🧹 Cleaned up expired payment session: {call_id}")
 
     except Exception as e:
-        print(f"❌ Error cleaning up payment sessions: {e}")
+        print(f"ERROR: Error cleaning up payment sessions: {e}")
 
 @app.route('/debug/payment-sessions', methods=['GET'])
 def debug_payment_sessions():
@@ -3180,7 +3212,7 @@ def debug_start_payment_session():
         # Store session
         app.payment_sessions[call_id] = session_data
 
-        print(f"✅ Created payment session for {call_id}: {session_data}")
+        print(f"SUCCESS: Created payment session for {call_id}: {session_data}")
 
         response_data = {
             'success': True,
@@ -3258,7 +3290,7 @@ def debug_test_sms():
             }), 500
 
     except Exception as e:
-        print(f"❌ Error in debug test SMS: {e}")
+        print(f"ERROR: Error in debug test SMS: {e}")
         return jsonify({
             'success': False,
             'error': str(e)
@@ -3282,10 +3314,10 @@ def stripe_webhook():
                 import stripe
                 event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
             except ValueError:
-                print("❌ Invalid payload")
+                print("ERROR: Invalid payload")
                 return jsonify({"error": "Invalid payload"}), 400
             except stripe.error.SignatureVerificationError:
-                print("❌ Invalid signature")
+                print("ERROR: Invalid signature")
                 return jsonify({"error": "Invalid signature"}), 400
         else:
             # Parse without verification (for development)
@@ -3297,7 +3329,7 @@ def stripe_webhook():
         if event['type'] == 'payment_intent.succeeded':
             payment_intent = event['data']['object']
 
-            print(f"✅ Payment succeeded: {payment_intent['id']}")
+            print(f"SUCCESS: Payment succeeded: {payment_intent['id']}")
             print(f"   Amount: ${payment_intent['amount'] / 100}")
             print(f"   Metadata: {payment_intent.get('metadata', {})}")
 
@@ -3326,7 +3358,7 @@ def stripe_webhook():
 
                     db.session.commit()
 
-                    print(f"✅ Updated reservation #{reservation_number} payment status")
+                    print(f"SUCCESS: Updated reservation #{reservation_number} payment status")
 
                     # Send SMS receipt
                     try:
@@ -3336,9 +3368,9 @@ def stripe_webhook():
                             phone_number=phone_number,
                             confirmation_number=confirmation_number
                         )
-                        print(f"✅ SMS receipt sent to {phone_number}")
+                        print(f"SUCCESS: SMS receipt sent to {phone_number}")
                     except Exception as sms_error:
-                        print(f"⚠️ Failed to send SMS receipt: {sms_error}")
+                        print(f"WARNING: Failed to send SMS receipt: {sms_error}")
 
             elif payment_type == 'order':
                 # Handle order payments similarly
@@ -3360,22 +3392,22 @@ def stripe_webhook():
 
                         db.session.commit()
 
-                        print(f"✅ Updated order #{order_number} payment status")
+                        print(f"SUCCESS: Updated order #{order_number} payment status")
 
         elif event['type'] == 'payment_intent.payment_failed':
             payment_intent = event['data']['object']
-            print(f"❌ Payment failed: {payment_intent['id']}")
+            print(f"ERROR: Payment failed: {payment_intent['id']}")
             print(f"   Error: {payment_intent.get('last_payment_error', {}).get('message', 'Unknown error')}")
 
         return jsonify({"status": "success"}), 200
 
     except Exception as e:
-        print(f"❌ Webhook error: {str(e)}")
+        print(f"ERROR: Webhook error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
         # Validate required fields
         if not amount:
-            print("❌ Amount is required but not provided")
+            print("ERROR: Amount is required but not provided")
             return jsonify({
                 "status": "failed",
                 "error": "Amount is required"
@@ -3385,7 +3417,7 @@ def stripe_webhook():
             amount_cents = int(float(amount) * 100)
             print(f"💰 Amount converted to cents: {amount_cents}")
         except (ValueError, TypeError) as e:
-            print(f"❌ Invalid amount format: {amount} - {e}")
+            print(f"ERROR: Invalid amount format: {amount} - {e}")
             return jsonify({
                 "status": "failed",
                 "error": f"Invalid amount format: {amount}"
@@ -3397,7 +3429,7 @@ def stripe_webhook():
             stripe.api_key = os.getenv('STRIPE_API_KEY')
 
             if not stripe.api_key:
-                print("⚠️ No Stripe API key configured, using test mode")
+                print("WARNING: No Stripe API key configured, using test mode")
                 stripe.api_key = 'sk_test_51234567890abcdef'  # Fallback for testing
 
             print(f"🔑 Using Stripe API key: {stripe.api_key[:12]}...")
@@ -3425,23 +3457,23 @@ def stripe_webhook():
                     }
                 )
                 payment_method_id = payment_method.id
-                print(f"✅ Payment method created: {payment_method_id}")
+                print(f"SUCCESS: Payment method created: {payment_method_id}")
 
             except stripe.error.CardError as e:
-                print(f"❌ Payment method creation error: {str(e)}")
+                print(f"ERROR: Payment method creation error: {str(e)}")
                 if "raw card data" in str(e) or "empty string" in str(e):
-                    print("⚠️ Raw card data not allowed or empty, using test payment method token")
+                    print("WARNING: Raw card data not allowed or empty, using test payment method token")
                     # Use Stripe's test payment method instead
                     payment_method_id = "pm_card_visa"
                 else:
-                    print(f"❌ Card error: {e.user_message}")
+                    print(f"ERROR: Card error: {e.user_message}")
                     return jsonify({
                         "status": "failed",
                         "error": e.user_message,
                         "decline_code": e.decline_code if hasattr(e, 'decline_code') else None
                     })
             except Exception as e:
-                print(f"❌ Payment method creation error: {str(e)}")
+                print(f"ERROR: Payment method creation error: {str(e)}")
                 # Fallback to test payment method
                 payment_method_id = "pm_card_visa"
                 print(f"🔄 Using fallback payment method: {payment_method_id}")
@@ -3453,7 +3485,7 @@ def stripe_webhook():
             elif reservation_number:
                 description = f"Bobby's Table Reservation #{reservation_number}"
 
-            print(f"💳 Creating payment intent for {description}")
+            print(f"PAYMENT: Creating payment intent for {description}")
 
             payment_intent = stripe.PaymentIntent.create(
                 amount=amount_cents,
@@ -3476,7 +3508,7 @@ def stripe_webhook():
                 }
             )
 
-            print(f"✅ Payment intent created: {payment_intent.id}")
+            print(f"SUCCESS: Payment intent created: {payment_intent.id}")
             print(f"   Status: {payment_intent.status}")
 
             if payment_intent.status == 'succeeded':
@@ -3486,7 +3518,7 @@ def stripe_webhook():
                 import random
                 import string
                 confirmation_number = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-                print(f"🎫 Generated confirmation number: {confirmation_number}")
+                print(f"CONFIRMATION: Generated confirmation number: {confirmation_number}")
 
                 # Update database based on payment type
                 if payment_type == 'order' and (order_number or order_id):
@@ -3506,7 +3538,7 @@ def stripe_webhook():
                         order.confirmation_number = confirmation_number
 
                         db.session.commit()
-                        print(f"✅ Order {order.order_number} updated with payment info")
+                        print(f"SUCCESS: Order {order.order_number} updated with payment info")
 
                         # Send SMS receipt
                         try:
@@ -3519,11 +3551,11 @@ def stripe_webhook():
 
                             # SMS result already handled in the function
                             if sms_result.get('success'):
-                                print(f"✅ SMS receipt sent: {sms_result.get('sms_result', 'Success')}")
+                                print(f"SUCCESS: SMS receipt sent: {sms_result.get('sms_result', 'Success')}")
                             else:
-                                print(f"⚠️ SMS receipt failed: {sms_result.get('error', 'Unknown error')}")
+                                print(f"WARNING: SMS receipt failed: {sms_result.get('error', 'Unknown error')}")
                         except Exception as sms_error:
-                            print(f"⚠️ Failed to send SMS receipt: {sms_error}")
+                            print(f"WARNING: Failed to send SMS receipt: {sms_error}")
 
                         return jsonify({
                             "status": "success",
@@ -3540,7 +3572,7 @@ def stripe_webhook():
                     print(f"🔍 Processing reservation payment: type={payment_type}, number={reservation_number}")
                     reservation = Reservation.query.filter_by(reservation_number=reservation_number).first()
                     if reservation:
-                        print(f"✅ Found reservation: {reservation.name} for {reservation.party_size} people")
+                        print(f"SUCCESS: Found reservation: {reservation.name} for {reservation.party_size} people")
                         reservation.payment_status = 'paid'
                         reservation.payment_method = 'credit-card'
                         reservation.payment_date = datetime.now()
@@ -3549,10 +3581,10 @@ def stripe_webhook():
                         reservation.confirmation_number = confirmation_number
 
                         db.session.commit()
-                        print(f"✅ Reservation {reservation.reservation_number} updated with payment info")
+                        print(f"SUCCESS: Reservation {reservation.reservation_number} updated with payment info")
 
                         # Call SWAIG send_payment_receipt function for reservation
-                        print(f"📱 Calling SWAIG send_payment_receipt function for reservation {reservation_number}")
+                        print(f"SMS: Calling SWAIG send_payment_receipt function for reservation {reservation_number}")
                         try:
                             # Make a SWAIG function call to send the SMS receipt
                             swaig_data = {
@@ -3561,13 +3593,13 @@ def stripe_webhook():
                                     "parsed": [{
                                         "reservation_number": reservation_number,
                                         "phone_number": phone_number or reservation.phone_number,
-                                        "amount": amount_cents / 100.0,  # Convert cents to dollars for SMS
+                                        "payment_amount": amount_cents / 100.0,  # Convert cents to dollars for SMS
                                         "confirmation_number": confirmation_number
                                     }],
                                     "raw": json.dumps({
                                         "reservation_number": reservation_number,
                                         "phone_number": phone_number or reservation.phone_number,
-                                        "amount": amount_cents / 100.0,  # Convert cents to dollars for SMS
+                                        "payment_amount": amount_cents / 100.0,  # Convert cents to dollars for SMS
                                         "confirmation_number": confirmation_number
                                     })
                                 },
@@ -3583,14 +3615,14 @@ def stripe_webhook():
 
                             if response.status_code == 200:
                                 swaig_result = response.json()
-                                print(f"✅ SMS receipt SWAIG function called successfully - SWML send_sms action generated")
+                                print(f"SUCCESS: SMS receipt SWAIG function called successfully - SWML send_sms action generated")
                                 sms_status = "SMS receipt sent: Payment receipt SMS SWML action generated via SWAIG"
                             else:
-                                print(f"⚠️ SWAIG SMS function call failed: {response.status_code}")
+                                print(f"WARNING: SWAIG SMS function call failed: {response.status_code}")
                                 sms_status = f"SMS receipt failed: SWAIG call returned {response.status_code}"
 
                         except Exception as sms_error:
-                            print(f"⚠️ Failed to call SWAIG SMS function: {sms_error}")
+                            print(f"WARNING: Failed to call SWAIG SMS function: {sms_error}")
                             sms_status = f"SMS receipt failed: {str(sms_error)}"
 
                         return jsonify({
@@ -3604,7 +3636,7 @@ def stripe_webhook():
                             "sms_status": sms_status
                         })
                     else:
-                        print(f"❌ Reservation {reservation_number} not found")
+                        print(f"ERROR: Reservation {reservation_number} not found")
                         return jsonify({
                             "status": "failed",
                             "error": f"Reservation {reservation_number} not found"
@@ -3621,7 +3653,7 @@ def stripe_webhook():
                 })
 
             elif payment_intent.status == 'requires_action':
-                print("⚠️ Payment requires additional action")
+                print("WARNING: Payment requires additional action")
                 return jsonify({
                     "status": "requires_action",
                     "payment_intent_id": payment_intent.id,
@@ -3629,7 +3661,7 @@ def stripe_webhook():
                     "message": "Payment requires additional authentication"
                 })
             else:
-                print(f"❌ Payment failed with status: {payment_intent.status}")
+                print(f"ERROR: Payment failed with status: {payment_intent.status}")
                 return jsonify({
                     "status": "failed",
                     "payment_intent_id": payment_intent.id,
@@ -3637,21 +3669,21 @@ def stripe_webhook():
                 })
 
         except stripe.error.CardError as e:
-            print(f"❌ Stripe card error: {e.user_message}")
+            print(f"ERROR: Stripe card error: {e.user_message}")
             return jsonify({
                 "status": "failed",
                 "error": e.user_message,
                 "decline_code": e.decline_code if hasattr(e, 'decline_code') else None
             })
         except stripe.error.StripeError as e:
-            print(f"❌ Stripe API error: {str(e)}")
+            print(f"ERROR: Stripe API error: {str(e)}")
             return jsonify({
                 "status": "failed",
                 "error": str(e),
                 "message": "Stripe API error occurred"
             })
         except Exception as e:
-            print(f"❌ Unexpected error in payment processing: {str(e)}")
+            print(f"ERROR: Unexpected error in payment processing: {str(e)}")
             import traceback
             traceback.print_exc()
             return jsonify({
@@ -3661,7 +3693,7 @@ def stripe_webhook():
             })
 
     except Exception as e:
-        print(f"❌ Critical error in payment processor: {str(e)}")
+        print(f"ERROR: Critical error in payment processor: {str(e)}")
         import traceback
         traceback.print_exc()
         return jsonify({
@@ -3686,7 +3718,7 @@ def signalwire_payment_callback():
         callback_data = request.get_json()
 
         if not callback_data:
-            print("❌ No callback data received")
+            print("ERROR: No callback data received")
             return jsonify({
                 "success": False,
                 "error": "No callback data received"
@@ -3757,9 +3789,9 @@ def signalwire_payment_callback():
                 phone_number = payment_session.get('phone_number')
                 payment_type = payment_session.get('payment_type', 'reservation')
                 amount = payment_session.get('amount')
-                print(f"✅ Retrieved payment session data for call {call_id}")
+                print(f"SUCCESS: Retrieved payment session data for call {call_id}")
             else:
-                print(f"⚠️ No payment session found for call {call_id}")
+                print(f"WARNING: No payment session found for call {call_id}")
                 # Try to extract from any stored payment sessions
                 if call_id in payment_sessions:
                     session_data = payment_sessions[call_id]
@@ -3768,9 +3800,9 @@ def signalwire_payment_callback():
                     phone_number = session_data.get('phone_number')
                     payment_type = session_data.get('payment_type', 'reservation')
                     amount = session_data.get('amount')
-                    print(f"✅ Found payment session in memory for call {call_id}: reservation {reservation_number}")
+                    print(f"SUCCESS: Found payment session in memory for call {call_id}: reservation {reservation_number}")
                 else:
-                    print(f"❌ Call ID {call_id} not found in payment_sessions at all")
+                    print(f"ERROR: Call ID {call_id} not found in payment_sessions at all")
                     print(f"🔍 Available sessions: {list(payment_sessions.keys())}")
 
                     # ENHANCED FALLBACK: Check if there's a fallback session for any reservation
@@ -3787,7 +3819,7 @@ def signalwire_payment_callback():
                                 phone_number = session_data.get('phone_number')
                                 payment_type = session_data.get('payment_type', 'reservation')
                                 amount = session_data.get('amount')
-                                print(f"✅ Found fallback payment session for reservation {res_num}: {fallback_call_id}")
+                                print(f"SUCCESS: Found fallback payment session for reservation {res_num}: {fallback_call_id}")
                                 break
                     else:
                         print(f"🔍 No fallback payment sessions available")
@@ -3840,7 +3872,7 @@ def signalwire_payment_callback():
                             payment_sessions_global[call_id] = mapped_session.copy()
                             payment_session = mapped_session  # Set for further processing
 
-                            print(f"✅ Created session mapping in BOTH storages: {call_id} -> {most_recent_call_id}")
+                            print(f"SUCCESS: Created session mapping in BOTH storages: {call_id} -> {most_recent_call_id}")
 
                             # IMPROVED: Also create reservation mapping if available
                             if reservation_number:
@@ -3892,7 +3924,7 @@ def signalwire_payment_callback():
 
         # Handle different payment callback scenarios
         if status == 'failed':
-            print(f"❌ Payment failed: {error_type}")
+            print(f"ERROR: Payment failed: {error_type}")
 
             # Update payment session with failure info
             if call_id:
@@ -3902,7 +3934,7 @@ def signalwire_payment_callback():
                     payment_sessions[call_id]['error_type'] = error_type
                     payment_sessions[call_id]['failure_reason'] = payment_for
                     payment_sessions[call_id]['attempt'] = attempt
-                    print(f"✅ Updated payment session {call_id} with failure info")
+                    print(f"SUCCESS: Updated payment session {call_id} with failure info")
 
             return jsonify({
                 "success": False,
@@ -3935,7 +3967,7 @@ def signalwire_payment_callback():
             })
 
         elif status == 'completed' or status == 'succeeded':
-            print("✅ Payment completed successfully")
+            print("SUCCESS: Payment completed successfully")
 
             # CRITICAL FIX: Ensure we have payment session data for final callback
             if call_id and not payment_session:
@@ -3949,9 +3981,9 @@ def signalwire_payment_callback():
                     phone_number = payment_session.get('phone_number')
                     payment_type = payment_session.get('payment_type', 'reservation')
                     amount = payment_session.get('amount')
-                    print(f"✅ Retrieved payment session from memory: reservation {reservation_number}")
+                    print(f"SUCCESS: Retrieved payment session from memory: reservation {reservation_number}")
                 else:
-                    print(f"⚠️ No payment session found in memory either")
+                    print(f"WARNING: No payment session found in memory either")
 
             # Extract order_number for order payments
             order_number = callback_data.get('order_number')
@@ -3984,7 +4016,7 @@ def signalwire_payment_callback():
                         order.payment_intent_id = payment_id
 
                     db.session.commit()
-                    print(f"✅ Order {order_number} updated with payment confirmation")
+                    print(f"SUCCESS: Order {order_number} updated with payment confirmation")
 
                     # ENHANCEMENT: Update Stripe Payment Intent metadata for orders
                     if payment_id and payment_id.startswith('pi_'):
@@ -4003,12 +4035,12 @@ def signalwire_payment_callback():
                                         'payment_type': 'order'
                                     }
                                 )
-                                print(f"✅ Updated Stripe PaymentIntent {payment_id} with confirmation number: {confirmation_number}")
+                                print(f"SUCCESS: Updated Stripe PaymentIntent {payment_id} with confirmation number: {confirmation_number}")
                             else:
-                                print(f"⚠️ Stripe API key not configured - skipping metadata update")
+                                print(f"WARNING: Stripe API key not configured - skipping metadata update")
 
                         except Exception as stripe_error:
-                            print(f"⚠️ Failed to update Stripe metadata: {stripe_error}")
+                            print(f"WARNING: Failed to update Stripe metadata: {stripe_error}")
                             # Don't fail the whole process if Stripe update fails
 
                     # Create SWML response to announce payment confirmation to the user
@@ -4050,7 +4082,7 @@ def signalwire_payment_callback():
 
                     return response
                 else:
-                    print(f"❌ Order {order_number} not found")
+                    print(f"ERROR: Order {order_number} not found")
                     return jsonify({
                         "success": False,
                         "error": f"Order {order_number} not found"
@@ -4060,7 +4092,7 @@ def signalwire_payment_callback():
                 # Update reservation payment status
                 reservation = Reservation.query.filter_by(reservation_number=reservation_number).first()
                 if reservation:
-                    print(f"✅ Found reservation: {reservation.name} for {reservation.party_size} people")
+                    print(f"SUCCESS: Found reservation: {reservation.name} for {reservation.party_size} people")
 
                     # Generate confirmation number
                     import random
@@ -4079,7 +4111,7 @@ def signalwire_payment_callback():
                         reservation.payment_intent_id = payment_id
 
                     db.session.commit()
-                    print(f"✅ Reservation {reservation_number} updated with payment confirmation")
+                    print(f"SUCCESS: Reservation {reservation_number} updated with payment confirmation")
 
                     # ENHANCEMENT: Store confirmation number in payment session and conversation memory
                     # This allows the agent to access the confirmation number in future interactions
@@ -4094,9 +4126,9 @@ def signalwire_payment_callback():
                                 payment_sessions[call_id]['payment_status'] = 'completed'
                                 payment_sessions[call_id]['payment_amount'] = float(amount) if amount else 0.0
                                 payment_sessions[call_id]['payment_date'] = datetime.now().isoformat()
-                                print(f"✅ Updated payment session {call_id} with confirmation number: {confirmation_number}")
+                                print(f"SUCCESS: Updated payment session {call_id} with confirmation number: {confirmation_number}")
                             else:
-                                print(f"⚠️ Payment session {call_id} not found in active sessions")
+                                print(f"WARNING: Payment session {call_id} not found in active sessions")
                                 # Create a minimal session record for the confirmation
                                 if not hasattr(app, 'payment_sessions'):
                                     app.payment_sessions = {}
@@ -4108,9 +4140,9 @@ def signalwire_payment_callback():
                                     'payment_date': datetime.now().isoformat(),
                                     'reservation_number': reservation_number
                                 }
-                                print(f"✅ Created new payment session record for {call_id} with confirmation number: {confirmation_number}")
+                                print(f"SUCCESS: Created new payment session record for {call_id} with confirmation number: {confirmation_number}")
                         else:
-                            print(f"⚠️ No call_id provided in payment callback - cannot update payment session")
+                            print(f"WARNING: No call_id provided in payment callback - cannot update payment session")
 
                         # Store in conversation memory for future agent access
                         # We'll store this globally so any future get_reservation calls can access it
@@ -4125,10 +4157,10 @@ def signalwire_payment_callback():
                             'customer_name': customer_name,
                             'call_id': call_id  # Store call_id for reference
                         }
-                        print(f"✅ Stored confirmation number {confirmation_number} for reservation {reservation_number}")
+                        print(f"SUCCESS: Stored confirmation number {confirmation_number} for reservation {reservation_number}")
 
                     except Exception as session_error:
-                        print(f"⚠️ Could not update payment session data: {session_error}")
+                        print(f"WARNING: Could not update payment session data: {session_error}")
 
                     # ENHANCEMENT: Update Stripe Payment Intent metadata with confirmation number
                     if payment_id and payment_id.startswith('pi_'):
@@ -4146,12 +4178,12 @@ def signalwire_payment_callback():
                                         'bobby_table_status': 'confirmed_paid'
                                     }
                                 )
-                                print(f"✅ Updated Stripe PaymentIntent {payment_id} with confirmation number: {confirmation_number}")
+                                print(f"SUCCESS: Updated Stripe PaymentIntent {payment_id} with confirmation number: {confirmation_number}")
                             else:
-                                print(f"⚠️ Stripe API key not configured - skipping metadata update")
+                                print(f"WARNING: Stripe API key not configured - skipping metadata update")
 
                         except Exception as stripe_error:
-                            print(f"⚠️ Failed to update Stripe metadata: {stripe_error}")
+                            print(f"WARNING: Failed to update Stripe metadata: {stripe_error}")
                             # Don't fail the whole process if Stripe update fails
 
                     # Send enhanced payment confirmation SMS with reservation details and link
@@ -4186,7 +4218,7 @@ def signalwire_payment_callback():
                         }
 
                         # Send payment confirmation SMS
-                        print(f"📱 Attempting to send payment confirmation SMS...")
+                        print(f"SMS: Attempting to send payment confirmation SMS...")
                         sms_result = reservation_skill._send_payment_confirmation_sms(
                             reservation_data, 
                             payment_data, 
@@ -4195,12 +4227,12 @@ def signalwire_payment_callback():
 
                         if sms_result.get('success'):
                             sms_status = f"Payment confirmation SMS sent successfully to {phone_number or reservation.phone_number}"
-                            print(f"✅ {sms_status}")
+                            print(f"SUCCESS: {sms_status}")
                             if sms_result.get('calendar_link'):
                                 print(f"   Calendar link included: {sms_result['calendar_link']}")
                         else:
                             sms_status = f"Failed to send payment confirmation SMS: {sms_result.get('error', 'Unknown error')}"
-                            print(f"❌ {sms_status}")
+                            print(f"ERROR: {sms_status}")
 
                             # Try alternative SMS method using direct SignalWire REST API
                             print(f"🔄 Attempting backup SMS method...")
@@ -4215,7 +4247,7 @@ def signalwire_payment_callback():
 
                                 if all([project_id, auth_token, space, from_number]):
                                     # Build simple SMS message
-                                    backup_sms_body = f"💳 Payment Confirmed!\n\n"
+                                    backup_sms_body = f"PAYMENT: Payment Confirmed!\n\n"
                                     backup_sms_body += f"Confirmation: {confirmation_number}\n"
                                     backup_sms_body += f"Amount: ${amount}\n"
                                     backup_sms_body += f"Reservation #{reservation.reservation_number}\n\n"
@@ -4237,17 +4269,17 @@ def signalwire_payment_callback():
 
                                     if response.status_code == 201:
                                         sms_status = f"Backup SMS sent successfully via REST API"
-                                        print(f"✅ {sms_status}")
+                                        print(f"SUCCESS: {sms_status}")
                                     else:
-                                        print(f"❌ Backup SMS also failed: {response.status_code} - {response.text}")
+                                        print(f"ERROR: Backup SMS also failed: {response.status_code} - {response.text}")
                                 else:
-                                    print(f"❌ Missing SignalWire credentials for backup SMS")
+                                    print(f"ERROR: Missing SignalWire credentials for backup SMS")
                             except Exception as backup_error:
-                                print(f"❌ Backup SMS method failed: {backup_error}")
+                                print(f"ERROR: Backup SMS method failed: {backup_error}")
 
                     except Exception as sms_error:
                         sms_status = f"Error sending payment confirmation SMS: {str(sms_error)}"
-                        print(f"❌ {sms_status}")
+                        print(f"ERROR: {sms_status}")
                         import traceback
                         traceback.print_exc()
 
@@ -4290,7 +4322,7 @@ def signalwire_payment_callback():
 
                     return response
                 else:
-                    print(f"❌ Reservation {reservation_number} not found")
+                    print(f"ERROR: Reservation {reservation_number} not found")
                     return jsonify({
                         "success": False,
                         "error": f"Reservation {reservation_number} not found"
@@ -4300,7 +4332,7 @@ def signalwire_payment_callback():
 
             # CRITICAL FIX: Don't generate generic response if payment was already processed
             # The payment processor already handled the confirmation and SMS receipt
-            print(f"⚠️ Payment completion callback received but payment already processed")
+            print(f"WARNING: Payment completion callback received but payment already processed")
             print(f"   Payment Type: {payment_type}")
             print(f"   Reservation: {reservation_number}")
             print(f"   Amount: ${amount}")
@@ -4315,7 +4347,7 @@ def signalwire_payment_callback():
                         if reservation and reservation.payment_date:
                             time_since_payment = datetime.now() - reservation.payment_date
                             if time_since_payment.total_seconds() < 300:  # 5 minutes
-                                print(f"✅ Payment was already processed {time_since_payment.total_seconds():.0f} seconds ago")
+                                print(f"SUCCESS: Payment was already processed {time_since_payment.total_seconds():.0f} seconds ago")
                                 print(f"   Confirmation: {reservation.confirmation_number}")
                                 print(f"   SMS receipt already sent - no duplicate response needed")
 
@@ -4330,7 +4362,7 @@ def signalwire_payment_callback():
                                     "no_duplicate_announcement": True
                                 })
             except Exception as db_check_error:
-                print(f"⚠️ Could not check payment status in database: {db_check_error}")
+                print(f"WARNING: Could not check payment status in database: {db_check_error}")
 
             # If we get here, generate a minimal completion response without duplicate confirmation
             print(f"🎉 Returning simple completion acknowledgment (no duplicate announcement)")
@@ -4347,7 +4379,7 @@ def signalwire_payment_callback():
             })
 
         elif status == 'failed' or status == 'declined':
-            print(f"❌ Payment failed: {status}")
+            print(f"ERROR: Payment failed: {status}")
             return jsonify({
                 "success": False,
                 "error": f"Payment {status}",
@@ -4355,7 +4387,7 @@ def signalwire_payment_callback():
             })
 
         else:
-            print(f"⚠️ Unknown payment status: {status}")
+            print(f"WARNING: Unknown payment status: {status}")
             print(f"   Payment For: {payment_for}")
             print(f"   Event Type: {event_type}")
 
@@ -4372,7 +4404,7 @@ def signalwire_payment_callback():
             })
 
     except Exception as e:
-        print(f"❌ Error in SignalWire payment callback: {str(e)}")
+        print(f"ERROR: Error in SignalWire payment callback: {str(e)}")
         import traceback
         traceback.print_exc()
 
@@ -4387,7 +4419,7 @@ def signalwire_payment_callback():
                     payment_sessions[call_id]['payment_status'] = 'completed'
                     payment_sessions[call_id]['error_recovery'] = True
                     payment_sessions[call_id]['last_updated'] = datetime.now()
-                    print(f"✅ Emergency update successful for payment session {call_id}")
+                    print(f"SUCCESS: Emergency update successful for payment session {call_id}")
                 else:
                     # Create minimal session to prevent agent from re-asking
                     if not hasattr(app, 'payment_sessions'):
@@ -4400,7 +4432,7 @@ def signalwire_payment_callback():
                         'started_at': datetime.now(),
                         'last_updated': datetime.now()
                     }
-                    print(f"✅ Created emergency payment session for {call_id}")
+                    print(f"SUCCESS: Created emergency payment session for {call_id}")
 
                 # Also try to update the database reservation status
                 try:
@@ -4411,12 +4443,12 @@ def signalwire_payment_callback():
                             reservation.payment_method = 'credit-card'
                             reservation.payment_date = datetime.now()
                             db.session.commit()
-                            print(f"✅ Emergency database update: reservation {reservation_number} marked as paid")
+                            print(f"SUCCESS: Emergency database update: reservation {reservation_number} marked as paid")
                 except Exception as db_error:
-                    print(f"⚠️ Emergency database update failed: {db_error}")
+                    print(f"WARNING: Emergency database update failed: {db_error}")
 
         except Exception as recovery_error:
-            print(f"⚠️ Emergency payment session update also failed: {recovery_error}")
+            print(f"WARNING: Emergency payment session update also failed: {recovery_error}")
 
         return jsonify({
             "success": False,
@@ -4487,7 +4519,7 @@ def cleanup_orphaned_payment_sessions():
             cleaned_count += 1
 
         if cleaned_count > 0:
-            print(f"✅ Cleaned up {cleaned_count} orphaned/expired payment sessions")
+            print(f"SUCCESS: Cleaned up {cleaned_count} orphaned/expired payment sessions")
 
         print(f"   Remaining app sessions: {len(app.payment_sessions)}")
         print(f"   Remaining global sessions: {len(payment_sessions_global)}")
@@ -4495,7 +4527,7 @@ def cleanup_orphaned_payment_sessions():
         return cleaned_count
 
     except Exception as e:
-        print(f"❌ Error cleaning up payment sessions: {e}")
+        print(f"ERROR: Error cleaning up payment sessions: {e}")
         return 0
 
 # Add route to manually cleanup sessions
@@ -4593,7 +4625,7 @@ def calendar_refresh_trigger():
         if event_type not in ['reservation_created', 'reservation_updated', 'reservation_cancelled']:
             return jsonify({'success': False, 'error': 'Invalid event type'}), 400
 
-        # 📱 SMS SENDING IS NOW OPTIONAL - Agent will ask user for consent
+        # SMS: SMS SENDING IS NOW OPTIONAL - Agent will ask user for consent
         sms_result = {'success': False, 'sms_sent': False}
         print(f"📅 Calendar updated for {event_type} - SMS sending is now handled by agent consent")
 
@@ -4614,11 +4646,11 @@ def calendar_refresh_trigger():
         # Add event to queue (non-blocking)
         try:
             calendar_event_queue.put_nowait(sse_event)
-            print(f"✅ SSE event broadcasted to connected clients")
+            print(f"SUCCESS: SSE event broadcasted to connected clients")
         except queue.Full:
-            print(f"⚠️ SSE queue full, event dropped")
+            print(f"WARNING: SSE queue full, event dropped")
 
-        print(f"✅ Calendar refresh notification processed successfully")
+        print(f"SUCCESS: Calendar refresh notification processed successfully")
 
         return jsonify({
             'success': True,
@@ -4631,7 +4663,7 @@ def calendar_refresh_trigger():
         })
 
     except Exception as e:
-        print(f"❌ Calendar refresh trigger error: {str(e)}")
+        print(f"ERROR: Calendar refresh trigger error: {str(e)}")
         return jsonify({
             'success': False,
             'error': str(e)
@@ -4653,7 +4685,7 @@ def calendar_events_stream():
             # Send keepalive ping every 30 seconds
             yield "data: {\"type\": \"ping\"}\n\n"
         except Exception as e:
-            print(f"❌ SSE stream error: {e}")
+            print(f"ERROR: SSE stream error: {e}")
             yield f"data: {{\"type\": \"error\", \"message\": \"{str(e)}\"}}\n\n"
 
     return Response(
@@ -4675,7 +4707,7 @@ def start_payment_session_cleanup_scheduler():
                 time.sleep(300)  # Run every 5 minutes
                 cleanup_orphaned_payment_sessions()
             except Exception as e:
-                print(f"❌ Payment session cleanup error: {e}")
+                print(f"ERROR: Payment session cleanup error: {e}")
 
     cleanup_thread = threading.Thread(target=cleanup_worker, daemon=True)
     cleanup_thread.start()
@@ -4701,10 +4733,10 @@ def cleanup_payment_sessions_on_startup():
         app.payment_sessions = {}
         payment_sessions_global = {}
 
-        print("✅ Payment session cleanup completed on startup")
+        print("SUCCESS: Payment session cleanup completed on startup")
 
     except Exception as e:
-        print(f"❌ Error during startup payment session cleanup: {e}")
+        print(f"ERROR: Error during startup payment session cleanup: {e}")
 
 # Add the missing reservation payment API endpoint
 @app.route('/api/reservations/payment', methods=['POST'])
@@ -4759,7 +4791,7 @@ def update_reservation_payment():
         
         db.session.commit()
         
-        print(f"✅ Updated reservation #{reservation.reservation_number} payment status")
+        print(f"SUCCESS: Updated reservation #{reservation.reservation_number} payment status")
         print(f"   - Payment Status: {reservation.payment_status}")
         print(f"   - Payment Amount: ${reservation.payment_amount}")
         print(f"   - Confirmation Number: {confirmation_number}")
@@ -4788,17 +4820,17 @@ def update_reservation_payment():
             if response.status_code == 200:
                 print(f"📅 Calendar refresh notification sent successfully for payment completion")
             else:
-                print(f"⚠️ Calendar refresh notification failed: {response.status_code}")
+                print(f"WARNING: Calendar refresh notification failed: {response.status_code}")
                 
         except Exception as refresh_error:
             # Don't fail the payment if calendar refresh fails
-            print(f"⚠️ Calendar refresh notification error (non-critical): {refresh_error}")
+            print(f"WARNING: Calendar refresh notification error (non-critical): {refresh_error}")
         
         # Send SMS receipt
         sms_result = {'success': False, 'sms_sent': False}
         try:
             phone_number = sms_number or reservation.phone_number
-            print(f"📱 Sending SMS receipt to {phone_number}")
+            print(f"SMS: Sending SMS receipt to {phone_number}")
             
             # Use the existing SMS receipt function
             sms_result = send_payment_receipt_sms(
@@ -4809,12 +4841,12 @@ def update_reservation_payment():
             )
             
             if sms_result.get('success'):
-                print(f"✅ SMS receipt sent successfully")
+                print(f"SUCCESS: SMS receipt sent successfully")
             else:
-                print(f"⚠️ SMS receipt failed: {sms_result.get('error', 'Unknown error')}")
+                print(f"WARNING: SMS receipt failed: {sms_result.get('error', 'Unknown error')}")
                 
         except Exception as sms_error:
-            print(f"❌ Error sending SMS receipt: {sms_error}")
+            print(f"ERROR: Error sending SMS receipt: {sms_error}")
             sms_result = {'success': False, 'sms_sent': False, 'error': str(sms_error)}
         
         return jsonify({
@@ -4829,7 +4861,7 @@ def update_reservation_payment():
         })
         
     except Exception as e:
-        print(f"❌ Error updating reservation payment: {e}")
+        print(f"ERROR: Error updating reservation payment: {e}")
         import traceback
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e)}), 500
@@ -4871,7 +4903,7 @@ def trigger_sms_receipt_for_paid_reservation(reservation_number):
         }
         
     except Exception as e:
-        print(f"❌ Error triggering SMS receipt: {e}")
+        print(f"ERROR: Error triggering SMS receipt: {e}")
         return {'success': False, 'error': str(e)}
 
 @app.route('/debug/trigger-sms-receipt', methods=['POST'])

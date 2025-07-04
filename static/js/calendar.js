@@ -12,7 +12,7 @@ function testModal() {
     try {
         const modalElement = document.getElementById('newReservationModal');
         console.log('Modal element:', modalElement);
-
+        
         if (modalElement) {
             const modal = new bootstrap.Modal(modalElement);
             modal.show();
@@ -28,10 +28,10 @@ function testModal() {
 // Initialize when DOM is loaded
 document.addEventListener('DOMContentLoaded', function() {
     console.log('DOM loaded, initializing calendar...');
-
+    
     var calendarEl = document.getElementById('calendar');
     console.log('Calendar element:', calendarEl);
-
+    
     // Only initialize calendar if the calendar element exists and FullCalendar is available
     if (calendarEl && typeof FullCalendar !== 'undefined') {
         // Initialize calendar
@@ -81,37 +81,37 @@ document.addEventListener('DOMContentLoaded', function() {
         },
         select: function(info) {
             console.log('Calendar select triggered:', info);
-
+            
             try {
                 // Show the new reservation modal
                 const modalElement = document.getElementById('newReservationModal');
                 console.log('Modal element found:', modalElement);
-
+                
                 const reservationModal = new bootstrap.Modal(modalElement);
-
+                
                 // Set the selected date in the form
                 const dateInput = document.getElementById('reservation_date');
                 console.log('Date input found:', dateInput);
                 dateInput.value = info.startStr.split('T')[0];
-
+                
                 // Handle time setting for select dropdown
                 const timeStr = info.startStr.split('T')[1] ? info.startStr.split('T')[1].slice(0, 5) : '12:00';
                 const timeSelect = document.getElementById('reservation_time');
                 console.log('Time select found:', timeSelect);
-
+                
                 console.log('Setting time to:', timeStr);
-
+                
                 // Find the closest available time slot
                 let closestTime = '12:00';
                 const availableTimes = Array.from(timeSelect.options).map(option => option.value).filter(value => value);
-
+                
                 if (availableTimes.includes(timeStr)) {
                     closestTime = timeStr;
                 } else {
                     // Find the closest time slot
                     const selectedMinutes = parseInt(timeStr.split(':')[0]) * 60 + parseInt(timeStr.split(':')[1]);
                     let minDiff = Infinity;
-
+                    
                     availableTimes.forEach(time => {
                         const timeMinutes = parseInt(time.split(':')[0]) * 60 + parseInt(time.split(':')[1]);
                         const diff = Math.abs(timeMinutes - selectedMinutes);
@@ -121,41 +121,41 @@ document.addEventListener('DOMContentLoaded', function() {
                         }
                     });
                 }
-
+                
                 timeSelect.value = closestTime;
                 console.log('Final time set to:', closestTime);
-
+                
                 console.log('Showing modal...');
                 reservationModal.show();
-
+                
                 // Fetch menu items and render party order forms when modal opens
                 fetchMenuItems();
                 calendar.unselect();
-
+                
             } catch (error) {
                 console.error('Error in select handler:', error);
             }
         },
         dateClick: function(info) {
             console.log('Date click triggered:', info);
-
+            
             try {
                 // Fallback for when select doesn't work
                 const modalElement = document.getElementById('newReservationModal');
                 const reservationModal = new bootstrap.Modal(modalElement);
-
+                
                 // Set the clicked date
                 document.getElementById('reservation_date').value = info.dateStr;
-
+                
                 // Set default time to 12:00 PM
                 document.getElementById('reservation_time').value = '12:00';
-
+                
                 console.log('Showing modal via dateClick...');
                 reservationModal.show();
-
+                
                 // Fetch menu items and render party order forms when modal opens
                 fetchMenuItems();
-
+                
             } catch (error) {
                 console.error('Error in dateClick handler:', error);
             }
@@ -187,11 +187,11 @@ document.addEventListener('DOMContentLoaded', function() {
     document.querySelectorAll('#scheduleBtn, #scheduleBtn2').forEach(function(btn) {
         btn.addEventListener('click', function() {
             const reservationModal = new bootstrap.Modal(document.getElementById('newReservationModal'));
-
+            
             // Set today's date as default
             const today = new Date().toISOString().split('T')[0];
             document.getElementById('reservation_date').value = today;
-
+            
             reservationModal.show();
             // Fetch menu items and render party order forms when modal opens
             fetchMenuItems();
@@ -249,10 +249,10 @@ document.addEventListener('DOMContentLoaded', function() {
         reservationForm.addEventListener('submit', function(e) {
         e.preventDefault();
         const formData = new FormData(this);
-
+        
         // Check if this is an old school reservation
         const isOldSchool = document.getElementById('oldSchoolReservation').checked;
-
+        
         if (!isOldSchool) {
             // Collect party orders only if not old school
             const partyOrders = [];
@@ -298,7 +298,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 function showReservationDetails(event) {
     const details = document.getElementById('reservationDetails');
-
+    
     // Handle different parameter structures
     let reservationId;
     if (event.id) {
@@ -315,7 +315,7 @@ function showReservationDetails(event) {
         console.error('Invalid event parameter:', event);
         return;
     }
-
+    
     // Fetch reservation and order details from backend
     fetch(`/api/reservations/${reservationId}`)
         .then(resp => {
@@ -347,101 +347,51 @@ function showReservationDetails(event) {
             let totalBill = 0;
             if (reservation.orders && reservation.orders.length > 0) {
                 reservation.orders.forEach((order, idx) => {
-                    // Calculate order total from items if not already set
-                    if ((!order.total_amount || order.total_amount === 0) && order.items && order.items.length > 0) {
-                        let calculatedTotal = 0;
-                        order.items.forEach(item => {
-                            const itemPrice = parseFloat(item.price_at_time) || 0;
-                            const itemQuantity = parseInt(item.quantity) || 0;
-                            calculatedTotal += itemPrice * itemQuantity;
-                        });
-                        order.total_amount = calculatedTotal;
-                    }
                     html += `
                         <div class="card mb-3 bg-dark text-light border-0 shadow-sm">
-                            <div class="card-header bg-secondary text-light">
-                                <strong>Person ${idx + 1} ${idx === 0 ? '(Reservation Holder)' : ''}</strong> - ${order.person_name || 'No name provided'}
+                            <div class="card-header bg-secondary text-light d-flex justify-content-between align-items-center">
+                                <div>
+                                    <strong>Person ${idx + 1} ${idx === 0 ? '(Reservation Holder)' : ''}</strong> - ${order.person_name || ''}
+                                </div>
+                                <div class="text-end">
+                                    <span class="badge bg-primary">Order #${order.order_number}</span>
+                                </div>
                             </div>
                             <div class="card-body">
+                                <ul class="list-group list-group-flush">
                     `;
-                    
                     if (order.items && order.items.length > 0) {
-                        html += `<ul class="list-group list-group-flush">`;
-                        let orderTotal = 0;
                         order.items.forEach(item => {
-                            console.log('Processing order item:', item); // Debug log
-                            
-                            let itemName = 'Unknown Item';
-                            let itemDescription = '';
-                            
-                            // Handle the menu_item object structure from the live system
-                            if (item.menu_item && item.menu_item.name) {
-                                itemName = item.menu_item.name;
-                                itemDescription = item.menu_item.description || '';
-                            } else if (item.menu_item_name) {
-                                itemName = item.menu_item_name;
-                            } else {
-                                itemName = `Item ID ${item.menu_item_id} (Not Found)`;
-                            }
-                            
-                            const itemPrice = parseFloat(item.price_at_time) || 0;
-                            const itemQuantity = parseInt(item.quantity) || 0;
-                            const itemTotal = itemPrice * itemQuantity;
-                            orderTotal += itemTotal;
-                            
+                            const itemName = item.menu_item ? item.menu_item.name : `Item ID ${item.menu_item_id} (Not Found)`;
                             html += `
                                 <li class="list-group-item bg-dark text-light d-flex justify-content-between align-items-center">
-                                    <div>
-                                        <strong>${itemName}</strong>
-                                        ${itemDescription ? `<div class="text-muted small">${itemDescription}</div>` : ''}
-                                        <div class="text-muted small">Quantity: ${itemQuantity} × $${itemPrice.toFixed(2)}</div>
-                                        ${item.notes ? `<div class="text-info small"><em>Note: ${item.notes}</em></div>` : ''}
-                                    </div>
-                                    <span class="text-warning fw-bold">$${itemTotal.toFixed(2)}</span>
+                                    <span><strong>${itemName}</strong> <small class="text-muted">x${item.quantity}</small></span>
+                                    <span class="text-accent">$${(item.price_at_time * item.quantity).toFixed(2)}</span>
                                 </li>
                             `;
                         });
-                        html += `</ul>`;
-                        
-                        // Update the order total if it's not set correctly
-                        if (!order.total_amount || order.total_amount === 0) {
-                            order.total_amount = orderTotal;
-                        }
                     } else {
-                        html += `
-                            <div class="text-center py-3">
-                                <i class="fas fa-utensils fa-2x text-muted mb-2"></i>
-                                <p class="text-muted mb-0">No items ordered for this person</p>
-                            </div>
-                        `;
+                        html += `<li class="list-group-item bg-dark text-light">No items ordered.</li>`;
                     }
-                    
                     html += `
-                                <div class="mt-3 pt-3 border-top text-end">
-                                    <strong>Person Total: <span class="text-warning">$${order.total_amount ? order.total_amount.toFixed(2) : '0.00'}</span></strong>
-                                </div>
+                                </ul>
+                                <div class="mt-2 text-end"><strong>Total:</strong> <span class="text-accent">$${order.total_amount ? order.total_amount.toFixed(2) : '0.00'}</span></div>
                             </div>
                         </div>
                     `;
                     // Add to total bill
                     totalBill += order.total_amount || 0;
                 });
-
+                
                 // Add Total Bill section
                 html += `
-                    <hr class="my-4">
-                    <div class="card text-light border-0 shadow-lg" style="background: linear-gradient(135deg, #4d7eff 0%, #c044ff 100%);">
+                    <hr class="my-3">
+                    <div class="card bg-primary text-light border-0 shadow-lg">
                         <div class="card-body text-center">
-                            <h4 class="card-title mb-3">
-                                <i class="fas fa-receipt me-2"></i>Total Bill Summary
-                            </h4>
-                            <h2 class="text-white fw-bold mb-2" style="font-size: 2.5rem;">$${totalBill.toFixed(2)}</h2>
-                            <p class="text-light opacity-75 mb-0">
-                                <i class="fas fa-users me-1"></i>Party of ${reservation.party_size} • 
-                                <i class="fas fa-utensils ms-2 me-1"></i>${reservation.orders.length} orders
-                            </p>
+                            <h5 class="card-title mb-2"><i class="fas fa-receipt me-2"></i>Total Bill</h5>
+                            <h3 class="text-white fw-bold">$${totalBill.toFixed(2)}</h3>
                 `;
-
+                
                 // Add payment status and reference information if paid
                 if (reservation.payment_status === 'paid') {
                     html += `
@@ -451,7 +401,7 @@ function showReservationDetails(event) {
                                 <span class="badge bg-success">PAID</span>
                             </div>
                     `;
-
+                    
                     // Add payment date if available
                     if (reservation.payment_date) {
                         const paymentDate = new Date(reservation.payment_date).toLocaleDateString('en-US', {
@@ -463,7 +413,7 @@ function showReservationDetails(event) {
                         });
                         html += `<div class="small text-light mb-1">Paid on: ${paymentDate}</div>`;
                     }
-
+                    
                     // Add confirmation number if available
                     if (reservation.confirmation_number) {
                         html += `
@@ -472,7 +422,7 @@ function showReservationDetails(event) {
                             </div>
                         `;
                     }
-
+                    
                     // Add payment reference if available
                     if (reservation.payment_intent_id) {
                         const paymentId = reservation.payment_intent_id;
@@ -484,10 +434,10 @@ function showReservationDetails(event) {
                             </div>
                         `;
                     }
-
+                    
                     html += `</div>`;
                 }
-
+                
                 html += `
                         </div>
                     </div>
@@ -503,23 +453,23 @@ function showReservationDetails(event) {
                 `;
             }
             details.innerHTML = html;
-
+            
             // Store reservation data globally for payment processing
             window.currentReservationData = {
                 ...reservation,
                 totalBill: totalBill,
                 time: time12hr
             };
-
+            
             // Show appropriate payment button based on payment status
-            updatePaymentButtons(reservation.payment_status || 'unpaid', totalBill);
-
+            updatePaymentButtons(reservation.payment_status || 'unpaid');
+            
             // Update button states based on reservation status
             updateModalButtonStates(reservation.status || 'confirmed');
-
+            
             // Start monitoring payment status for this reservation
             startPaymentStatusMonitoring(reservation.id, reservation.payment_status || 'unpaid');
-
+            
             new bootstrap.Modal(document.getElementById('reservationModal')).show();
         })
         .catch(error => {
@@ -529,21 +479,15 @@ function showReservationDetails(event) {
         });
 }
 
-function updatePaymentButtons(status, totalBill = 0) {
+function updatePaymentButtons(status) {
     const payBillBtn = document.getElementById('payBillBtn');
     const billPaidBtn = document.getElementById('billPaidBtn');
 
     if (status === 'paid') {
         payBillBtn.style.display = 'none';
         billPaidBtn.style.display = 'inline-block';
-    } else if (totalBill > 0) {
-        // Only show pay button if there's actually a bill to pay
-        payBillBtn.style.display = 'inline-block';
-        billPaidBtn.style.display = 'none';
-        payBillBtn.innerHTML = `<i class="fas fa-credit-card me-2"></i>Pay Bill ($${totalBill.toFixed(2)})`;
     } else {
-        // No bill to pay (old school reservation or no orders)
-        payBillBtn.style.display = 'none';
+        payBillBtn.style.display = 'inline-block';
         billPaidBtn.style.display = 'none';
     }
 }
@@ -555,10 +499,10 @@ function updateReservationStatusInModal(newStatus) {
         // Look for the status line and update it
         const statusRegex = /<div><strong>Status:<\/strong>\s*([^<]+)<\/div>/;
         const currentHTML = detailsDiv.innerHTML;
-
+        
         let statusDisplay = newStatus;
         let statusClass = '';
-
+        
         // Format status with appropriate styling
         switch(newStatus.toLowerCase()) {
             case 'cancelled':
@@ -573,7 +517,7 @@ function updateReservationStatusInModal(newStatus) {
             default:
                 statusDisplay = `<span class="badge bg-secondary">${newStatus}</span>`;
         }
-
+        
         if (statusRegex.test(currentHTML)) {
             // Update existing status
             const updatedHTML = currentHTML.replace(statusRegex, `<div><strong>Status:</strong> ${statusDisplay}</div>`);
@@ -591,7 +535,7 @@ function updateModalButtonStates(reservationStatus) {
     const editBtn = document.getElementById('editReservationBtn');
     const rescheduleBtn = document.getElementById('rescheduleBtn');
     const payBillBtn = document.getElementById('payBillBtn');
-
+    
     if (reservationStatus && reservationStatus.toLowerCase() === 'cancelled') {
         // Disable all action buttons for cancelled reservations
         if (cancelBtn) {
@@ -640,15 +584,15 @@ let currentMonitoringReservationId = null;
 function startPaymentStatusMonitoring(reservationId, currentStatus) {
     // Clear any existing monitoring
     stopPaymentStatusMonitoring();
-
+    
     // Only monitor if payment is not already paid
     if (currentStatus === 'paid') {
         return;
     }
-
+    
     currentMonitoringReservationId = reservationId;
     console.log(`🔍 Starting payment status monitoring for reservation ${reservationId}`);
-
+    
     // Check payment status every 5 seconds
     paymentStatusInterval = setInterval(async () => {
         try {
@@ -656,14 +600,14 @@ function startPaymentStatusMonitoring(reservationId, currentStatus) {
             if (response.ok) {
                 const reservation = await response.json();
                 const newStatus = reservation.payment_status || 'unpaid';
-
+                
                 // If status changed to paid, update the UI
                 if (newStatus === 'paid' && currentStatus !== 'paid') {
                     console.log(`✅ Payment status changed to paid for reservation ${reservationId}`);
-
+                    
                     // Update the payment buttons
                     updatePaymentButtons('paid');
-
+                    
                     // Update the stored reservation data
                     if (window.currentReservationData) {
                         window.currentReservationData.payment_status = 'paid';
@@ -671,22 +615,22 @@ function startPaymentStatusMonitoring(reservationId, currentStatus) {
                         window.currentReservationData.confirmation_number = reservation.confirmation_number;
                         window.currentReservationData.payment_intent_id = reservation.payment_intent_id;
                     }
-
+                    
                     // Refresh the reservation details to show payment information
                     showReservationDetails(reservationId);
-
+                    
                     // Show a notification
                     showPaymentStatusNotification('Payment received! Your bill has been marked as paid.');
-
+                    
                     // Refresh the calendar to show updated status
                     if (typeof calendar !== 'undefined') {
                         calendar.refetchEvents();
                     }
-
+                    
                     // Stop monitoring since payment is complete
                     stopPaymentStatusMonitoring();
                 }
-
+                
                 currentStatus = newStatus;
             }
         } catch (error) {
@@ -716,15 +660,15 @@ function showPaymentStatusNotification(message) {
             </div>
         </div>
     `;
-
+    
     // Add toast to body
     document.body.insertAdjacentHTML('beforeend', toastHtml);
-
+    
     // Show the toast
     const toastElement = document.body.lastElementChild;
     const toast = new bootstrap.Toast(toastElement, { delay: 5000 });
     toast.show();
-
+    
     // Remove toast element after it's hidden
     toastElement.addEventListener('hidden.bs.toast', () => {
         toastElement.remove();
@@ -736,13 +680,13 @@ function editCurrentReservation() {
         alert('No reservation selected');
         return;
     }
-
+    
     // Close the details modal first
     const detailsModal = bootstrap.Modal.getInstance(document.getElementById('reservationModal'));
     if (detailsModal) {
         detailsModal.hide();
     }
-
+    
     // Open the edit reservation modal instead of redirecting
     editReservation(currentReservationId);
 }
@@ -848,7 +792,7 @@ function deleteReservation(reservationId) {
 function editReservation(reservationId) {
     currentReservationId = reservationId; // Set the global reservation ID
     window.currentReservationId = reservationId; // Also set on window object
-
+    
     // Fetch reservation details
     fetch(`/api/reservations/${reservationId}`)
         .then(resp => resp.json())
@@ -860,12 +804,12 @@ function editReservation(reservationId) {
             document.getElementById('editPhone').value = reservation.phone_number;
             document.getElementById('editRequests').value = reservation.special_requests || '';
             document.getElementById('editDate').value = reservation.date;
-
+            
             // Check if this is an old school reservation (no orders)
             const hasOrders = reservation.orders && reservation.orders.length > 0;
             const oldSchoolCheckbox = document.getElementById('editOldSchoolReservation');
             const editOrderSection = document.getElementById('editOrderSection');
-
+            
             if (!hasOrders) {
                 // This is an old school reservation
                 oldSchoolCheckbox.checked = true;
@@ -911,7 +855,7 @@ document.getElementById('editReservationForm').addEventListener('submit', functi
 
     // Check if this is an old school reservation
     const isOldSchool = document.getElementById('editOldSchoolReservation').checked;
-
+    
     if (!isOldSchool) {
         // Collect party orders only if not old school
         const partyOrders = [];
@@ -933,7 +877,7 @@ document.getElementById('editReservationForm').addEventListener('submit', functi
         }
         formData.append('party_orders', JSON.stringify(partyOrders));
     } else {
-        // For old school reservations, send empty party orders<previous_generation>
+        // For old school reservations, send empty party orders
         formData.append('party_orders', JSON.stringify([]));
     }
 
@@ -942,7 +886,7 @@ document.getElementById('editReservationForm').addEventListener('submit', functi
     for (let [key, value] of formData.entries()) {
         jsonData[key] = value;
     }
-
+    
     // Submit the form
     fetch(`/api/reservations/${currentReservationId}`, {
         method: 'PUT',
@@ -977,13 +921,13 @@ function rescheduleReservation() {
         alert('No reservation selected');
         return;
     }
-
+    
     // Close the details modal first
     const detailsModal = bootstrap.Modal.getInstance(document.getElementById('reservationModal'));
     if (detailsModal) {
         detailsModal.hide();
     }
-
+    
     // Wait for the modal to close before opening the edit modal
     setTimeout(() => {
         editReservation(currentReservationId);
@@ -996,16 +940,16 @@ function cancelReservation() {
         alert('No reservation selected');
         return;
     }
-
+    
     if (confirm('Are you sure you want to cancel this reservation? This action cannot be undone.')) {
         // Get the cancel button to update its state
         const cancelBtn = document.getElementById('cancelReservationBtn');
         const originalBtnContent = cancelBtn.innerHTML;
-
+        
         // Show loading state
         cancelBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Cancelling...';
         cancelBtn.disabled = true;
-
+        
         fetch(`/api/reservations/${currentReservationId}`, {
             method: 'DELETE'
         }).then(response => {
@@ -1014,12 +958,12 @@ function cancelReservation() {
                 cancelBtn.innerHTML = '<i class="fas fa-ban me-2"></i>Cancelled';
                 cancelBtn.className = 'btn btn-secondary btn-lg';
                 cancelBtn.disabled = true;
-
+                
                 // Disable other action buttons since reservation is cancelled
                 const editBtn = document.getElementById('editReservationBtn');
                 const rescheduleBtn = document.getElementById('rescheduleBtn');
                 const payBillBtn = document.getElementById('payBillBtn');
-
+                
                 if (editBtn) {
                     editBtn.disabled = true;
                     editBtn.className = 'btn btn-secondary btn-lg';
@@ -1033,21 +977,21 @@ function cancelReservation() {
                 if (payBillBtn) {
                     payBillBtn.style.display = 'none'; // Hide payment button for cancelled reservations
                 }
-
+                
                 // Update the reservation status in the details
                 updateReservationStatusInModal('cancelled');
-
+                
                 // Refresh the calendar
                 calendar.refetchEvents();
-
+                
                 // Show success message
                 showPaymentStatusNotification('Reservation cancelled successfully');
-
+                
                 // Close the modal after a brief delay to show the status change
                 setTimeout(() => {
                     bootstrap.Modal.getInstance(document.getElementById('reservationModal')).hide();
                 }, 2000); // 2 second delay
-
+                
             } else {
                 // Restore button on error
                 cancelBtn.innerHTML = originalBtnContent;
@@ -1069,10 +1013,10 @@ function renderEditPartyOrderForms(reservation) {
     const partySize = parseInt(reservation.party_size) || 1;
     const partyOrdersDiv = document.getElementById('editPartyOrders');
     partyOrdersDiv.innerHTML = '';
-
+    
     for (let i = 0; i < partySize; i++) {
         const existingOrder = reservation.orders && reservation.orders[i] ? reservation.orders[i] : null;
-
+        
         partyOrdersDiv.innerHTML += `
             <div class="card mb-3 bg-dark text-light border-0 shadow-sm">
                 <div class="card-header bg-secondary text-light">
@@ -1113,7 +1057,7 @@ function renderEditMenuItems(personIndex, existingOrder) {
                         existingQuantity = existingItem.quantity;
                     }
                 }
-
+                
                 html += `
                     <div class="list-group-item bg-dark text-light d-flex justify-content-between align-items-center">
                         <div>
@@ -1158,11 +1102,11 @@ function startAutoRefresh() {
     // Only start auto-refresh if calendar exists and we're on the calendar page
     if (typeof calendar !== 'undefined' && document.getElementById('calendar')) {
         console.log('📅 Starting auto-refresh for SWAIG reservations (30s interval)');
-
+        
         autoRefreshInterval = setInterval(() => {
             console.log('🔄 Auto-refreshing calendar for new phone reservations...');
             calendar.refetchEvents();
-
+            
             // Check for new reservations and show notification
             checkForNewReservations();
         }, 30000); // 30 seconds - reasonable refresh rate
@@ -1183,12 +1127,12 @@ async function checkForNewReservations() {
         const view = calendar.view;
         const start = view.activeStart.toISOString();
         const end = view.activeEnd.toISOString();
-
+        
         // Fetch current reservations
         const response = await fetch(`/api/reservations/calendar?start=${start}&end=${end}`);
         if (response.ok) {
             const reservations = await response.json();
-
+            
             // If this is the first time, just set the initial count without showing notifications
             if (!initialCountSet) {
                 lastReservationCount = reservations.length;
@@ -1196,14 +1140,14 @@ async function checkForNewReservations() {
                 console.log(`📊 Initial reservation count set: ${lastReservationCount}`);
                 return;
             }
-
+            
             // Check if we have new reservations (only after initial count is set)
             if (reservations.length > lastReservationCount) {
                 const newCount = reservations.length - lastReservationCount;
                 showNewReservationNotification(newCount);
                 console.log(`📞 ${newCount} new reservations detected!`);
             }
-
+            
             // Update the count
             lastReservationCount = reservations.length;
             console.log(`📊 Current reservation count: ${lastReservationCount}`);
@@ -1217,28 +1161,28 @@ function showNewReservationNotification(count) {
     const message = count === 1 
         ? '📞 New phone reservation received!' 
         : `📞 ${count} new phone reservations received!`;
-
+    
     // Play a subtle notification sound (optional - browser dependent)
     try {
         // Create a subtle beep sound
         const audioContext = new (window.AudioContext || window.webkitAudioContext)();
         const oscillator = audioContext.createOscillator();
         const gainNode = audioContext.createGain();
-
+        
         oscillator.connect(gainNode);
         gainNode.connect(audioContext.destination);
-
+        
         oscillator.frequency.setValueAtTime(800, audioContext.currentTime); // 800 Hz tone
         gainNode.gain.setValueAtTime(0.1, audioContext.currentTime); // Low volume
         gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
-
+        
         oscillator.start(audioContext.currentTime);
         oscillator.stop(audioContext.currentTime + 0.5);
     } catch (e) {
         // Ignore audio errors - not critical
         console.log('Audio notification not available');
     }
-
+    
     // Create toast notification
     const toastHtml = `
         <div class="toast align-items-center text-white bg-success border-0" role="alert" style="position: fixed; top: 20px; right: 20px; z-index: 9999; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
@@ -1251,12 +1195,12 @@ function showNewReservationNotification(count) {
             </div>
         </div>
     `;
-
+    
     document.body.insertAdjacentHTML('beforeend', toastHtml);
     const toastElement = document.body.lastElementChild;
     const toast = new bootstrap.Toast(toastElement, { delay: 8000 }); // Longer delay - 8 seconds
     toast.show();
-
+    
     toastElement.addEventListener('hidden.bs.toast', () => {
         toastElement.remove();
     });
@@ -1274,48 +1218,6 @@ function refreshCalendarNow() {
 // Make it available globally for debugging
 window.refreshCalendarNow = refreshCalendarNow;
 
-// Global function to open payment modal from reservation details
-function openPaymentModal() {
-    if (!window.currentReservationData) {
-        alert('No reservation data available');
-        return;
-    }
-
-    const reservationData = window.currentReservationData;
-    const totalAmount = reservationData.totalBill || 0;
-
-    // Set the current reservation ID and total amount
-    window.currentReservationId = reservationData.id;
-    
-    // Set the total amount for payment.js
-    if (typeof window.setCurrentTotalAmount === 'function') {
-        window.setCurrentTotalAmount(totalAmount);
-    } else {
-        window.currentTotalAmount = totalAmount;
-    }
-
-    // Populate payment details
-    const paymentDetails = document.getElementById('paymentDetails');
-    if (paymentDetails) {
-        paymentDetails.innerHTML = `
-            <div class="alert alert-info">
-                <h6><i class="fas fa-info-circle me-2"></i>Payment Summary</h6>
-                <p class="mb-1"><strong>Customer:</strong> ${reservationData.name}</p>
-                <p class="mb-1"><strong>Reservation #:</strong> ${reservationData.reservation_number}</p>
-                <p class="mb-1"><strong>Date & Time:</strong> ${reservationData.date} at ${reservationData.time}</p>
-                <p class="mb-0"><strong>Total Amount:</strong> $${totalAmount.toFixed(2)}</p>
-            </div>
-        `;
-
-        // Show the payment modal
-        const paymentModal = new bootstrap.Modal(document.getElementById('paymentModal'));
-        paymentModal.show();
-    } else {
-        console.error('Payment details element not found');
-        alert('Payment modal not available');
-    }
-}
-
 // Initialize auto-refresh when calendar is ready
 document.addEventListener('DOMContentLoaded', function() {
     // Wait for calendar to initialize, then start auto-refresh
@@ -1323,19 +1225,19 @@ document.addEventListener('DOMContentLoaded', function() {
         if (typeof calendar !== 'undefined') {
             // 🚀 PRIORITY: Start real-time updates first (instant)
             initializeRealTimeUpdates();
-
+            
             // Keep auto-refresh as fallback (30-second polling)
             startAutoRefresh();
-
+            
             // Initialize reservation count
             checkForNewReservations();
-
+            
             // Do an immediate refresh after 3 seconds to catch any recent reservations
             setTimeout(() => {
                 console.log('🔄 Initial refresh for recent reservations');
                 refreshCalendarNow();
             }, 3000);
-
+            
             // Also do another check after 10 seconds to catch any reservations that might have been created
             setTimeout(() => {
                 console.log('🔄 Secondary refresh for recent reservations');
@@ -1343,13 +1245,13 @@ document.addEventListener('DOMContentLoaded', function() {
             }, 10000);
         }
     }, 2000);
-
+    
     // Stop auto-refresh and real-time updates when leaving the page
     window.addEventListener('beforeunload', function() {
         stopAutoRefresh();
         stopRealTimeUpdates();
     });
-
+    
     // Pause auto-refresh when page is not visible (tab switching)
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
@@ -1371,56 +1273,65 @@ document.addEventListener('DOMContentLoaded', function() {
 let calendarEventSource = null;
 
 function initializeRealTimeUpdates() {
+    // Only initialize if calendar exists and SSE is supported
+    if (typeof calendar === 'undefined' || !window.EventSource) {
+        console.log('⚠️ Calendar or SSE not available, skipping real-time updates');
+        return;
+    }
+    
     console.log('🚀 Initializing real-time calendar updates via SSE');
-
-    // Close existing connection if any
-    if (calendarEventSource && calendarEventSource.readyState !== EventSource.CLOSED) {
-        calendarEventSource.close();
-        calendarEventSource = null;
-    }
-
-    try {
-        // Create new SSE connection
-        calendarEventSource = new EventSource('/api/calendar/events-stream');
-
-        calendarEventSource.onopen = function(event) {
-            console.log('✅ SSE connection established for calendar updates');
-        };
-
-        calendarEventSource.onmessage = function(event) {
-            try {
-                const data = JSON.parse(event.data);
-                if (data.type === 'reservation_update') {
-                    console.log('📅 Received reservation update via SSE');
-                    if (calendar) {
-                        calendar.refetchEvents();
-                    }
-                }
-            } catch (error) {
-                console.error('Error parsing SSE message:', error);
+    
+    // Create SSE connection
+    calendarEventSource = new EventSource('/api/calendar/events-stream');
+    
+    calendarEventSource.onopen = function(event) {
+        console.log('✅ SSE connection established for calendar updates');
+    };
+    
+    calendarEventSource.onmessage = function(event) {
+        try {
+            const data = JSON.parse(event.data);
+            
+            if (data.type === 'ping') {
+                // Keepalive ping - ignore
+                return;
             }
-        };
-
-        calendarEventSource.onerror = function(event) {
-            console.error('❌ SSE connection error:', event);
-
-            // Clean up the connection
-            if (calendarEventSource) {
-                calendarEventSource.close();
-                calendarEventSource = null;
-            }
-
-            // Attempt to reconnect after a delay
-            setTimeout(() => {
-                if (!calendarEventSource || calendarEventSource.readyState === EventSource.CLOSED) {
-                    initializeRealTimeUpdates();
+            
+            if (data.type === 'calendar_refresh') {
+                console.log('📅 Real-time calendar update received:', data);
+                
+                // Trigger instant calendar refresh
+                calendar.refetchEvents();
+                
+                // Show notification for phone reservations
+                if (data.source === 'phone_swaig') {
+                    showRealTimeReservationNotification(data);
                 }
-            }, 10000); // Increased delay to 10 seconds
-        };
-    } catch (error) {
-        console.error('Failed to create SSE connection:', error);
-        calendarEventSource = null;
-    }
+                
+                // Update reservation count for auto-refresh system
+                if (typeof checkForNewReservations === 'function') {
+                    setTimeout(() => {
+                        checkForNewReservations();
+                    }, 1000); // Small delay to ensure data is available
+                }
+            }
+            
+        } catch (error) {
+            console.error('❌ Error processing SSE calendar event:', error);
+        }
+    };
+    
+    calendarEventSource.onerror = function(event) {
+        console.error('❌ SSE connection error:', event);
+        
+        // Attempt to reconnect after 5 seconds
+        setTimeout(() => {
+            if (calendarEventSource.readyState === EventSource.CLOSED) {
+                console.log('🔄 Attempting to reconnect SSE...');
+                initializeRealTimeUpdates();
+            }
+        }, 5000);
+    };
 }
 
 function showRealTimeReservationNotification(data) {
@@ -1438,7 +1349,7 @@ function showRealTimeReservationNotification(data) {
         default:
             message = `📞 Reservation ${data.event_type}: ${data.customer_name}`;
     }
-
+    
     // Create enhanced toast notification
     const toastHtml = `
         <div class="toast align-items-center text-white bg-success border-0" role="alert" style="position: fixed; top: 20px; right: 20px; z-index: 9999; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
@@ -1453,16 +1364,16 @@ function showRealTimeReservationNotification(data) {
             </div>
         </div>
     `;
-
+    
     document.body.insertAdjacentHTML('beforeend', toastHtml);
     const toastElement = document.body.lastElementChild;
     const toast = new bootstrap.Toast(toastElement, { delay: 10000 }); // 10 second delay
     toast.show();
-
+    
     toastElement.addEventListener('hidden.bs.toast', () => {
         toastElement.remove();
     });
-
+    
     // Play notification sound
     playNotificationSound();
 }
@@ -1474,21 +1385,21 @@ function playNotificationSound() {
         const oscillator1 = audioContext.createOscillator();
         const oscillator2 = audioContext.createOscillator();
         const gainNode = audioContext.createGain();
-
+        
         oscillator1.connect(gainNode);
         oscillator2.connect(gainNode);
         gainNode.connect(audioContext.destination);
-
+        
         // Create a pleasant two-tone chime
         oscillator1.frequency.setValueAtTime(800, audioContext.currentTime); // High tone
         oscillator2.frequency.setValueAtTime(600, audioContext.currentTime); // Low tone
-
+        
         gainNode.gain.setValueAtTime(0.1, audioContext.currentTime); // Low volume
         gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.8);
-
+        
         oscillator1.start(audioContext.currentTime);
         oscillator1.stop(audioContext.currentTime + 0.3);
-
+        
         oscillator2.start(audioContext.currentTime + 0.1);
         oscillator2.stop(audioContext.currentTime + 0.5);
     } catch (e) {
@@ -1498,13 +1409,9 @@ function playNotificationSound() {
 }
 
 function stopRealTimeUpdates() {
-    console.log('⏹️ Stopping real-time calendar updates');
-    if (calendarEventSource && calendarEventSource.readyState !== EventSource.CLOSED) {
-        try {
-            calendarEventSource.close();
-        } catch (error) {
-            console.error('Error closing SSE connection:', error);
-        }
+    if (calendarEventSource) {
+        console.log('⏹️ Stopping real-time calendar updates');
+        calendarEventSource.close();
         calendarEventSource = null;
     }
 }

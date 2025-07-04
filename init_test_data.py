@@ -4,10 +4,10 @@ from datetime import datetime, timedelta
 import random
 
 def generate_order_number():
-    """Generate a unique 6-digit order number"""
+    """Generate a unique 5-digit order number"""
     while True:
-        # Generate a 6-digit number (100000 to 999999)
-        number = str(random.randint(100000, 999999))
+        # Generate a 5-digit number (10000 to 99999)
+        number = str(random.randint(10000, 99999))
 
         # Check if this number already exists
         existing = Order.query.filter_by(order_number=number).first()
@@ -102,7 +102,8 @@ def init_test_data():
                 total_amount=24.99,  # Ribeye Steak
                 payment_status='unpaid',
                 target_date=str(today),
-                target_time='19:00'
+                target_time='19:00',
+                order_type='reservation'
             ),
             Order(
                 order_number=generate_order_number(), 
@@ -118,7 +119,8 @@ def init_test_data():
                 confirmation_number='ORD1001',
                 payment_method='credit-card',
                 target_date=str(today),
-                target_time='19:00'
+                target_time='19:00',
+                order_type='reservation'
             ),
             Order(
                 order_number=generate_order_number(), 
@@ -134,7 +136,8 @@ def init_test_data():
                 confirmation_number='ORD1002',
                 payment_method='credit-card',
                 target_date=str(today),
-                target_time='19:00'
+                target_time='19:00',
+                order_type='reservation'
             ),
             Order(
                 order_number=generate_order_number(), 
@@ -145,7 +148,8 @@ def init_test_data():
                 total_amount=6.99,  # Chocolate Cake
                 payment_status='unpaid',
                 target_date=str(today),
-                target_time='19:00'
+                target_time='19:00',
+                order_type='reservation'
             )
         ]
         db.session.add_all(johnson_orders)
@@ -200,7 +204,8 @@ def init_test_data():
                 confirmation_number='ORD2001',
                 payment_method='credit-card',
                 target_date=str(today + timedelta(days=1)),
-                target_time='18:30'
+                target_time='18:30',
+                order_type='reservation'
             ),
             Order(
                 order_number=generate_order_number(), 
@@ -216,7 +221,8 @@ def init_test_data():
                 confirmation_number='ORD2002',
                 payment_method='credit-card',
                 target_date=str(today + timedelta(days=1)),
-                target_time='18:30'
+                target_time='18:30',
+                order_type='reservation'
             )
         ]
         db.session.add_all(smith_orders)
@@ -264,7 +270,8 @@ def init_test_data():
                 total_amount=39.98,  # Sous Vide Ribeye + Iced Tea
                 payment_status='unpaid',
                 target_date=str(today + timedelta(days=2)),
-                target_time='20:00'
+                target_time='20:00',
+                order_type='reservation'
             ),
             Order(
                 order_number=generate_order_number(), 
@@ -280,7 +287,8 @@ def init_test_data():
                 confirmation_number='ORD3004',
                 payment_method='credit-card',
                 target_date=str(today + timedelta(days=2)),
-                target_time='20:00'
+                target_time='20:00',
+                order_type='reservation'
             ),
             Order(
                 order_number=generate_order_number(), 
@@ -291,7 +299,8 @@ def init_test_data():
                 total_amount=21.98,  # Grilled Salmon + Draft Beer
                 payment_status='unpaid',
                 target_date=str(today + timedelta(days=2)),
-                target_time='20:00'
+                target_time='20:00',
+                order_type='reservation'
             ),
             Order(
                 order_number=generate_order_number(), 
@@ -302,7 +311,8 @@ def init_test_data():
                 total_amount=15.98,  # Chicken Caesar Salad + House Wine
                 payment_status='unpaid',
                 target_date=str(today + timedelta(days=2)),
-                target_time='20:00'
+                target_time='20:00',
+                order_type='reservation'
             ),
             Order(
                 order_number=generate_order_number(), 
@@ -313,7 +323,8 @@ def init_test_data():
                 total_amount=18.98,  # BBQ Ribs + Pepsi
                 payment_status='unpaid',
                 target_date=str(today + timedelta(days=2)),
-                target_time='20:00'
+                target_time='20:00',
+                order_type='reservation'
             ),
             Order(
                 order_number=generate_order_number(), 
@@ -324,7 +335,8 @@ def init_test_data():
                 total_amount=11.98,  # Buffalo Wings + Mountain Dew
                 payment_status='unpaid',
                 target_date=str(today + timedelta(days=2)),
-                target_time='20:00'
+                target_time='20:00',
+                order_type='reservation'
             )
         ]
         db.session.add_all(wilson_orders)

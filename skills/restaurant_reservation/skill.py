@@ -243,10 +243,26 @@ class RestaurantReservationSkill(SkillBase):
         return None
 
     def _generate_order_number(self):
-        """Generate a unique order number"""
+        """Generate a unique 5-digit order number"""
         import random
-        import string
-        return ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+        import sys
+        import os
+        
+        # Add the parent directory to sys.path to import app
+        parent_dir = os.path.dirname(os.path.dirname(__file__))
+        if parent_dir not in sys.path:
+            sys.path.insert(0, parent_dir)
+        
+        from models import Order
+        
+        while True:
+            # Generate a 5-digit number (10000 to 99999)
+            number = str(random.randint(10000, 99999))
+            
+            # Check if this number already exists
+            existing = Order.query.filter_by(order_number=number).first()
+            if not existing:
+                return number
 
     def _detect_affirmative_response(self, call_log, context="payment"):
         """Detect if user gave an affirmative response in recent conversation"""
@@ -569,70 +585,6 @@ class RestaurantReservationSkill(SkillBase):
             handler=self._payment_retry_handler,
             **self.swaig_fields
         )
-
-    def _send_payment_confirmation_sms(self, reservation_data, payment_data, phone_number):
-        """Send SMS confirmation for payment - used by workflow tests"""
-        try:
-            from signalwire_agents.core.function_result import SwaigFunctionResult
-            from datetime import datetime
-            
-            # Format time to 12-hour format
-            try:
-                time_obj = datetime.strptime(str(reservation_data['time']), '%H:%M')
-                time_12hr = time_obj.strftime('%I:%M %p').lstrip('0')
-            except (ValueError, TypeError):
-                time_12hr = str(reservation_data['time'])
-            
-            # Build SMS message
-            sms_body = f"💳 Bobby's Table Payment Confirmation\n\n"
-            sms_body += f"Reservation #{reservation_data['reservation_number']}\n"
-            sms_body += f"Name: {reservation_data['name']}\n"
-            sms_body += f"Date: {reservation_data['date']}\n"
-            sms_body += f"Time: {time_12hr}\n"
-            sms_body += f"Party Size: {reservation_data['party_size']} people\n\n"
-            
-            sms_body += f"💰 Payment Processed Successfully!\n"
-            sms_body += f"Amount: ${payment_data['amount']:.2f}\n"
-            sms_body += f"Confirmation: {payment_data['confirmation_number']}\n"
-            sms_body += f"Payment Date: {payment_data['payment_date']}\n"
-            sms_body += f"Method: {payment_data.get('payment_method', 'Credit Card').title()}\n\n"
-            
-            if reservation_data.get('has_preorders'):
-                sms_body += f"✅ Your pre-order is confirmed and paid!\n"
-            
-            sms_body += f"Thank you for choosing Bobby's Table!\n"
-            sms_body += f"Reply STOP to stop."
-            
-            # Send SMS using SignalWire Agents SDK
-            try:
-                sms_function_result = SwaigFunctionResult().send_sms(
-                    to_number=phone_number,
-                    from_number=self.signalwire_from_number,
-                    body=sms_body
-                )
-                
-                return {
-                    'success': True,
-                    'sms_sent': True,
-                    'sms_result': 'Payment confirmation SMS sent successfully',
-                    'calendar_link': f"https://calendar.google.com/calendar/render?action=TEMPLATE&text=Dinner+at+Bobby%27s+Table&dates={reservation_data['date'].replace('-', '')}T{reservation_data['time'].replace(':', '')}00/{reservation_data['date'].replace('-', '')}T{int(reservation_data['time'][:2])+2:02d}{reservation_data['time'][2:]}00"
-                }
-                
-            except Exception as sms_error:
-                print(f"❌ Error sending payment confirmation SMS: {sms_error}")
-                return {
-                    'success': False,
-                    'sms_sent': False,
-                    'error': str(sms_error)
-                }
-                
-        except Exception as e:
-            print(f"❌ Error in _send_payment_confirmation_sms: {e}")
-            return {
-                'success': False,
-                'sms_sent': False,
-                'error': str(e)
-            }
 
 
 
@@ -1930,7 +1882,12 @@ class RestaurantReservationSkill(SkillBase):
                             table_id=None,
                             person_name=person_name,
                             status='pending',
-                            total_amount=0.0
+                            total_amount=0.0,
+                            target_date=args['date'],
+                            target_time=args['time'],
+                            order_type='reservation',
+                            payment_status='unpaid',
+                            customer_phone=args.get('phone_number')
                         )
                         db.session.add(order)
                         db.session.flush()  # Get order.id
@@ -2013,7 +1970,12 @@ class RestaurantReservationSkill(SkillBase):
                                 table_id=None,
                                 person_name=args.get('name', 'Customer'),
                                 status='pending',
-                                total_amount=0.0
+                                total_amount=0.0,
+                                target_date=args['date'],
+                                target_time=args['time'],
+                                order_type='reservation',
+                                payment_status='unpaid',
+                                customer_phone=args.get('phone_number')
                             )
                             db.session.add(order)
                             db.session.flush()  # Get order.id
@@ -3435,7 +3397,12 @@ class RestaurantReservationSkill(SkillBase):
                             reservation_id=reservation.id,
                             person_name=reservation.name,
                             status='pending',
-                            total_amount=0.0
+                            total_amount=0.0,
+                            target_date=str(reservation.date),
+                            target_time=str(reservation.time),
+                            order_type='reservation',
+                            payment_status='unpaid',
+                            customer_phone=reservation.phone_number
                         )
                         db.session.add(new_order)
                         db.session.flush()  # Get order ID
@@ -3799,7 +3766,7 @@ class RestaurantReservationSkill(SkillBase):
             return SwaigFunctionResult(f"Error updating reservation: {str(e)}")
     
     def _generate_order_number(self):
-        """Generate a unique 6-digit order number"""
+        """Generate a unique 5-digit order number"""
         import random
         import sys
         import os
@@ -3812,8 +3779,8 @@ class RestaurantReservationSkill(SkillBase):
         from models import Order
         
         while True:
-            # Generate a 6-digit number (100000 to 999999)
-            number = str(random.randint(100000, 999999))
+            # Generate a 5-digit number (10000 to 99999)
+            number = str(random.randint(10000, 99999))
             
             # Check if this number already exists
             existing = Order.query.filter_by(order_number=number).first()
@@ -4868,7 +4835,12 @@ class RestaurantReservationSkill(SkillBase):
                         reservation_id=reservation.id,
                         person_name=person_name,
                         status='pending',
-                        total_amount=0.0
+                        total_amount=0.0,
+                        target_date=str(reservation.date),
+                        target_time=str(reservation.time),
+                        order_type='reservation',
+                        payment_status='unpaid',
+                        customer_phone=reservation.phone_number
                     )
                     db.session.add(new_order)
                     db.session.flush()  # Get order ID
