@@ -1415,7 +1415,8 @@ def swaig_receptionist():
                     'purpose': ('Create a new restaurant reservation with optional food pre-ordering. '
                                'ALWAYS ask customers if they want to pre-order from the menu when making reservations. '
                                'For parties larger than one, ask for each person\'s name and food preferences. '
-                               'Extract any food items mentioned during the reservation request and include them in party_orders.'),
+                               'If customers mention specific food items during the call, extract them and include in party_orders. '
+                               'IMPORTANT: Always confirm the complete order details before creating the reservation.'),
                     'argument': {
                         'type': 'object',
                         'properties': {
@@ -1425,37 +1426,37 @@ def swaig_receptionist():
                             'time': {'type': 'string', 'description': 'Reservation time in 24-hour HH:MM format (extract from conversation - convert PM/AM to 24-hour)'},
                             'phone_number': {'type': 'string', 'description': 'Customer phone number with country code (extract from conversation or use caller ID)'},
                             'special_requests': {'type': 'string', 'description': 'Optional special requests or dietary restrictions (extract from conversation)'},
-                            'old_school': {'type': 'boolean', 'description': 'True for old school reservation (no pre-ordering)'},
+                            'old_school': {'type': 'boolean', 'description': 'True for old school reservation (no pre-ordering), false if customer wants to pre-order'},
                             'party_orders': {
                                 'type': 'array',
-                                'description': 'Optional pre-orders for each person in the dining party. Use when customers want to order food in advance for their reservation.',
+                                'description': 'Required when customers want to pre-order food. Create one entry per person with their menu items. Always ask "What would [person name] like to eat?" for each person.',
                                 'items': {
                                     'type': 'object',
                                     'properties': {
-                                        'person_name': {'type': 'string', 'description': 'Name of person ordering (optional, can be "Person 1", "Person 2", etc.)'},
+                                        'person_name': {'type': 'string', 'description': 'Name of person ordering (ask for each person: "Person 1", "Person 2", or actual names like "Jim", "Tom")'},
                                         'items': {
                                             'type': 'array',
-                                            'description': 'Menu items ordered by this person',
+                                            'description': 'Menu items ordered by this person. IMPORTANT: Always confirm each item before adding.',
                                             'items': {
                                                 'type': 'object',
                                                 'properties': {
-                                                    'menu_item_id': {'type': 'integer', 'description': 'ID of the menu item'},
-                                                    'quantity': {'type': 'integer', 'description': 'Quantity ordered'}
+                                                    'menu_item_id': {'type': 'integer', 'description': 'ID of the menu item (get from menu lookup)'},
+                                                    'quantity': {'type': 'integer', 'description': 'Quantity ordered (default 1)'}
                                                 },
                                                 'required': ['menu_item_id', 'quantity']
                                             }
                                         }
                                     },
-                                    'required': ['items']
+                                    'required': ['person_name', 'items']
                                 }
                             },
                             'pre_order': {
                                 'type': 'array',
-                                'description': 'Alternative format for pre-orders - simpler format using menu item names instead of IDs',
+                                'description': 'Alternative format for pre-orders using menu item names. Use when menu_item_id is not readily available.',
                                 'items': {
                                     'type': 'object',
                                     'properties': {
-                                        'name': {'type': 'string', 'description': 'Menu item name (e.g., "Kraft Lemonade", "Buffalo Wings")'},
+                                        'name': {'type': 'string', 'description': 'Exact menu item name (e.g., "Kraft Lemonade", "Buffalo Wings")'},
                                         'quantity': {'type': 'integer', 'description': 'Quantity ordered'}
                                     },
                                     'required': ['name', 'quantity']
@@ -1517,43 +1518,45 @@ def swaig_receptionist():
                 },
                 'create_order': {
                     'function': 'create_order',
-                    'purpose': 'Create a new food order with optional payment processing. Can be standalone order or linked to a reservation.',
+                    'purpose': 'Create a pickup or delivery order (NOT linked to a dining reservation). Use this for customers who want food to go, not for adding items to existing reservations.',
                     'argument': {
                         'type': 'object',
                         'properties': {
-                            'reservation_id': {'type': 'integer', 'description': 'Associated reservation ID (optional for standalone orders)'},
                             'items': {
                                 'type': 'array', 
-                                'description': 'List of menu items to order with quantities',
+                                'description': 'List of menu items to order. IMPORTANT: Always confirm each item with the customer before adding.',
                                 'items': {
                                     'type': 'object',
                                     'properties': {
-                                        'name': {'type': 'string', 'description': 'Menu item name'},
-                                        'quantity': {'type': 'integer', 'description': 'Quantity to order'}
+                                        'name': {'type': 'string', 'description': 'Exact menu item name as it appears on the menu'},
+                                        'quantity': {'type': 'integer', 'description': 'Quantity to order (default 1)'}
                                     },
                                     'required': ['name', 'quantity']
                                 }
                             },
-                            'customer_name': {'type': 'string', 'description': 'Customer name for standalone orders'},
-                            'customer_phone': {'type': 'string', 'description': 'Customer phone number for standalone orders'},
-                            'order_type': {'type': 'string', 'description': 'Order type: pickup or delivery', 'enum': ['pickup', 'delivery']},
-                            'special_instructions': {'type': 'string', 'description': 'Special cooking instructions'},
-                            'payment_preference': {'type': 'string', 'description': 'Payment preference: "now" to pay immediately with credit card, "pickup" to pay at pickup (default)', 'enum': ['now', 'pickup']}
+                            'customer_name': {'type': 'string', 'description': 'Customer full name for the order'},
+                            'customer_phone': {'type': 'string', 'description': 'Customer phone number (use caller ID if not provided)'},
+                            'order_type': {'type': 'string', 'description': 'Type of order: "pickup" (customer picks up) or "delivery" (we deliver)', 'enum': ['pickup', 'delivery']},
+                            'pickup_time': {'type': 'string', 'description': 'Requested pickup time in HH:MM format (for pickup orders)'},
+                            'delivery_address': {'type': 'string', 'description': 'Full delivery address (required for delivery orders)'},
+                            'special_instructions': {'type': 'string', 'description': 'Special cooking instructions or delivery notes'},
+                            'payment_preference': {'type': 'string', 'description': 'Payment preference: "now" to pay immediately with credit card, "pickup" to pay at pickup/delivery (default)', 'enum': ['now', 'pickup']}
                         },
-                        'required': ['items']
+                        'required': ['items', 'customer_name', 'order_type']
                     }
                 },
                 'get_order_status': {
                     'function': 'get_order_status',
-                    'purpose': 'Get the status of an order - can search by order number first, then fallback to other methods',
+                    'purpose': 'Check the kitchen status of a pickup or delivery order. Use this when customers call to ask "Is my order ready?" or "How much longer?"',
                     'argument': {
                         'type': 'object',
                         'properties': {
-                            'order_number': {'type': 'string', 'description': '5-digit order number (preferred method)'},
-                            'order_id': {'type': 'integer', 'description': 'Order ID (alternative method)'},
-                            'reservation_id': {'type': 'integer', 'description': 'Reservation ID (alternative method)'},
-                            'customer_phone': {'type': 'string', 'description': 'Customer phone number for verification'}
-                        }
+                            'order_number': {'type': 'string', 'description': '5-digit order number (preferred method - ask customer for this)'},
+                            'customer_name': {'type': 'string', 'description': 'Customer name (alternative search method)'},
+                            'customer_phone': {'type': 'string', 'description': 'Customer phone number for verification (use caller ID if not provided)'},
+                            'order_type': {'type': 'string', 'description': 'Order type to help narrow search', 'enum': ['pickup', 'delivery', 'reservation']}
+                        },
+                        'required': []
                     }
                 },
                 'update_order_status': {
@@ -2067,7 +2070,8 @@ def swaig_receptionist_info():
                                     "purpose": ('Create a new restaurant reservation with optional food pre-ordering. '
                                                'ALWAYS ask customers if they want to pre-order from the menu when making reservations. '
                                                'For parties larger than one, ask for each person\'s name and food preferences. '
-                                               'Extract any food items mentioned during the reservation request and include them in party_orders.'),
+                                               'If customers mention specific food items during the call, extract them and include in party_orders. '
+                                               'IMPORTANT: Always confirm the complete order details before creating the reservation.'),
                                     "argument": {
                                         "type": "object",
                                         "properties": {
@@ -2077,28 +2081,40 @@ def swaig_receptionist_info():
                                             "time": {"type": "string", "description": "Reservation time in 24-hour HH:MM format (extract from conversation - convert PM/AM to 24-hour)"},
                                             "phone_number": {"type": "string", "description": "Customer phone number with country code (extract from conversation or use caller ID)"},
                                             "special_requests": {"type": "string", "description": "Optional special requests or dietary restrictions (extract from conversation)"},
-                                            "old_school": {"type": "boolean", "description": "True for old school reservation (no pre-ordering)"},
+                                            "old_school": {"type": "boolean", "description": "True for old school reservation (no pre-ordering), false if customer wants to pre-order"},
                                             "party_orders": {
                                                 "type": "array",
-                                                "description": "Optional pre-orders for each person in the dining party. Use when customers want to order food in advance for their reservation.",
+                                                "description": "Required when customers want to pre-order food. Create one entry per person with their menu items. Always ask \"What would [person name] like to eat?\" for each person.",
                                                 "items": {
                                                     "type": "object",
                                                     "properties": {
-                                                        "person_name": {"type": "string", "description": "Name of person ordering (optional, can be 'Person 1', 'Person 2', etc.)"},
+                                                        "person_name": {"type": "string", "description": "Name of person ordering (ask for each person: \"Person 1\", \"Person 2\", or actual names like \"Jim\", \"Tom\")"},
                                                         "items": {
                                                             "type": "array",
-                                                            "description": "Menu items ordered by this person",
+                                                            "description": "Menu items ordered by this person. IMPORTANT: Always confirm each item before adding.",
                                                             "items": {
                                                                 "type": "object",
                                                                 "properties": {
-                                                                    "menu_item_id": {"type": "integer", "description": "ID of the menu item"},
-                                                                    "quantity": {"type": "integer", "description": "Quantity ordered"}
+                                                                    "menu_item_id": {"type": "integer", "description": "ID of the menu item (get from menu lookup)"},
+                                                                    "quantity": {"type": "integer", "description": "Quantity ordered (default 1)"}
                                                                 },
                                                                 "required": ["menu_item_id", "quantity"]
                                                             }
                                                         }
                                                     },
-                                                    "required": ["items"]
+                                                    "required": ["person_name", "items"]
+                                                }
+                                            },
+                                            "pre_order": {
+                                                "type": "array",
+                                                "description": "Alternative format for pre-orders using menu item names. Use when menu_item_id is not readily available.",
+                                                "items": {
+                                                    "type": "object",
+                                                    "properties": {
+                                                        "name": {"type": "string", "description": "Exact menu item name (e.g., \"Kraft Lemonade\", \"Buffalo Wings\")"},
+                                                        "quantity": {"type": "integer", "description": "Quantity ordered"}
+                                                    },
+                                                    "required": ["name", "quantity"]
                                                 }
                                             }
                                         },

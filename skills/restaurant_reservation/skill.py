@@ -2039,7 +2039,14 @@ class RestaurantReservationSkill(SkillBase):
                         # Don't fail the reservation if SMS fails (match Flask behavior)
                         sms_result = {'success': False, 'error': str(e)}
                 
-                db.session.commit()
+                # CRITICAL: Enhanced database commit with error handling
+                try:
+                    db.session.commit()
+                    print(f"✅ Database transaction committed successfully for reservation {reservation.id}")
+                except Exception as commit_error:
+                    print(f"❌ CRITICAL: Database commit failed for reservation {reservation.id}: {commit_error}")
+                    db.session.rollback()
+                    return SwaigFunctionResult(f"Sorry, there was a database error creating your reservation. Please try again or call us directly at the restaurant.")
                 
                 # Convert time to 12-hour format for response
                 try:
