@@ -14,7 +14,7 @@ The **`skill.py`** file brings the **Restaurant Reservation Skill** to life for 
   - Payment flows 💳  
   - SMS notifications 📲  
 - **Use Case**: Voice & text interactions for seamless restaurant bookings:
-  > “I need a table for 4 this Saturday at 7pm? My name is Jim Smith and have a party of 2. The other person is Chuck Norris. We would both like a surprise drink and food item from the menu.”  
+  > “I need a table for party of 2 this Saturday at 7pm? My name is Jim Smith. The other person is Chuck Norris. We would both like a surprise drink and food item from the menu.”  
 - **Dependencies**:
   - **Flask** (app context) 🐍  
   - **SignalWire Agents SDK** 🤖  
