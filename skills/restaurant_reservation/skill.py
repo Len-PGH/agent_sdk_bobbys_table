@@ -90,7 +90,7 @@ class RestaurantReservationSkill(SkillBase):
         return previous_row[-1]
 
     def _cache_menu_in_metadata(self, raw_data):
-        """Cache menu items in meta_data for performance"""
+        """Enhanced menu caching with robust fallback mechanisms"""
         try:
             import sys
             import os
@@ -106,44 +106,188 @@ class RestaurantReservationSkill(SkillBase):
                 # Get current meta_data
                 meta_data = raw_data.get('meta_data', {}) if raw_data else {}
                 
-                # Check if menu is already cached and still fresh (cache for 5 minutes)
-                from datetime import datetime, timedelta
-                cache_time = meta_data.get('menu_cached_at')
-                if cache_time:
-                    try:
-                        cached_at = datetime.fromisoformat(cache_time)
-                        if datetime.now() - cached_at < timedelta(minutes=5):
-                            print("🚀 Menu cache is still fresh, skipping database query")
-                            return meta_data
-                    except ValueError:
-                        pass  # Invalid date format, refresh cache
+                # Enhanced cache validation
+                cache_validation_result = self._validate_cache_freshness(meta_data)
+                if cache_validation_result['is_valid']:
+                    print(f"🚀 Menu cache is fresh ({cache_validation_result['age_minutes']:.1f} min old), using cached data")
+                    return meta_data
                 
-                print("📊 Caching menu items in meta_data")
-                menu_items = MenuItem.query.filter_by(is_available=True).all()
+                print(f"📊 Refreshing menu cache (reason: {cache_validation_result['reason']})")
                 
-                # Convert to serializable format
-                cached_menu = []
-                for item in menu_items:
-                    cached_menu.append({
-                        'id': item.id,
-                        'name': item.name,
-                        'price': float(item.price),
-                        'category': item.category,
-                        'description': item.description,
-                        'is_available': item.is_available
+                # Enhanced menu loading with retry logic
+                cached_menu = self._load_menu_with_retry()
+                
+                if not cached_menu:
+                    print("❌ Failed to load menu from database, attempting fallback")
+                    cached_menu = self._get_fallback_menu_data(meta_data)
+                
+                if cached_menu:
+                    # Update meta_data with enhanced metadata
+                    meta_data.update({
+                        'cached_menu': cached_menu,
+                        'menu_cached_at': datetime.now().isoformat(),
+                        'menu_item_count': len(cached_menu),
+                        'cache_version': '2.0',
+                        'cache_source': 'database' if cached_menu else 'fallback',
+                        'last_cache_refresh': datetime.now().isoformat()
                     })
-                
-                # Update meta_data
-                meta_data['cached_menu'] = cached_menu
-                meta_data['menu_cached_at'] = datetime.now().isoformat()
-                meta_data['menu_item_count'] = len(cached_menu)
-                
-                print(f"✅ Cached {len(cached_menu)} menu items in meta_data")
-                return meta_data
+                    
+                    print(f"✅ Cached {len(cached_menu)} menu items in meta_data")
+                    return meta_data
+                else:
+                    print("❌ All menu caching attempts failed")
+                    return meta_data
                 
         except Exception as e:
-            print(f"❌ Error caching menu: {e}")
+            print(f"❌ Critical error in menu caching: {e}")
+            import traceback
+            print(f"   Traceback: {traceback.format_exc()}")
+            
+            # Return existing meta_data or empty dict as ultimate fallback
             return raw_data.get('meta_data', {}) if raw_data else {}
+
+    def _validate_cache_freshness(self, meta_data):
+        """Validate cache freshness with detailed analysis"""
+        if not meta_data or not meta_data.get('cached_menu'):
+            return {'is_valid': False, 'reason': 'no_cache_data'}
+        
+        # Check cache timestamp
+        cache_time = meta_data.get('menu_cached_at')
+        if not cache_time:
+            return {'is_valid': False, 'reason': 'no_timestamp'}
+        
+        try:
+            from datetime import datetime, timedelta
+            cached_at = datetime.fromisoformat(cache_time)
+            age = datetime.now() - cached_at
+            age_minutes = age.total_seconds() / 60
+            
+            # Cache is valid for 10 minutes (increased from 5 for better performance)
+            if age < timedelta(minutes=10):
+                return {'is_valid': True, 'age_minutes': age_minutes}
+            else:
+                return {'is_valid': False, 'reason': f'expired_{age_minutes:.1f}min_old'}
+        except ValueError:
+            return {'is_valid': False, 'reason': 'invalid_timestamp_format'}
+        
+        # Check if cache has reasonable number of items
+        cached_menu = meta_data.get('cached_menu', [])
+        if len(cached_menu) < 5:  # Minimum expected menu items
+            return {'is_valid': False, 'reason': f'insufficient_items_{len(cached_menu)}'}
+        
+        return {'is_valid': True, 'age_minutes': age_minutes}
+
+    def _load_menu_with_retry(self, max_attempts=3):
+        """Load menu from database with retry logic"""
+        from models import MenuItem
+        
+        for attempt in range(max_attempts):
+            try:
+                print(f"📊 Loading menu from database (attempt {attempt + 1}/{max_attempts})")
+                
+                # Enhanced query with explicit ordering for consistency
+                menu_items = MenuItem.query.filter_by(is_available=True).order_by(MenuItem.id).all()
+                
+                if not menu_items:
+                    print("⚠️ No available menu items found in database")
+                    if attempt < max_attempts - 1:
+                        continue
+                    return []
+                
+                # Convert to enhanced serializable format
+                cached_menu = []
+                for item in menu_items:
+                    try:
+                        cached_menu.append({
+                            'id': item.id,
+                            'name': item.name,
+                            'price': float(item.price),
+                            'category': item.category or 'Uncategorized',
+                            'description': item.description or '',
+                            'is_available': bool(item.is_available),
+                            'cached_at': datetime.now().isoformat()
+                        })
+                    except Exception as item_error:
+                        print(f"⚠️ Error processing menu item {item.id}: {item_error}")
+                        continue
+                
+                if cached_menu:
+                    print(f"✅ Successfully loaded {len(cached_menu)} menu items")
+                    return cached_menu
+                else:
+                    print("❌ No valid menu items after processing")
+                    
+            except Exception as e:
+                print(f"❌ Database error on attempt {attempt + 1}: {e}")
+                if attempt < max_attempts - 1:
+                    import time
+                    time.sleep(0.1)  # Brief delay between retries
+                    continue
+                else:
+                    print("❌ All database retry attempts failed")
+                    break
+        
+        return []
+
+    def _get_fallback_menu_data(self, meta_data):
+        """Get fallback menu data when database fails"""
+        # Try to use existing cached data even if expired
+        existing_cache = meta_data.get('cached_menu')
+        if existing_cache and len(existing_cache) > 0:
+            print(f"🔄 Using expired cache as fallback ({len(existing_cache)} items)")
+            
+            # Update timestamps to mark as fallback
+            for item in existing_cache:
+                item['fallback_used'] = True
+                item['fallback_at'] = datetime.now().isoformat()
+            
+            return existing_cache
+        
+        # Ultimate fallback: minimal menu data
+        print("🆘 Using hardcoded fallback menu")
+        return self._get_hardcoded_fallback_menu()
+
+    def _get_hardcoded_fallback_menu(self):
+        """Hardcoded fallback menu for extreme cases"""
+        return [
+            {
+                'id': 1,
+                'name': 'House Special',
+                'price': 25.00,
+                'category': 'Main Course',
+                'description': 'Restaurant special dish',
+                'is_available': True,
+                'fallback': True,
+                'fallback_at': datetime.now().isoformat()
+            },
+            {
+                'id': 2,
+                'name': 'House Salad',
+                'price': 12.00,
+                'category': 'Appetizer',
+                'description': 'Fresh mixed greens',
+                'is_available': True,
+                'fallback': True,
+                'fallback_at': datetime.now().isoformat()
+            },
+            {
+                'id': 3,
+                'name': 'House Wine',
+                'price': 8.00,
+                'category': 'Beverage',
+                'description': 'House wine selection',
+                'is_available': True,
+                'fallback': True,
+                'fallback_at': datetime.now().isoformat()
+            }
+        ]
+
+    def _refresh_menu_cache_if_needed(self, meta_data):
+        """Refresh menu cache if it's getting stale"""
+        if not self._validate_cache_freshness(meta_data)['is_valid']:
+            print("🔄 Menu cache needs refresh, updating...")
+            return self._cache_menu_in_metadata({'meta_data': meta_data})
+        return meta_data
 
     def _normalize_phone_number(self, phone_number, caller_id=None):
         """
@@ -1099,7 +1243,7 @@ class RestaurantReservationSkill(SkillBase):
             )
 
     def _show_order_summary_and_confirm(self, args, raw_data):
-        """Show order summary and ask for confirmation before creating reservation"""
+        """Enhanced order summary with comprehensive validation and confirmation"""
         try:
             # Import Flask app and models locally to avoid circular import
             import sys
@@ -1114,12 +1258,20 @@ class RestaurantReservationSkill(SkillBase):
             from models import MenuItem
             
             with app.app_context():
-                # Cache menu in meta_data for performance
+                # Enhanced menu cache validation
                 meta_data = self._cache_menu_in_metadata(raw_data)
+                if not self._validate_menu_cache(meta_data):
+                    print("⚠️ Menu cache validation failed during order summary")
+                    meta_data = self._cache_menu_in_metadata(raw_data)
                 
                 party_orders = args.get('party_orders', [])
                 if not party_orders:
-                    return SwaigFunctionResult("No order details found to summarize.")
+                    return SwaigFunctionResult("No order details found to summarize. Please tell me what you'd like to order.")
+                
+                # Enhanced party orders validation
+                validated_party_orders = self._validate_and_fix_party_orders(party_orders, meta_data)
+                if not validated_party_orders:
+                    return SwaigFunctionResult("The order items couldn't be validated. Please tell me what you'd like to order again.")
                 
                 # Use cached menu for fast lookups
                 cached_menu = meta_data.get('cached_menu', [])
@@ -1127,66 +1279,185 @@ class RestaurantReservationSkill(SkillBase):
                 
                 if not menu_lookup:
                     # Fallback to database if no cached menu
+                    print("📊 Fallback to database for order summary")
                     menu_items = MenuItem.query.filter_by(is_available=True).all()
                     menu_lookup = {item.id: {'id': item.id, 'name': item.name, 'price': float(item.price)} for item in menu_items}
                 
-                # Build order summary
-                summary_lines = []
-                summary_lines.append("📋 **Order Summary:**")
-                summary_lines.append("")
+                # Enhanced order summary generation
+                summary_result = self._generate_enhanced_order_summary(
+                    validated_party_orders, menu_lookup, args
+                )
                 
-                total_amount = 0.0
+                if summary_result['has_errors']:
+                    return SwaigFunctionResult(
+                        f"There were issues with your order:\n\n{summary_result['error_message']}\n\n"
+                        "Please tell me what you'd like to order again."
+                    )
                 
-                for person_order in party_orders:
-                    person_name = person_order.get('person_name', 'Customer')
-                    person_items = person_order.get('items', [])
-                    
-                    if person_items:
-                        summary_lines.append(f"👤 **{person_name}:**")
-                        person_total = 0.0
-                        
-                        for item_data in person_items:
-                            menu_item_id = int(item_data['menu_item_id'])
-                            quantity = int(item_data.get('quantity', 1))
-                            
-                            # Get menu item info
-                            if menu_item_id in menu_lookup:
-                                menu_info = menu_lookup[menu_item_id]
-                                item_name = menu_info['name']
-                                item_price = float(menu_info['price'])
-                                
-                                item_total = item_price * quantity
-                                person_total += item_total
-                                
-                                if quantity > 1:
-                                    summary_lines.append(f"   • {item_name} x{quantity} - ${item_total:.2f}")
-                                else:
-                                    summary_lines.append(f"   • {item_name} - ${item_price:.2f}")
-                        
-                        summary_lines.append(f"   💰 **{person_name} Total: ${person_total:.2f}**")
-                        summary_lines.append("")
-                        total_amount += person_total
-                
-                summary_lines.append(f"🎯 **Grand Total: ${total_amount:.2f}**")
-                summary_lines.append("")
-                summary_lines.append("Is this order correct? Please respond with:")
-                summary_lines.append("✅ **'Yes, that's correct'** to confirm")
-                summary_lines.append("🔄 **'Change [item]'** to modify")
-                summary_lines.append("❌ **'Cancel'** to start over")
-                
-                # Store pending reservation data in meta_data
+                # Store comprehensive pending reservation data
                 updated_meta_data = meta_data.copy()
-                updated_meta_data['pending_reservation'] = args
-                updated_meta_data['workflow_step'] = 'awaiting_order_confirmation'
-                updated_meta_data['order_summary_shown'] = True
+                updated_meta_data.update({
+                    'pending_reservation': args,
+                    'validated_party_orders': validated_party_orders,
+                    'workflow_step': 'awaiting_order_confirmation',
+                    'order_summary_shown': True,
+                    'order_total': summary_result['total_amount'],
+                    'order_validation_passed': True,
+                    'confirmation_attempts': 0
+                })
                 
-                result = SwaigFunctionResult("\n".join(summary_lines))
+                result = SwaigFunctionResult(summary_result['summary_text'])
                 result.set_metadata(updated_meta_data)
                 return result
                 
         except Exception as e:
             print(f"❌ Error in _show_order_summary_and_confirm: {e}")
-            return SwaigFunctionResult(f"Error showing order summary: {str(e)}")
+            import traceback
+            print(f"   Traceback: {traceback.format_exc()}")
+            return SwaigFunctionResult(f"I encountered an error while preparing your order summary. Please tell me your order again.")
+
+    def _generate_enhanced_order_summary(self, party_orders, menu_lookup, args):
+        """Generate comprehensive order summary with validation"""
+        summary_lines = []
+        total_amount = 0.0
+        validation_errors = []
+        missing_items = []
+        
+        # Reservation header
+        summary_lines.extend([
+            "🍽️ **RESERVATION & ORDER SUMMARY** 🍽️",
+            "",
+            "📅 **Reservation Details:**",
+            f"• Name: {args.get('name', 'N/A')}",
+            f"• Date: {args.get('date', 'N/A')}",
+            f"• Time: {args.get('time', 'N/A')}",
+            f"• Party Size: {args.get('party_size', 'N/A')} people",
+            f"• Phone: {args.get('phone_number', 'N/A')}",
+            ""
+        ])
+        
+        if args.get('special_requests'):
+            summary_lines.extend([
+                f"📝 **Special Requests:** {args['special_requests']}",
+                ""
+            ])
+        
+        # Order details with enhanced validation
+        summary_lines.extend([
+            "🍽️ **Pre-Order Details:**",
+            ""
+        ])
+        
+        for person_order in party_orders:
+            person_name = person_order.get('person_name', 'Customer')
+            person_items = person_order.get('items', [])
+            
+            if person_items:
+                summary_lines.append(f"👤 **{person_name}:**")
+                person_total = 0.0
+                person_item_count = 0
+                
+                for item_data in person_items:
+                    try:
+                        menu_item_id = int(item_data['menu_item_id'])
+                        quantity = int(item_data.get('quantity', 1))
+                        
+                        # Enhanced menu item validation
+                        if menu_item_id not in menu_lookup:
+                            missing_items.append(f"Item ID {menu_item_id} for {person_name}")
+                            continue
+                        
+                        menu_info = menu_lookup[menu_item_id]
+                        item_name = menu_info['name']
+                        item_price = float(menu_info['price'])
+                        
+                        # Validate quantity
+                        if quantity <= 0:
+                            validation_errors.append(f"Invalid quantity ({quantity}) for {item_name}")
+                            quantity = 1
+                        
+                        item_total = item_price * quantity
+                        person_total += item_total
+                        person_item_count += quantity
+                        
+                        # Format item line
+                        if quantity > 1:
+                            summary_lines.append(f"   • {item_name} x{quantity} - ${item_total:.2f} (${item_price:.2f} each)")
+                        else:
+                            summary_lines.append(f"   • {item_name} - ${item_price:.2f}")
+                        
+                    except (ValueError, KeyError, TypeError) as e:
+                        validation_errors.append(f"Error processing item for {person_name}: {str(e)}")
+                        continue
+                
+                # Person summary
+                if person_item_count > 0:
+                    item_text = "item" if person_item_count == 1 else "items"
+                    summary_lines.extend([
+                        f"   📊 {person_item_count} {item_text}, Total: ${person_total:.2f}",
+                        ""
+                    ])
+                    total_amount += person_total
+                else:
+                    summary_lines.extend([
+                        f"   ⚠️ No valid items found for {person_name}",
+                        ""
+                    ])
+        
+        # Order totals and summary
+        summary_lines.extend([
+            "💰 **ORDER TOTAL:**",
+            f"🎯 **Grand Total: ${total_amount:.2f}**",
+            ""
+        ])
+        
+        # Add important notes
+        if total_amount > 0:
+            summary_lines.extend([
+                "ℹ️ **Important Notes:**",
+                "• Your food will be prepared and ready when you arrive",
+                "• You can pay now or when you arrive at the restaurant",
+                "• Please arrive on time for your reservation",
+                ""
+            ])
+        
+        # Enhanced confirmation request
+        summary_lines.extend([
+            "❓ **PLEASE CONFIRM YOUR ORDER:**",
+            "",
+            "Is everything correct above? Please respond with:",
+            "✅ **'Yes, that's correct'** - to confirm and create your reservation",
+            "🔄 **'Change [specific item]'** - to modify something specific",
+            "➕ **'Add [item]'** - to add more items",
+            "❌ **'Cancel'** - to start over",
+            "",
+            "What would you like to do?"
+        ])
+        
+        # Prepare error message if needed
+        error_message = ""
+        has_errors = False
+        
+        if validation_errors or missing_items:
+            has_errors = True
+            error_parts = []
+            
+            if missing_items:
+                error_parts.append(f"Missing menu items: {', '.join(missing_items)}")
+            
+            if validation_errors:
+                error_parts.append(f"Validation errors: {', '.join(validation_errors)}")
+            
+            error_message = "\n".join(error_parts)
+        
+        return {
+            'summary_text': "\n".join(summary_lines),
+            'total_amount': total_amount,
+            'has_errors': has_errors,
+            'error_message': error_message,
+            'validation_errors': validation_errors,
+            'missing_items': missing_items
+        }
 
     def _create_reservation_handler(self, args, raw_data):
         """Handler for create_reservation tool"""
@@ -1346,9 +1617,10 @@ class RestaurantReservationSkill(SkillBase):
                         customer_name = args.get('name', 'Customer')
                         party_size = args.get('party_size', 2)
                         
-                        # Re-parse individual orders using conversation
-                        corrected_party_orders = self._parse_individual_orders(
-                            conversation_text, customer_name, party_size, re_extracted_items
+                        # FIXED: Use enhanced parsing for better name extraction and assignment
+                        additional_names = self._extract_person_names_from_conversation(conversation_text, customer_name)
+                        corrected_party_orders = self._parse_individual_orders_enhanced(
+                            conversation_text, customer_name, additional_names, party_size, re_extracted_items
                         )
                         
                         print(f"🔄 WORKFLOW: Re-assigned items to people:")
@@ -1459,9 +1731,10 @@ class RestaurantReservationSkill(SkillBase):
                         customer_name = args.get('name', 'Customer')
                         party_size = args.get('party_size', 2)
                         
-                        # Parse individual orders using the existing sophisticated method
-                        corrected_party_orders = self._parse_individual_orders(
-                            conversation_text, customer_name, party_size, correct_items
+                        # FIXED: Use enhanced parsing for better name extraction and assignment
+                        additional_names = self._extract_person_names_from_conversation(conversation_text, customer_name)
+                        corrected_party_orders = self._parse_individual_orders_enhanced(
+                            conversation_text, customer_name, additional_names, party_size, correct_items
                         )
                         
                         print(f"🔄 [Summary] Intelligently assigned items to people:")
@@ -1804,32 +2077,68 @@ class RestaurantReservationSkill(SkillBase):
                 # Convert pre_order format to party_orders format if needed
                 if pre_order and not party_orders:
                     print(f"🔄 Converting pre_order format to party_orders format")
+                    print(f"   ⚠️ WARNING: Using fallback pre_order format instead of preferred party_orders")
+                    print(f"   📋 Raw pre_order data: {pre_order}")
+                    
                     from models import MenuItem
                     
-                    # Convert pre_order items to party_orders format using exact matching only
+                    # Convert pre_order items to party_orders format using enhanced matching
                     converted_items = []
                     for item in pre_order:
                         item_name = item.get('name', '')
                         quantity = item.get('quantity', 1)
                         
-                        # Find menu item by exact name match only
+                        # Enhanced matching: try exact match first, then fuzzy match
                         menu_item = self._find_menu_item_exact(item_name)
                         
+                        if not menu_item:
+                            print(f"   🔍 Exact match failed for '{item_name}', trying fuzzy match...")
+                            menu_item = self._find_menu_item_fuzzy(item_name, meta_data)
+                        
                         if menu_item:
+                            # Include price for transparency and validation
+                            if hasattr(menu_item, 'price'):
+                                price = float(menu_item.price)
+                            else:
+                                price = menu_item.get('price', 0.0) if isinstance(menu_item, dict) else 0.0
+                            
                             converted_items.append({
-                                'menu_item_id': menu_item.id,
-                                'quantity': quantity
+                                'menu_item_id': menu_item.id if hasattr(menu_item, 'id') else menu_item.get('id'),
+                                'quantity': quantity,
+                                'name': item_name,  # Keep original name for debugging
+                                'price': price      # Include price for validation
                             })
-                            print(f"   ✅ Added exact match: '{item_name}' (menu item ID {menu_item.id})")
+                            print(f"   ✅ Converted: '{item_name}' → ID {menu_item.id if hasattr(menu_item, 'id') else menu_item.get('id')} @ ${price:.2f}")
                         else:
-                            print(f"   ❌ Exact match not found for '{item_name}' - skipping")
+                            print(f"   ❌ No match found for '{item_name}' - skipping item")
                     
                     if converted_items:
-                        party_orders = [{
-                            'person_name': args.get('name', 'Customer'),
-                            'items': converted_items
-                        }]
-                        print(f"   Created party_orders: {party_orders}")
+                        # ENHANCED: Use party distribution logic for multiple people
+                        party_size = args.get('party_size', 1)
+                        customer_name = args.get('name', 'Customer')
+                        
+                        if party_size > 1:
+                            print(f"   🔄 ENHANCED: Distributing {len(converted_items)} items across {party_size} people")
+                            
+                            # Use the enhanced distribution logic
+                            party_orders = self._parse_individual_orders_enhanced(
+                                '', # No conversation text available from pre_order format
+                                customer_name,
+                                [], # No additional names from pre_order format
+                                party_size,
+                                converted_items
+                            )
+                            print(f"   ✅ Enhanced distribution created {len(party_orders)} party orders")
+                        else:
+                            # Single person - all items go to customer
+                            party_orders = [{
+                                'person_name': customer_name,
+                                'items': converted_items
+                            }]
+                            print(f"   ✅ Single person order created with {len(converted_items)} items")
+                    
+                    print(f"   📊 Final party_orders: {party_orders}")
+                    print(f"   💡 RECOMMENDATION: Use party_orders format with menu_item_id for better reliability")
                 
                 # Debug logging for order processing
                 print(f"🔍 Order processing debug:")
@@ -2103,9 +2412,14 @@ class RestaurantReservationSkill(SkillBase):
                 message += f"Thank you for choosing Bobby's Table! We look forward to serving you. "
                 message += f"Please arrive on time and let us know if you need to make any changes.\n\n"
                 
-                # AGENT INSTRUCTION: Ask user about SMS confirmation
-                message += f"📱 Would you like me to send your reservation details to your phone via text message? "
-                message += f"The SMS will include all your reservation information and a link to view it online."
+                # ENHANCED SMS WORKFLOW: Provide clear next steps without redundant prompting
+                message += f"📱 SMS CONFIRMATION AVAILABLE:\n"
+                message += f"I can send your complete reservation details to your phone via text message. "
+                message += f"The SMS will include your reservation number, date, time, party details"
+                if total_reservation_amount > 0:
+                    message += f", pre-order information"
+                message += f", and a calendar link.\n"
+                message += f"Just let me know if you'd like me to send that to you!"
                 
                 # Set meta_data with reservation information for potential payment processing and SMS confirmation
                 meta_data_for_next_function = {
@@ -2457,7 +2771,7 @@ class RestaurantReservationSkill(SkillBase):
         return extracted
     
     def _extract_food_items_from_conversation(self, conversation_text, meta_data=None):
-        """Extract food items that the agent explicitly confirmed as orders (more precise)"""
+        """Enhanced food item extraction with comprehensive error handling and improved patterns"""
         try:
             # Import Flask app and models locally
             import sys
@@ -2473,140 +2787,315 @@ class RestaurantReservationSkill(SkillBase):
             with app.app_context():
                 extracted_items = []
                 
-                # Get menu items from database or cache
-                if meta_data and meta_data.get('cached_menu'):
-                    print("🚀 Using cached menu from meta_data")
-                    menu_item_names = {}
-                    for item_data in meta_data['cached_menu']:
+                # Enhanced menu loading with validation
+                menu_item_names = self._load_menu_for_extraction(meta_data)
+                if not menu_item_names:
+                    print("❌ No menu data available for food extraction")
+                    return []
+                
+                conversation_lower = conversation_text.lower()
+                print(f"🔍 Enhanced food item extraction from {len(conversation_text)} character conversation")
+                
+                # Multi-stage extraction process
+                extraction_results = {
+                    'structured_matches': self._extract_structured_recommendations(conversation_lower),
+                    'natural_patterns': self._extract_natural_conversation_patterns(conversation_lower),
+                    'direct_mentions': self._extract_direct_menu_mentions(conversation_lower, menu_item_names),
+                    'price_based': self._extract_price_based_items(conversation_lower, menu_item_names)
+                }
+                
+                # Process all extraction results
+                all_text_matches = []
+                for stage, matches in extraction_results.items():
+                    print(f"🔍 {stage}: {len(matches)} matches")
+                    all_text_matches.extend(matches)
+                
+                print(f"🔍 Total text matches to process: {len(all_text_matches)}")
+                
+                # Enhanced item matching with validation
+                for match_text in all_text_matches:
+                    items = self._process_text_match_for_items(match_text, menu_item_names, extracted_items)
+                    extracted_items.extend(items)
+                
+                # Final validation and deduplication
+                validated_items = self._validate_and_deduplicate_items(extracted_items, menu_item_names)
+                
+                print(f"🍽️ Final extracted items: {len(validated_items)} (after validation)")
+                for item in validated_items:
+                    item_name = next((data['name'] for data in menu_item_names.values() if data['id'] == item['menu_item_id']), f"Item {item['menu_item_id']}")
+                    print(f"   ✅ {item_name} x{item['quantity']}")
+                
+                return validated_items
+                
+        except Exception as e:
+            print(f"❌ Critical error in food item extraction: {e}")
+            import traceback
+            print(f"   Traceback: {traceback.format_exc()}")
+            return []
+
+    def _load_menu_for_extraction(self, meta_data):
+        """Load menu data for extraction with comprehensive error handling"""
+        menu_item_names = {}
+        
+        try:
+            # Try cached menu first
+            if meta_data and meta_data.get('cached_menu'):
+                print("🚀 Using cached menu for extraction")
+                for item_data in meta_data['cached_menu']:
+                    if item_data.get('is_available', True):
                         menu_item_names[item_data['name'].lower()] = {
                             'id': item_data['id'],
                             'name': item_data['name'],
-                            'price': item_data['price']
+                            'price': item_data.get('price', 0.0)
                         }
-                else:
-                    print("📊 Loading menu from database")
-                    menu_items = MenuItem.query.filter_by(is_available=True).all()
-                    menu_item_names = {item.name.lower(): {'id': item.id, 'name': item.name, 'price': item.price} for item in menu_items}
                 
-                conversation_lower = conversation_text.lower()
-                print(f"🔍 Looking for food items mentioned in conversation")
-                
-                import re
-                
-                # ENHANCED PATTERN MATCHING - Handle multiple conversation styles
-                
-                # 1. Look for structured agent recommendations first
-                # Pattern: "- Drink: House Wine for..." or "- Food: Mushroom Swiss Burger for..."
-                structured_recommendation_pattern = r'[-•*]?\s*(?:drink|food):\s*([^-\n]+?)(?:\s+for\s+[\w\s]+dollars|$)'
-                structured_matches = re.findall(structured_recommendation_pattern, conversation_lower, re.IGNORECASE | re.MULTILINE)
-                
-                print(f"🔍 Found structured recommendations: {structured_matches}")
-                
-                # 2. Look for natural conversation patterns
-                # Pattern: "X wants Y and Z" or "X would like Y" or "I'll have Y"
-                natural_patterns = [
-                    r'(\w+)\s+wants?\s+([^.!?\n]+)',
-                    r'(\w+)\s+would\s+like\s+([^.!?\n]+)', 
-                    r'(\w+)\s+will\s+have\s+([^.!?\n]+)',
-                    r'(\w+)\s+orders?\s+([^.!?\n]+)',
-                    r'i\'ll\s+have\s+([^.!?\n]+)',
-                    r'get\s+me\s+([^.!?\n]+)',
-                    r'can\s+i\s+get\s+([^.!?\n]+)'
-                ]
-                
-                natural_matches = []
-                for pattern in natural_patterns:
-                    matches = re.findall(pattern, conversation_lower, re.IGNORECASE)
-                    for match in matches:
-                        if isinstance(match, tuple):
-                            # Person and items
-                            person, items = match
-                            natural_matches.append(items.strip())
-                            print(f"🔍 Found {person} wants: '{items.strip()}'")
-                        else:
-                            # Just items
-                            natural_matches.append(match.strip())
-                            print(f"🔍 Found items: '{match.strip()}'")
-                
-                # Combine all matches
-                all_matches = structured_matches + natural_matches
-                print(f"🔍 All text matches to process: {all_matches}")
-                
-                # Process each match to find menu items
-                for match_text in all_matches:
-                    item_text = match_text.strip().lower()
-                    print(f"🔍 Processing text: '{item_text}'")
-                    
-                    # Split on 'and' to handle multiple items
-                    items_parts = re.split(r'\s+and\s+|\s*,\s*', item_text)
-                    
-                    for item_part in items_parts:
-                        item_part = item_part.strip()
-                        if not item_part:
-                            continue
-                            
-                        print(f"🔍 Looking for menu item: '{item_part}'")
-                        
-                        # Find the best matching menu item
-                        best_match = None
-                        best_score = 0
-                        
-                        for item_name_lower, item_data in menu_item_names.items():
-                            # Check for exact match first
-                            if item_name_lower == item_part:
-                                best_match = item_data
-                                best_score = 1.0
-                                break
-                            
-                            # Check for partial matches
-                            if item_name_lower in item_part or item_part in item_name_lower:
-                                # Calculate match score based on word overlap
-                                words_in_item = set(item_name_lower.split())
-                                words_in_text = set(item_part.split())
-                                common_words = words_in_item.intersection(words_in_text)
-                                score = len(common_words) / max(len(words_in_item), 1)
-                                
-                                if score > best_score and score > 0.3:  # Lower threshold for more matches
-                                    best_match = item_data
-                                    best_score = score
-                        
-                        if best_match and best_match['id'] not in [item['menu_item_id'] for item in extracted_items]:
-                            extracted_items.append({
-                                'menu_item_id': best_match['id'],
-                                'quantity': 1
-                            })
-                            print(f"🍽️ Found ordered item: {best_match['name']} (ID: {best_match['id']}) - Score: {best_score:.2f}")
-                        elif best_match:
-                            print(f"🔄 Skipping duplicate: {best_match['name']}")
-                        else:
-                            print(f"❌ No menu item found for: '{item_part}'")
-                
-                # If still no items found, try price-based extraction as fallback
-                if not extracted_items:
-                    print("🔍 No items found, trying price-based extraction...")
-                    
-                    # Look for items mentioned with prices in agent responses
-                    price_pattern = r'([a-z\s]+?)\s+for\s+[\w\s]*dollars'
-                    price_matches = re.findall(price_pattern, conversation_lower, re.IGNORECASE)
-                    
-                    for price_match in price_matches:
-                        item_text = price_match.strip().lower()
-                        print(f"🔍 Checking price mention: '{item_text}'")
-                        
-                        for item_name_lower, item_data in menu_item_names.items():
-                            if item_name_lower in item_text and item_data['id'] not in [item['menu_item_id'] for item in extracted_items]:
-                                extracted_items.append({
-                                    'menu_item_id': item_data['id'],
-                                    'quantity': 1
-                                })
-                                print(f"🍽️ Found ordered item: {item_data['name']} (ID: {item_data['id']}) from price mention")
-                
-                print(f"🍽️ Total ordered items: {len(extracted_items)}")
-                return extracted_items
-                
+                if menu_item_names:
+                    print(f"✅ Loaded {len(menu_item_names)} items from cache")
+                    return menu_item_names
+            
+            # Fallback to database
+            print("📊 Loading menu from database for extraction")
+            from models import MenuItem
+            menu_items = MenuItem.query.filter_by(is_available=True).all()
+            
+            for item in menu_items:
+                try:
+                    menu_item_names[item.name.lower()] = {
+                        'id': item.id,
+                        'name': item.name,
+                        'price': float(item.price)
+                    }
+                except Exception as item_error:
+                    print(f"⚠️ Error processing menu item {item.id}: {item_error}")
+                    continue
+            
+            print(f"✅ Loaded {len(menu_item_names)} items from database")
+            return menu_item_names
+            
         except Exception as e:
-            print(f"❌ Error extracting ordered food items: {e}")
-            return []
+            print(f"❌ Error loading menu for extraction: {e}")
+            return {}
+
+    def _extract_structured_recommendations(self, conversation_lower):
+        """Extract structured agent recommendations"""
+        import re
+        matches = []
+        
+        patterns = [
+            r'[-•*]?\s*(?:drink|food|beverage|appetizer|main|dessert):\s*([^-\n]+?)(?:\s+for\s+[\w\s]*dollars?|$)',
+            r'i\s+recommend\s+(?:the\s+)?([^.!?\n]+)',
+            r'how\s+about\s+(?:the\s+)?([^.!?\n]+)',
+            r'we\s+have\s+(?:a\s+nice\s+)?([^.!?\n]+)',
+        ]
+        
+        for pattern in patterns:
+            found_matches = re.findall(pattern, conversation_lower, re.IGNORECASE | re.MULTILINE)
+            matches.extend([match.strip() for match in found_matches if match.strip()])
+        
+        return matches
+
+    def _extract_natural_conversation_patterns(self, conversation_lower):
+        """Extract natural conversation patterns"""
+        import re
+        matches = []
+        
+        patterns = [
+            r'(\w+)\s+(?:wants?|would\s+like|will\s+have|orders?|gets?|chooses?)\s+([^.!?\n]+)',
+            r'(?:i\'ll|i\s+will)\s+(?:have|get|order|take)\s+([^.!?\n]+)',
+            r'(?:get|give)\s+me\s+([^.!?\n]+)',
+            r'can\s+i\s+(?:get|have|order)\s+([^.!?\n]+)',
+            r'(?:we|they)\s+(?:want|would\s+like|will\s+have)\s+([^.!?\n]+)',
+        ]
+        
+        for pattern in patterns:
+            found_matches = re.findall(pattern, conversation_lower, re.IGNORECASE)
+            for match in found_matches:
+                if isinstance(match, tuple):
+                    # Person and items pattern
+                    matches.append(match[1].strip())
+                else:
+                    # Just items pattern
+                    matches.append(match.strip())
+        
+        return matches
+
+    def _extract_direct_menu_mentions(self, conversation_lower, menu_item_names):
+        """Extract direct mentions of menu items"""
+        matches = []
+        
+        # Look for direct menu item mentions
+        for item_name_lower in menu_item_names.keys():
+            if len(item_name_lower) > 3 and item_name_lower in conversation_lower:
+                # Ensure it's a word boundary match
+                import re
+                if re.search(r'\b' + re.escape(item_name_lower) + r'\b', conversation_lower):
+                    matches.append(item_name_lower)
+        
+        return matches
+
+    def _extract_price_based_items(self, conversation_lower, menu_item_names):
+        """Extract items mentioned with prices"""
+        import re
+        matches = []
+        
+        price_patterns = [
+            r'([a-z\s]+?)\s+for\s+[\w\s]*dollars?',
+            r'([a-z\s]+?)\s+is\s+\$[\d.]+',
+            r'([a-z\s]+?)\s+costs?\s+\$[\d.]+',
+        ]
+        
+        for pattern in price_patterns:
+            found_matches = re.findall(pattern, conversation_lower, re.IGNORECASE)
+            matches.extend([match.strip() for match in found_matches if match.strip()])
+        
+        return matches
+
+    def _process_text_match_for_items(self, match_text, menu_item_names, existing_items):
+        """Process a text match to find menu items"""
+        import re
+        items = []
+        
+        item_text = match_text.strip().lower()
+        if not item_text or len(item_text) < 2:
+            return items
+        
+        print(f"🔍 Processing match: '{item_text}'")
+        
+        # Split on conjunctions
+        item_parts = re.split(r'\s+and\s+|\s*,\s*|\s*\+\s*', item_text)
+        
+        for item_part in item_parts:
+            item_part = item_part.strip()
+            if not item_part or len(item_part) < 2:
+                continue
+            
+            # Find best matching menu item
+            best_match = self._find_best_menu_match(item_part, menu_item_names)
+            
+            if best_match:
+                # Check for duplicates
+                if best_match['id'] not in [item['menu_item_id'] for item in existing_items + items]:
+                    # Extract quantity if mentioned
+                    quantity = self._extract_quantity_from_text(item_part)
+                    
+                    items.append({
+                        'menu_item_id': best_match['id'],
+                        'quantity': quantity,
+                        'name': best_match['name']  # For logging
+                    })
+                    print(f"   ✅ Matched: {best_match['name']} x{quantity}")
+                else:
+                    print(f"   🔄 Skipping duplicate: {best_match['name']}")
+            else:
+                print(f"   ❌ No match found for: '{item_part}'")
+        
+        return items
+
+    def _find_best_menu_match(self, item_text, menu_item_names):
+        """Find the best matching menu item with enhanced scoring"""
+        best_match = None
+        best_score = 0
+        
+        for item_name_lower, item_data in menu_item_names.items():
+            score = self._calculate_match_score(item_text, item_name_lower)
+            
+            if score > best_score and score > 0.4:  # Minimum threshold
+                best_match = item_data
+                best_score = score
+        
+        return best_match
+
+    def _calculate_match_score(self, text, item_name):
+        """Calculate match score between text and menu item name"""
+        # Exact match
+        if text == item_name:
+            return 1.0
+        
+        # Substring match
+        if text in item_name or item_name in text:
+            return 0.8
+        
+        # Word-based matching
+        text_words = set(text.split())
+        item_words = set(item_name.split())
+        
+        if not text_words or not item_words:
+            return 0
+        
+        common_words = text_words.intersection(item_words)
+        union_words = text_words.union(item_words)
+        
+        if common_words:
+            word_score = len(common_words) / len(union_words)
+            
+            # Bonus for matching key words
+            key_words = {'burger', 'pizza', 'salad', 'chicken', 'beef', 'fish', 'wine', 'beer'}
+            if common_words.intersection(key_words):
+                word_score += 0.2
+            
+            return min(word_score, 0.95)  # Cap at 0.95 to prefer exact matches
+        
+        return 0
+
+    def _extract_quantity_from_text(self, text):
+        """Extract quantity from text"""
+        import re
+        
+        # Look for explicit numbers
+        number_matches = re.findall(r'\b(\d+)\b', text)
+        if number_matches:
+            try:
+                quantity = int(number_matches[0])
+                return max(1, min(quantity, 10))  # Cap between 1 and 10
+            except ValueError:
+                pass
+        
+        # Look for word numbers
+        word_numbers = {
+            'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+            'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10
+        }
+        
+        for word, num in word_numbers.items():
+            if word in text:
+                return num
+        
+        return 1  # Default quantity
+
+    def _validate_and_deduplicate_items(self, items, menu_item_names):
+        """Validate and deduplicate extracted items"""
+        validated_items = []
+        seen_ids = set()
+        
+        for item in items:
+            try:
+                menu_item_id = int(item['menu_item_id'])
+                quantity = int(item.get('quantity', 1))
+                
+                # Validate menu item exists
+                item_exists = any(data['id'] == menu_item_id for data in menu_item_names.values())
+                if not item_exists:
+                    print(f"⚠️ Skipping invalid menu item ID: {menu_item_id}")
+                    continue
+                
+                # Validate quantity
+                if quantity <= 0 or quantity > 20:
+                    print(f"⚠️ Invalid quantity {quantity}, defaulting to 1")
+                    quantity = 1
+                
+                # Deduplicate
+                if menu_item_id not in seen_ids:
+                    validated_items.append({
+                        'menu_item_id': menu_item_id,
+                        'quantity': quantity
+                    })
+                    seen_ids.add(menu_item_id)
+                
+            except (ValueError, KeyError, TypeError) as e:
+                print(f"⚠️ Skipping invalid item {item}: {e}")
+                continue
+        
+        return validated_items
     
     def _get_reservation_handler(self, args, raw_data):
         """Handler for get_reservation tool"""
@@ -4259,7 +4748,7 @@ class RestaurantReservationSkill(SkillBase):
             return SwaigFunctionResult(f"Error generating reservation summary: {str(e)}")
     
     def _parse_individual_orders(self, conversation_text, customer_name, party_size, food_items):
-        """Parse individual orders from conversation and assign to correct people"""
+        """Enhanced parsing of individual orders with improved conversation analysis"""
         party_orders = []
         
         # If only one person, assign all items to them
@@ -4270,31 +4759,12 @@ class RestaurantReservationSkill(SkillBase):
             })
             return party_orders
         
-        # For multiple people, use intelligent distribution
-        print(f"🔍 Parsing orders for {party_size} people with {len(food_items)} items")
+        # For multiple people, use enhanced intelligent distribution
+        print(f"🔍 Enhanced parsing for {party_size} people with {len(food_items)} items")
         
-        # Extract additional names from conversation
-        additional_names = []
-        name_patterns = [
-            r'(?:the other person\'?s name is|other person is|second guest is|guest is)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)',
-            r'(?:and|with)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)',
-            r'([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\s+(?:wants|will have|orders)',
-            r'for ([a-zA-Z]+(?:\s+[a-zA-Z]+)?)',
-            r'([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\s+will\s+order',
-        ]
-        
-        for pattern in name_patterns:
-            matches = re.findall(pattern, conversation_text, re.IGNORECASE)
-            for match in matches:
-                name = match.strip().title()
-                if (name.replace(' ', '').isalpha() and 
-                    len(name) > 2 and
-                    name.lower() not in ['today', 'tomorrow', 'tonight', 'party of', 'table for', 'a pepsi', 'the pepsi', 'a coke', 'the coke', 'for', 'and', 'or', 'the'] and
-                    not any(food_word in name.lower() for food_word in ['pepsi', 'coke', 'wings', 'burger', 'pizza', 'mountain', 'dew']) and
-                    name not in additional_names and
-                    name != customer_name):
-                    additional_names.append(name)
-                    print(f"🔍 Found additional person: {name}")
+        # Enhanced name extraction with better patterns
+        additional_names = self._extract_person_names_from_conversation(conversation_text, customer_name)
+        print(f"🔍 Found additional names: {additional_names}")
         
         # Import menu items for analysis
         try:
@@ -4309,82 +4779,18 @@ class RestaurantReservationSkill(SkillBase):
             with app.app_context():
                 menu_items = {item.id: item.name for item in MenuItem.query.all()}
                 
-                # Create person-specific item lists
-                person_items = {}
-                person_items[customer_name] = []
-                
-                # Add additional names to person_items
-                for name in additional_names:
-                    person_items[name] = []
-                
-                # If we don't have enough named people, add generic names
+                # Create comprehensive person list
                 person_names = [customer_name] + additional_names
                 while len(person_names) < party_size:
                     guest_name = f'Guest {len(person_names)}'
                     person_names.append(guest_name)
-                    person_items[guest_name] = []
                 
                 print(f"🔍 Person names identified: {person_names}")
                 
-                # Analyze conversation to assign items to specific people
-                conversation_lower = conversation_text.lower()
-                
-                # Track which items have been assigned
-                assigned_items = set()
-                
-                # Method 1: Look for explicit person-item assignments in conversation
-                for person_name in person_names:
-                    person_lower = person_name.lower()
-                    
-                    # Find mentions of this person
-                    person_mentions = []
-                    import re
-                    for match in re.finditer(r'\b' + re.escape(person_lower) + r'\b', conversation_lower):
-                        person_mentions.append(match.start())
-                    
-                    # For each person mention, look for nearby food items
-                    for mention_pos in person_mentions:
-                        # Look in a window around the person mention (±100 characters)
-                        start_pos = max(0, mention_pos - 100)
-                        end_pos = min(len(conversation_lower), mention_pos + 100)
-                        context = conversation_lower[start_pos:end_pos]
-                        
-                        # Check which food items are mentioned in this context
-                        for item in food_items:
-                            if item['menu_item_id'] in assigned_items:
-                                continue
-                                
-                            item_name = menu_items.get(item['menu_item_id'], '').lower()
-                            
-                            # Check for item name variations in context
-                            item_variations = [
-                                item_name,
-                                item_name.replace(' ', ''),
-                                item_name.replace('buffalo', 'buff'),
-                                item_name.replace('wings', 'wing'),
-                                item_name.split()[0] if ' ' in item_name else item_name  # First word
-                            ]
-                            
-                            if any(variation in context for variation in item_variations if len(variation) > 2):
-                                person_items[person_name].append(item)
-                                assigned_items.add(item['menu_item_id'])
-                                print(f"🍽️ Assigned {item_name} to {person_name} (context match)")
-                                break
-                
-                # Method 2: Smart distribution of remaining items
-                unassigned_items = [item for item in food_items if item['menu_item_id'] not in assigned_items]
-                
-                if unassigned_items:
-                    print(f"🔍 Distributing {len(unassigned_items)} unassigned items among {len(person_names)} people")
-                    
-                    # Distribute unassigned items evenly
-                    for i, item in enumerate(unassigned_items):
-                        person_index = i % len(person_names)
-                        person_name = person_names[person_index]
-                        person_items[person_name].append(item)
-                        
-                        item_name = menu_items.get(item['menu_item_id'], f"Item {item['menu_item_id']}")
-                        print(f"🍽️ Assigned {item_name} to {person_name} (round-robin distribution)")
+                # Enhanced conversation analysis
+                person_items = self._analyze_conversation_for_person_items(
+                    conversation_text, person_names, food_items, menu_items
+                )
                 
                 # Create party orders from person_items
                 for person_name, items in person_items.items():
@@ -4396,27 +4802,307 @@ class RestaurantReservationSkill(SkillBase):
                 
         except Exception as e:
             print(f"❌ Error parsing individual orders: {e}")
-            # Fallback: simple even distribution
-            for i, item in enumerate(food_items):
-                person_index = i % party_size
-                if person_index == 0:
-                    person_name = customer_name
-                elif person_index - 1 < len(additional_names):
-                    person_name = additional_names[person_index - 1]
-                else:
-                    person_name = f'Guest {person_index + 1}'
-                
-                # Find existing party order for this person or create new one
-                existing_order = next((po for po in party_orders if po['person_name'] == person_name), None)
-                if existing_order:
-                    existing_order['items'].append(item)
-                else:
-                    party_orders.append({
-                        'person_name': person_name,
-                        'items': [item]
-                    })
+            # Enhanced fallback with better distribution
+            party_orders = self._fallback_order_distribution(food_items, customer_name, party_size, additional_names)
         
         print(f"🍽️ Final party orders: {party_orders}")
+        return party_orders
+
+    def _extract_person_names_from_conversation(self, conversation_text, customer_name):
+        """Extract person names from conversation with enhanced patterns"""
+        additional_names = []
+        
+        # ENHANCED: First, try to extract from compound names like "Jim and Tom" or "Jim Smith and Tom"
+        # Check if customer_name contains "and" indicating multiple people
+        if ' and ' in customer_name.lower():
+            parts = customer_name.split(' and ')
+            if len(parts) == 2:
+                first_person = parts[0].strip().title()
+                second_person = parts[1].strip().title()
+                
+                # Use the first person as customer, second as additional
+                print(f"🔍 Found compound name: '{customer_name}' -> First: '{first_person}', Second: '{second_person}'")
+                additional_names.append(second_person)
+                
+                # Return early with the extracted names
+                return additional_names
+        
+        # Enhanced name extraction patterns
+        name_patterns = [
+            # ENHANCED: Better "and" patterns for multiple people
+            r'(?:me and|i and|my name is .+ and)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)',
+            r'(?:reservation for|table for|party of \d+ for)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\s+and\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)',
+            r'([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\s+and\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\s+(?:want|would like|are coming)',
+            
+            # Original patterns (kept for backward compatibility)
+            r'(?:the other person\'?s name is|other person is|second guest is|guest is)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)',
+            r'(?:my|the)\s+(?:friend|partner|spouse|wife|husband|boyfriend|girlfriend|guest)\s+(?:is\s+)?([a-zA-Z]+(?:\s+[a-zA-Z]+)?)',
+            r'(?:and|with)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\s+(?:wants|will|would|orders|gets)',
+            r'([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\s+(?:wants|will have|orders|would like|\'ll have)',
+            r'for ([a-zA-Z]+(?:\s+[a-zA-Z]+)?)',
+            r'([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\s+will\s+(?:order|get|have)',
+            # Possessive patterns
+            r'([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\s+\'s\s+(?:order|food|meal)',
+            # Conversational patterns
+            r'(?:i\'m|i am)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)',
+            r'(?:this is|call me)\s+([a-zA-Z]+(?:\s+[a-zA-Z]+)?)',
+        ]
+        
+        # Common food-related false positives to exclude
+        food_words = [
+            'pepsi', 'coke', 'wings', 'burger', 'pizza', 'mountain', 'dew', 'chicken', 'beef',
+            'fish', 'salad', 'soup', 'sandwich', 'pasta', 'rice', 'fries', 'beer', 'wine',
+            'water', 'soda', 'tea', 'coffee', 'appetizer', 'dessert', 'special', 'house'
+        ]
+        
+        # Common non-name words to exclude
+        non_name_words = [
+            'today', 'tomorrow', 'tonight', 'party', 'table', 'reservation', 'order',
+            'food', 'meal', 'dinner', 'lunch', 'breakfast', 'please', 'thank', 'you',
+            'and', 'or', 'the', 'for', 'with', 'want', 'like', 'have', 'get', 'me'
+        ]
+        
+        for pattern in name_patterns:
+            matches = re.findall(pattern, conversation_text, re.IGNORECASE)
+            for match in matches:
+                # Handle both single captures and multiple captures (tuples)
+                if isinstance(match, tuple):
+                    # Multiple captures - process each one
+                    for name in match:
+                        name = name.strip().title()
+                        if name:  # Only process non-empty names
+                            self._add_name_if_valid(name, customer_name, additional_names, non_name_words, food_words)
+                else:
+                    # Single capture
+                    name = match.strip().title()
+                    if name:  # Only process non-empty names
+                        self._add_name_if_valid(name, customer_name, additional_names, non_name_words, food_words)
+        
+        return additional_names
+
+    def _add_name_if_valid(self, name, customer_name, additional_names, non_name_words, food_words):
+        """Add name to additional_names if it passes validation"""
+        # Enhanced validation
+        if (name.replace(' ', '').isalpha() and 
+            len(name) > 2 and
+            name.lower() not in non_name_words and
+            not any(food_word in name.lower() for food_word in food_words) and
+            name not in additional_names and
+            name != customer_name):
+            
+            additional_names.append(name)
+            print(f"🔍 Found additional person: {name}")
+            return True
+        return False
+
+    def _analyze_conversation_for_person_items(self, conversation_text, person_names, food_items, menu_items):
+        """Enhanced conversation analysis for person-item assignments"""
+        person_items = {name: [] for name in person_names}
+        conversation_lower = conversation_text.lower()
+        assigned_items = set()
+        
+        # Method 1: Enhanced explicit person-item assignments
+        for person_name in person_names:
+            person_lower = person_name.lower()
+            
+            # Enhanced patterns for person-item associations
+            person_item_patterns = [
+                rf'\b{re.escape(person_lower)}\s+(?:wants|will have|orders|would like|\'ll have|gets?)\s+([^.!?\n]+)',
+                rf'\b{re.escape(person_lower)}\s+(?:is having|is getting|ordered)\s+([^.!?\n]+)',
+                rf'for\s+{re.escape(person_lower)}[,:]\s*([^.!?\n]+)',
+                rf'{re.escape(person_lower)}\'s\s+(?:order|food|meal):\s*([^.!?\n]+)',
+                rf'(?:get|give)\s+{re.escape(person_lower)}\s+([^.!?\n]+)',
+            ]
+            
+            for pattern in person_item_patterns:
+                matches = re.findall(pattern, conversation_lower, re.IGNORECASE)
+                for match in matches:
+                    self._assign_items_from_text(match, person_name, person_items, food_items, menu_items, assigned_items)
+        
+        # Method 2: Pronouns and context analysis
+        self._analyze_pronouns_and_context(conversation_lower, person_names, person_items, food_items, menu_items, assigned_items)
+        
+        # Method 3: Enhanced smart distribution of remaining items
+        unassigned_items = [item for item in food_items if item['menu_item_id'] not in assigned_items]
+        
+        if unassigned_items:
+            print(f"🔍 Distributing {len(unassigned_items)} unassigned items with enhanced logic")
+            self._enhanced_item_distribution(unassigned_items, person_names, person_items, menu_items, conversation_lower)
+        
+        return person_items
+
+    def _assign_items_from_text(self, text, person_name, person_items, food_items, menu_items, assigned_items):
+        """Assign items from text to a specific person"""
+        text_lower = text.lower().strip()
+        
+        # Split on 'and' to handle multiple items
+        items_parts = re.split(r'\s+and\s+|\s*,\s*', text_lower)
+        
+        for item_part in items_parts:
+            item_part = item_part.strip()
+            if not item_part:
+                continue
+            
+            # Find matching menu item
+            for item in food_items:
+                if item['menu_item_id'] in assigned_items:
+                    continue
+                
+                item_name = menu_items.get(item['menu_item_id'], '').lower()
+                
+                # Enhanced matching logic
+                if self._item_matches_text(item_name, item_part):
+                    person_items[person_name].append(item)
+                    assigned_items.add(item['menu_item_id'])
+                    print(f"🍽️ Assigned {item_name} to {person_name} (explicit match)")
+                    break
+
+    def _item_matches_text(self, item_name, text_part):
+        """Check if item name matches text part with enhanced logic"""
+        # Exact match
+        if item_name in text_part or text_part in item_name:
+            return True
+        
+        # Word-based matching
+        item_words = set(item_name.split())
+        text_words = set(text_part.split())
+        
+        # If most words match
+        if len(item_words.intersection(text_words)) >= min(len(item_words), len(text_words)) * 0.6:
+            return True
+        
+        # Handle abbreviations and common variations
+        variations = {
+            'buffalo': 'buff',
+            'wings': 'wing',
+            'burger': 'burg',
+            'sandwich': 'sand',
+            'chicken': 'chick',
+        }
+        
+        for original, short in variations.items():
+            if original in item_name and short in text_part:
+                return True
+            if short in item_name and original in text_part:
+                return True
+        
+        return False
+
+    def _analyze_pronouns_and_context(self, conversation_lower, person_names, person_items, food_items, menu_items, assigned_items):
+        """Analyze pronouns and context for better item assignment"""
+        # Split conversation into sentences
+        sentences = re.split(r'[.!?]+', conversation_lower)
+        
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+            
+            # Look for pronoun patterns
+            pronoun_patterns = [
+                r'(?:i|me)\s+(?:want|would like|\'ll have|order|get)\s+([^.!?\n]+)',
+                r'(?:he|she|they)\s+(?:wants|would like|\'ll have|orders|gets?)\s+([^.!?\n]+)',
+                r'(?:my|his|her|their)\s+(?:order|food|meal)\s+(?:is|will be)\s+([^.!?\n]+)',
+            ]
+            
+            for pattern in pronoun_patterns:
+                matches = re.findall(pattern, sentence, re.IGNORECASE)
+                for match in matches:
+                    # Try to determine which person this refers to based on context
+                    person_name = self._resolve_pronoun_to_person(sentence, person_names)
+                    if person_name:
+                        self._assign_items_from_text(match, person_name, person_items, food_items, menu_items, assigned_items)
+
+    def _resolve_pronoun_to_person(self, sentence, person_names):
+        """Resolve pronoun to specific person based on context"""
+        # Simple heuristic: if person name is mentioned in the sentence, associate with that person
+        for name in person_names:
+            if name.lower() in sentence:
+                return name
+        
+        # Default to first person (customer) for "I/me"
+        if re.search(r'\b(?:i|me)\b', sentence):
+            return person_names[0]
+        
+        # For "he/she/they", try to use the second person if available
+        if re.search(r'\b(?:he|she|they)\b', sentence) and len(person_names) > 1:
+            return person_names[1]
+        
+        return None
+
+    def _enhanced_item_distribution(self, unassigned_items, person_names, person_items, menu_items, conversation_lower):
+        """Enhanced distribution of unassigned items"""
+        # Priority distribution based on conversation context
+        for item in unassigned_items:
+            item_name = menu_items.get(item['menu_item_id'], '').lower()
+            
+            # Look for any context clues about who might want this item
+            best_person = None
+            best_score = 0
+            
+            for person_name in person_names:
+                person_lower = person_name.lower()
+                
+                # Score based on proximity to person mentions
+                score = 0
+                
+                # Find person mentions in conversation
+                for match in re.finditer(r'\b' + re.escape(person_lower) + r'\b', conversation_lower):
+                    start_pos = max(0, match.start() - 200)
+                    end_pos = min(len(conversation_lower), match.end() + 200)
+                    context = conversation_lower[start_pos:end_pos]
+                    
+                    # Score based on item name proximity
+                    if item_name in context:
+                        score += 10
+                    
+                    # Score based on item word proximity
+                    for word in item_name.split():
+                        if len(word) > 3 and word in context:
+                            score += 5
+                
+                if score > best_score:
+                    best_score = score
+                    best_person = person_name
+            
+            # If no context clues, use round-robin distribution
+            if not best_person:
+                # Find person with fewest items
+                min_items = min(len(person_items[name]) for name in person_names)
+                for name in person_names:
+                    if len(person_items[name]) == min_items:
+                        best_person = name
+                        break
+            
+            if best_person:
+                person_items[best_person].append(item)
+                item_name_display = menu_items.get(item['menu_item_id'], f"Item {item['menu_item_id']}")
+                print(f"🍽️ Assigned {item_name_display} to {best_person} (enhanced distribution)")
+
+    def _fallback_order_distribution(self, food_items, customer_name, party_size, additional_names):
+        """Enhanced fallback distribution when main parsing fails"""
+        party_orders = []
+        
+        # Create person list
+        person_names = [customer_name] + additional_names
+        while len(person_names) < party_size:
+            person_names.append(f'Guest {len(person_names)}')
+        
+        # Distribute items evenly
+        for i, item in enumerate(food_items):
+            person_index = i % len(person_names)
+            person_name = person_names[person_index]
+            
+            # Find existing party order for this person or create new one
+            existing_order = next((po for po in party_orders if po['person_name'] == person_name), None)
+            if existing_order:
+                existing_order['items'].append(item)
+            else:
+                party_orders.append({
+                    'person_name': person_name,
+                    'items': [item]
+                })
+        
         return party_orders
 
     def _parse_individual_orders_enhanced(self, conversation_text, customer_name, additional_names, party_size, food_items):
@@ -4435,12 +5121,33 @@ class RestaurantReservationSkill(SkillBase):
         print(f"🔍 Enhanced parsing for {party_size} people with {len(food_items)} items")
         print(f"🔍 Primary name: {customer_name}, Additional names: {additional_names}")
         
-        # Create list of all known person names
-        all_person_names = [customer_name] + additional_names
+        # FIX: Handle case where customer_name is a phone number
+        if customer_name and (customer_name.replace('+', '').replace('-', '').replace(' ', '').replace('(', '').replace(')', '').isdigit()):
+            print(f"🔍 Customer name appears to be a phone number: {customer_name}")
+            customer_display_name = "Customer"
+        else:
+            customer_display_name = customer_name
         
-        # Pad with generic names if needed
+        # Create list of all known person names
+        all_person_names = [customer_display_name] + additional_names
+        
+        # ENHANCED: Create better fallback names when person names aren't available
         while len(all_person_names) < party_size:
-            all_person_names.append(f'Guest {len(all_person_names) + 1}')
+            guest_number = len(all_person_names) + 1
+            if guest_number == 2:
+                # More meaningful name for the second person
+                if 'friend' in conversation_text.lower():
+                    all_person_names.append('Friend')
+                elif 'partner' in conversation_text.lower():
+                    all_person_names.append('Partner')
+                elif 'spouse' in conversation_text.lower() or 'wife' in conversation_text.lower() or 'husband' in conversation_text.lower():
+                    all_person_names.append('Spouse')
+                elif 'guest' in conversation_text.lower():
+                    all_person_names.append('Guest')
+                else:
+                    all_person_names.append('Companion')
+            else:
+                all_person_names.append(f'Guest {guest_number}')
         
         print(f"🔍 All person names: {all_person_names}")
         
@@ -4471,7 +5178,7 @@ class RestaurantReservationSkill(SkillBase):
                     person_lower = person_name.lower()
                     
                     # Look for agent's structured recommendations for this person
-                    person_section_pattern = rf'{re.escape(person_lower)}:\s*[-•*]?\s*.*?(?=(?:{"|".join([re.escape(n.lower()) for n in all_person_names if n != person_name])}:|$)'
+                    person_section_pattern = rf'{re.escape(person_lower)}:\s*[-•*]?\s*.*?(?=(?:{"|".join([re.escape(n.lower()) for n in all_person_names if n != person_name])}:|$))'
                     person_match = re.search(person_section_pattern, conversation_lower, re.DOTALL)
                     
                     if person_match:
@@ -4497,7 +5204,25 @@ class RestaurantReservationSkill(SkillBase):
                 if unassigned_items:
                     print(f"🔍 Distributing {len(unassigned_items)} unassigned items")
                     
-                    # Distribute remaining items evenly
+                    # FIX: Ensure proper even distribution across all people
+                    # Sort items by type for better distribution (food items first, then drinks)
+                    food_priority = ['appetizer', 'main', 'entree', 'sandwich', 'burger', 'chicken', 'beef', 'fish']
+                    drink_priority = ['beer', 'wine', 'soda', 'water', 'drink', 'beverage']
+                    
+                    def get_item_priority(item):
+                        item_name = menu_items.get(item['menu_item_id'], '').lower()
+                        # Food items get priority 1, drinks get priority 2
+                        if any(food_word in item_name for food_word in food_priority):
+                            return 1
+                        elif any(drink_word in item_name for drink_word in drink_priority):
+                            return 2
+                        else:
+                            return 1.5  # Default to food priority
+                    
+                    # Sort items by priority for better distribution
+                    unassigned_items.sort(key=get_item_priority)
+                    
+                    # Distribute items evenly, ensuring each person gets at least one item if possible
                     for i, item in enumerate(unassigned_items):
                         person_index = i % len(all_person_names)
                         person_name = all_person_names[person_index]
@@ -4506,30 +5231,34 @@ class RestaurantReservationSkill(SkillBase):
                         item_name = menu_items.get(item['menu_item_id'], f"Item {item['menu_item_id']}")
                         print(f"🍽️ Assigned {item_name} to {person_name} (even distribution)")
                 
-                # Create party orders from person_items
-                for person_name, items in person_items.items():
-                    if items:  # Only add if person has items
-                        party_orders.append({
-                            'person_name': person_name,
-                            'items': items
-                        })
+                # CRITICAL FIX: Create party orders from person_items, but ensure we create orders for ALL people
+                # even if some don't have items (for proper UI display)
+                for person_name in all_person_names:
+                    items = person_items.get(person_name, [])
+                    # Always create an order entry, even if no items (to show all party members)
+                    party_orders.append({
+                        'person_name': person_name,
+                        'items': items
+                    })
+                    print(f"🍽️ Created order for {person_name} with {len(items)} items")
                 
         except Exception as e:
             print(f"❌ Error in enhanced parsing: {e}")
-            # Fallback: simple even distribution
+            # Fallback: simple even distribution ensuring all people get represented
+            person_items = {name: [] for name in all_person_names}
+            
             for i, item in enumerate(food_items):
                 person_index = i % len(all_person_names)
                 person_name = all_person_names[person_index]
-                
-                # Find existing party order for this person or create new one
-                existing_order = next((po for po in party_orders if po['person_name'] == person_name), None)
-                if existing_order:
-                    existing_order['items'].append(item)
-                else:
-                    party_orders.append({
-                        'person_name': person_name,
-                        'items': [item]
-                    })
+                person_items[person_name].append(item)
+            
+            # Create party orders for all people
+            for person_name in all_person_names:
+                items = person_items.get(person_name, [])
+                party_orders.append({
+                    'person_name': person_name,
+                    'items': items
+                })
         
         print(f"🍽️ Enhanced party orders: {party_orders}")
         return party_orders
@@ -5106,6 +5835,232 @@ class RestaurantReservationSkill(SkillBase):
                 'error': f'Payment SMS error: {str(e)}'
             }
     
+    def _validate_menu_cache(self, meta_data):
+        """Validate that the menu cache is valid and up-to-date"""
+        if not meta_data or not meta_data.get('cached_menu'):
+            return False
+        
+        # Check if cache is recent (within 5 minutes)
+        cache_time = meta_data.get('menu_cached_at')
+        if cache_time:
+            try:
+                from datetime import datetime, timedelta
+                cached_at = datetime.fromisoformat(cache_time)
+                if datetime.now() - cached_at > timedelta(minutes=5):
+                    return False
+            except ValueError:
+                return False
+        
+        # Check if cache has reasonable number of items
+        cached_menu = meta_data.get('cached_menu', [])
+        if len(cached_menu) < 5:  # Minimum expected menu items
+            return False
+        
+        return True
+
+    def _validate_and_fix_party_orders(self, party_orders, meta_data):
+        """Validate and fix party_orders structure"""
+        if not party_orders:
+            return []
+        
+        fixed_orders = []
+        cached_menu = meta_data.get('cached_menu', [])
+        menu_lookup = {item['id']: item for item in cached_menu} if cached_menu else {}
+        
+        for order in party_orders:
+            if not isinstance(order, dict):
+                continue
+            
+            person_name = order.get('person_name', 'Customer')
+            items = order.get('items', [])
+            
+            if not items:
+                continue
+            
+            # Validate and fix items
+            fixed_items = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                
+                menu_item_id = item.get('menu_item_id')
+                quantity = item.get('quantity', 1)
+                
+                # Validate menu_item_id
+                if not menu_item_id:
+                    continue
+                
+                try:
+                    menu_item_id = int(menu_item_id)
+                    quantity = int(quantity)
+                except (ValueError, TypeError):
+                    continue
+                
+                # Check if menu item exists in cache
+                if menu_lookup and menu_item_id not in menu_lookup:
+                    print(f"⚠️ Menu item ID {menu_item_id} not found in cache")
+                    continue
+                
+                fixed_items.append({
+                    'menu_item_id': menu_item_id,
+                    'quantity': max(1, quantity)
+                })
+            
+            if fixed_items:
+                fixed_orders.append({
+                    'person_name': person_name,
+                    'items': fixed_items
+                })
+        
+        return fixed_orders
+
+    def _detect_user_confirmation(self, recent_messages):
+        """Detect if user has confirmed their order with enhanced pattern matching"""
+        explicit_confirmations = [
+            'yes, that\'s correct', 'yes that\'s correct', 'that\'s correct',
+            'yes, create', 'yes create', 'create reservation', 'create it',
+            'looks good', 'looks right', 'that\'s right', 'perfect',
+            'confirm', 'confirmed', 'proceed', 'go ahead',
+            'sounds good', 'that works', 'let\'s do it', 'make it',
+            'book it', 'reserve it', 'yes please', 'absolutely',
+            'that\'s perfect', 'exactly right', 'all good'
+        ]
+        
+        for content in recent_messages[:3]:
+            content_lower = content.lower().strip()
+            
+            # Check for explicit confirmation
+            if any(phrase in content_lower for phrase in explicit_confirmations):
+                print(f"✅ User confirmed with explicit phrase: '{content}'")
+                return True
+            
+            # Check for simple affirmative responses
+            if content_lower in ['yes', 'yes.', 'yep', 'yeah', 'sure', 'ok', 'okay']:
+                print(f"✅ User confirmed with simple affirmative: '{content}'")
+                return True
+            
+            # Check for modification requests
+            if ('change' in content_lower or 'wrong' in content_lower or 
+                'not right' in content_lower or 'different' in content_lower):
+                print(f"🔄 User wants to modify order: '{content}'")
+                return 'modify'
+            
+            # Check for cancellation
+            if 'cancel' in content_lower or 'start over' in content_lower:
+                print(f"❌ User wants to cancel: '{content}'")
+                return 'cancel'
+        
+        return False
+
+    def _enhanced_database_transaction(self, reservation, party_orders, args):
+        """Enhanced database transaction with comprehensive error handling"""
+        from models import db, Order, OrderItem, MenuItem
+        
+        transaction_success = False
+        created_orders = []
+        total_reservation_amount = 0.0
+        
+        try:
+            # Add reservation to session
+            db.session.add(reservation)
+            db.session.flush()  # Get reservation.id
+            
+            print(f"✅ Reservation created: {reservation.id} - {reservation.reservation_number}")
+            
+            # Process party orders with enhanced validation
+            if party_orders and not args.get('old_school', False):
+                print(f"🔧 Processing {len(party_orders)} party orders with enhanced validation")
+                
+                for person_order in party_orders:
+                    person_name = person_order.get('person_name', 'Customer')
+                    person_items = person_order.get('items', [])
+                    
+                    if not person_items:
+                        print(f"   ⚠️ No items for {person_name}, skipping order creation")
+                        continue
+                    
+                    print(f"   👤 Creating order for {person_name} with {len(person_items)} items")
+                    
+                    # Create order for this person
+                    order = Order(
+                        order_number=self._generate_order_number(),
+                        reservation_id=reservation.id,
+                        table_id=None,
+                        person_name=person_name,
+                        status='pending',
+                        total_amount=0.0,
+                        target_date=args['date'],
+                        target_time=args['time'],
+                        order_type='reservation',
+                        payment_status='unpaid',
+                        customer_phone=args.get('phone_number')
+                    )
+                    db.session.add(order)
+                    db.session.flush()  # Get order.id
+                    
+                    created_orders.append(order)
+                    
+                    # Process order items with enhanced validation
+                    order_total = 0.0
+                    for item_data in person_items:
+                        try:
+                            menu_item_id = int(item_data['menu_item_id'])
+                            quantity = int(item_data.get('quantity', 1))
+                            
+                            # Enhanced menu item validation
+                            menu_item = MenuItem.query.get(menu_item_id)
+                            if not menu_item:
+                                print(f"      ❌ Menu item ID {menu_item_id} not found in database")
+                                continue
+                            
+                            if not menu_item.is_available:
+                                print(f"      ❌ Menu item {menu_item.name} is not available")
+                                continue
+                            
+                            # Create order item
+                            order_item = OrderItem(
+                                order_id=order.id,
+                                menu_item_id=menu_item_id,
+                                quantity=quantity,
+                                price_at_time=menu_item.price
+                            )
+                            db.session.add(order_item)
+                            
+                            item_total = float(menu_item.price) * quantity
+                            order_total += item_total
+                            
+                            print(f"      ✅ Added: {menu_item.name} x{quantity} @ ${menu_item.price} = ${item_total:.2f}")
+                            
+                        except (ValueError, KeyError, TypeError) as item_error:
+                            print(f"      ❌ Error processing item {item_data}: {item_error}")
+                            continue
+                    
+                    order.total_amount = order_total
+                    total_reservation_amount += order_total
+                    print(f"   💰 Order total for {person_name}: ${order_total:.2f}")
+            
+            # CRITICAL: Enhanced database commit with comprehensive error handling
+            print(f"💾 Committing transaction for reservation {reservation.id}")
+            db.session.commit()
+            transaction_success = True
+            print(f"✅ Database transaction committed successfully")
+            
+        except Exception as transaction_error:
+            print(f"❌ CRITICAL: Database transaction failed: {transaction_error}")
+            print(f"   Reservation ID: {reservation.id if reservation else 'N/A'}")
+            print(f"   Orders created: {len(created_orders)}")
+            
+            # Enhanced rollback with logging
+            try:
+                db.session.rollback()
+                print(f"✅ Database rollback completed successfully")
+            except Exception as rollback_error:
+                print(f"❌ CRITICAL: Database rollback failed: {rollback_error}")
+            
+            raise transaction_error
+        
+        return transaction_success, created_orders, total_reservation_amount
+
     def _find_menu_item_fuzzy(self, item_name, meta_data=None):
         """
         Find menu item using fuzzy matching with cached menu support
