@@ -196,9 +196,9 @@ def init_test_data():
                 table_id=2, 
                 person_name='Jane Smith', 
                 status='preparing', 
-                total_amount=21.98,  # Chicken Caesar Salad + Pepsi
+                total_amount=16.98,  # Chicken Caesar Salad ($13.99) + Pepsi ($2.99)
                 payment_status='paid', 
-                payment_amount=21.98,
+                payment_amount=16.98,
                 payment_intent_id='pi_test_jane_smith_003',
                 payment_date=datetime.now() - timedelta(minutes=20),
                 confirmation_number='ORD2001',
@@ -213,9 +213,9 @@ def init_test_data():
                 table_id=2, 
                 person_name='David Smith', 
                 status='ready', 
-                total_amount=17.98,  # BBQ Ribs + Iced Tea
+                total_amount=22.98,  # BBQ Ribs ($19.99) + Iced Tea ($2.99)
                 payment_status='paid',
-                payment_amount=17.98,
+                payment_amount=22.98,
                 payment_intent_id='pi_test_david_smith_004',
                 payment_date=datetime.now() - timedelta(minutes=25),
                 confirmation_number='ORD2002',
