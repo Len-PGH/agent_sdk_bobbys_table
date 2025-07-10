@@ -812,7 +812,7 @@ class RestaurantMenuSkill(SkillBase):
                     sms_body += f"💰 Pre-order Total: ${pre_order_total:.2f}\n"
                 
                 sms_body += f"\n📍 Location: Bobby's Table Restaurant\n"
-                sms_body += f"📞 Call us: (412) 612-7565\n\n"
+                sms_body += f"📞 Call us: (412) 555-5555\n\n"
                 sms_body += f"We look forward to serving you!\n"
                 sms_body += f"Reply STOP to opt out."
                 
@@ -830,10 +830,10 @@ class RestaurantMenuSkill(SkillBase):
                 sms_body += f"Your reservation has been updated.\n"
                 if reservation_date and reservation_time:
                     sms_body += f"📅 New time: {reservation_date} at {reservation_time}\n"
-                sms_body += f"\nQuestions? Call us: (412) 612-7565"
+                sms_body += f"\nQuestions? Call us: (412) 555-5555"
             
             # Get SignalWire credentials from environment
-            signalwire_from_number = os.getenv('SIGNALWIRE_FROM_NUMBER', '+14126127565')
+            signalwire_from_number = os.getenv('SIGNALWIRE_FROM_NUMBER', '+14125555555')
             
             print(f"📱 Sending SMS via SignalWire:")
             print(f"   From: {signalwire_from_number}")
@@ -965,12 +965,12 @@ class RestaurantMenuSkill(SkillBase):
             sms_body += f"✅ Payment Status: COMPLETED\n"
             sms_body += f"📅 Processed: {datetime.now().strftime('%m/%d/%Y %I:%M %p')}\n\n"
             sms_body += f"📍 Bobby's Table Restaurant\n"
-            sms_body += f"📞 Questions? Call: (412) 612-7565\n\n"
+            sms_body += f"📞 Questions? Call: (412) 555-5555\n\n"
             sms_body += f"Thank you for dining with us!\n"
             sms_body += f"Reply STOP to opt out."
             
             # Get SignalWire credentials from environment
-            signalwire_from_number = os.getenv('SIGNALWIRE_FROM_NUMBER', '+14126127565')
+            signalwire_from_number = os.getenv('SIGNALWIRE_FROM_NUMBER', '+14125555555')
             
             print(f"📱 Sending Payment Receipt SMS via SignalWire:")
             print(f"   From: {signalwire_from_number}")
@@ -1160,7 +1160,7 @@ class RestaurantMenuSkill(SkillBase):
                     message += f"\n💳 Payment: {payment_emoji.get(order.payment_status, '❓')} {order.payment_status.title()}\n"
                 
                 # Add helpful next steps
-                message += f"\n📞 Questions? Call us at (412) 612-7565\n"
+                message += f"\n📞 Questions? Call us at (412) 555-5555\n"
                 message += f"🏪 Bobby's Table Restaurant"
                 
                 # Update metadata
@@ -1181,4 +1181,4 @@ class RestaurantMenuSkill(SkillBase):
             print(f"Error checking order status: {e}")
             import traceback
             traceback.print_exc()
-            return SwaigFunctionResult("Sorry, there was an error checking your order status. Please try again or contact us directly at (412) 612-7565.") 
+            return SwaigFunctionResult("Sorry, there was an error checking your order status. Please try again or contact us directly at (412) 555-5555.") 
