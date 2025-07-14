@@ -27,7 +27,42 @@ def words_to_numbers(text):
     # Convert text to lowercase for matching
     result = text.lower()
     
-    # Replace word numbers with digits (using word boundaries)
+    # FIRST: Handle consecutive number patterns (double, triple, etc.)
+    consecutive_patterns = {
+        # Double patterns
+        r'\bdouble\s+zero\b': '00',
+        r'\bdouble\s+oh\b': '00', 
+        r'\bdouble\s+o\b': '00',
+        r'\bdouble\s+one\b': '11',
+        r'\bdouble\s+two\b': '22',
+        r'\bdouble\s+three\b': '33',
+        r'\bdouble\s+four\b': '44',
+        r'\bdouble\s+five\b': '55',
+        r'\bdouble\s+six\b': '66',
+        r'\bdouble\s+seven\b': '77',
+        r'\bdouble\s+eight\b': '88',
+        r'\bdouble\s+nine\b': '99',
+        
+        # Triple patterns
+        r'\btriple\s+zero\b': '000',
+        r'\btriple\s+oh\b': '000',
+        r'\btriple\s+o\b': '000',
+        r'\btriple\s+one\b': '111',
+        r'\btriple\s+two\b': '222',
+        r'\btriple\s+three\b': '333',
+        r'\btriple\s+four\b': '444',
+        r'\btriple\s+five\b': '555',
+        r'\btriple\s+six\b': '666',
+        r'\btriple\s+seven\b': '777',
+        r'\btriple\s+eight\b': '888',
+        r'\btriple\s+nine\b': '999',
+    }
+    
+    # Apply consecutive patterns first
+    for pattern, replacement in consecutive_patterns.items():
+        result = re.sub(pattern, replacement, result)
+    
+    # THEN: Replace individual word numbers with digits (using word boundaries)
     for word, digit in number_words.items():
         result = re.sub(r'\b' + word + r'\b', digit, result)
     

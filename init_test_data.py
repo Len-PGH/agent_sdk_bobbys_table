@@ -103,7 +103,8 @@ def init_test_data():
                 payment_status='unpaid',
                 target_date=str(today),
                 target_time='19:00',
-                order_type='reservation'
+                order_type='reservation',
+                customer_phone='+1234567890'  # Add phone number for lookups
             ),
             Order(
                 order_number=generate_order_number(), 
@@ -120,7 +121,8 @@ def init_test_data():
                 payment_method='credit-card',
                 target_date=str(today),
                 target_time='19:00',
-                order_type='reservation'
+                order_type='reservation',
+                customer_phone='+1234567890'  # Add phone number for lookups
             ),
             Order(
                 order_number=generate_order_number(), 
@@ -137,7 +139,8 @@ def init_test_data():
                 payment_method='credit-card',
                 target_date=str(today),
                 target_time='19:00',
-                order_type='reservation'
+                order_type='reservation',
+                customer_phone='+1234567890'  # Add phone number for lookups
             ),
             Order(
                 order_number=generate_order_number(), 
@@ -149,7 +152,8 @@ def init_test_data():
                 payment_status='unpaid',
                 target_date=str(today),
                 target_time='19:00',
-                order_type='reservation'
+                order_type='reservation',
+                customer_phone='+1234567890'  # Add phone number for lookups
             )
         ]
         db.session.add_all(johnson_orders)
@@ -196,7 +200,7 @@ def init_test_data():
                 table_id=2, 
                 person_name='Jane Smith', 
                 status='preparing', 
-                total_amount=16.98,  # Chicken Caesar Salad ($13.99) + Pepsi ($2.99)
+                total_amount=16.98,  # Chicken Caesar Salad + Pepsi (13.99 + 2.99)
                 payment_status='paid', 
                 payment_amount=16.98,
                 payment_intent_id='pi_test_jane_smith_003',
@@ -205,7 +209,8 @@ def init_test_data():
                 payment_method='credit-card',
                 target_date=str(today + timedelta(days=1)),
                 target_time='18:30',
-                order_type='reservation'
+                order_type='reservation',
+                customer_phone='+1987654321'  # Add phone number for lookups
             ),
             Order(
                 order_number=generate_order_number(), 
@@ -213,7 +218,7 @@ def init_test_data():
                 table_id=2, 
                 person_name='David Smith', 
                 status='ready', 
-                total_amount=22.98,  # BBQ Ribs ($19.99) + Iced Tea ($2.99)
+                total_amount=22.98,  # BBQ Ribs + Iced Tea (19.99 + 2.99)
                 payment_status='paid',
                 payment_amount=22.98,
                 payment_intent_id='pi_test_david_smith_004',
@@ -222,7 +227,8 @@ def init_test_data():
                 payment_method='credit-card',
                 target_date=str(today + timedelta(days=1)),
                 target_time='18:30',
-                order_type='reservation'
+                order_type='reservation',
+                customer_phone='+1987654321'  # Add phone number for lookups
             )
         ]
         db.session.add_all(smith_orders)
@@ -296,7 +302,7 @@ def init_test_data():
                 table_id=3, 
                 person_name='Charlie Wilson', 
                 status='pending', 
-                total_amount=21.98,  # Grilled Salmon + Draft Beer
+                total_amount=23.98,  # Grilled Salmon + Draft Beer (18.99 + 4.99)
                 payment_status='unpaid',
                 target_date=str(today + timedelta(days=2)),
                 target_time='20:00',
@@ -308,7 +314,7 @@ def init_test_data():
                 table_id=3, 
                 person_name='Diana Wilson', 
                 status='pending', 
-                total_amount=15.98,  # Chicken Caesar Salad + House Wine
+                total_amount=20.98,  # Chicken Caesar Salad + House Wine (13.99 + 6.99)
                 payment_status='unpaid',
                 target_date=str(today + timedelta(days=2)),
                 target_time='20:00',
@@ -320,7 +326,7 @@ def init_test_data():
                 table_id=3, 
                 person_name='Edward Wilson', 
                 status='pending', 
-                total_amount=18.98,  # BBQ Ribs + Pepsi
+                total_amount=22.98,  # BBQ Ribs + Pepsi (19.99 + 2.99)
                 payment_status='unpaid',
                 target_date=str(today + timedelta(days=2)),
                 target_time='20:00',
@@ -332,7 +338,7 @@ def init_test_data():
                 table_id=3, 
                 person_name='Fiona Wilson', 
                 status='pending', 
-                total_amount=11.98,  # Buffalo Wings + Mountain Dew
+                total_amount=15.98,  # Buffalo Wings + Mountain Dew (12.99 + 2.99)
                 payment_status='unpaid',
                 target_date=str(today + timedelta(days=2)),
                 target_time='20:00',
@@ -431,14 +437,14 @@ def init_test_data():
                 order_number=generate_order_number(),
                 person_name='Lisa Chen',
                 status='pending',
-                total_amount=27.97,  # Classic Cheeseburger + Loaded Fries + Mountain Dew
+                total_amount=25.97,  # Classic Cheeseburger + Loaded Fries + Mountain Dew (13.99 + 8.99 + 2.99)
                 target_date=str(today),
                 target_time='19:30',
                 order_type='pickup',
                 customer_phone='+15551234567',
                 special_instructions='Extra spicy, no pickles',
                 payment_status='paid',
-                payment_amount=27.97,
+                payment_amount=25.97,
                 payment_intent_id='pi_test_lisa_chen_005',
                 payment_date=datetime.now() - timedelta(minutes=10),
                 confirmation_number='ORD3001',
@@ -466,14 +472,14 @@ def init_test_data():
                 order_number=generate_order_number(),
                 person_name='Rachel Green',
                 status='ready',
-                total_amount=16.98,  # Caesar Salad + Coffee
+                total_amount=12.98,  # Caesar Salad + Coffee (9.99 + 2.99)
                 target_date=str(today),
                 target_time='18:45',
                 order_type='pickup',
                 customer_phone='+15554567890',
                 special_instructions='Extra croutons',
                 payment_status='paid',
-                payment_amount=16.98,
+                payment_amount=12.98,
                 payment_intent_id='pi_test_rachel_green_007',
                 payment_date=datetime.now() - timedelta(minutes=45),
                 confirmation_number='ORD3003',

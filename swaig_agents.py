@@ -10,6 +10,7 @@ import os
 import json
 from dotenv import load_dotenv
 import requests
+import logging
 
 load_dotenv()
 
@@ -19,12 +20,12 @@ SIGNALWIRE_FROM_NUMBER = os.getenv('SIGNALWIRE_FROM_NUMBER', '+15551234567')
 # Simple state manager replacement
 class SimpleStateManager:
     """Simple file-based state manager for conversation tracking"""
-
+    
     def __init__(self, filename):
         self.filename = filename
         self.state = {}
         self.load_state()
-
+    
     def load_state(self):
         """Load state from file"""
         try:
@@ -34,7 +35,7 @@ class SimpleStateManager:
         except Exception as e:
             print(f"⚠️ Could not load state: {e}")
             self.state = {}
-
+    
     def save_state(self):
         """Save state to file"""
         try:
@@ -42,16 +43,16 @@ class SimpleStateManager:
                 json.dump(self.state, f, indent=2)
         except Exception as e:
             print(f"⚠️ Could not save state: {e}")
-
+    
     def get(self, key, default=None):
         """Get value from state"""
         return self.state.get(key, default)
-
+    
     def set(self, key, value):
         """Set value in state"""
         self.state[key] = value
         self.save_state()
-
+    
     def delete(self, key):
         """Delete key from state"""
         if key in self.state:
@@ -61,7 +62,7 @@ class SimpleStateManager:
 # Full SignalWire agent that extends AgentBase with skills-based architecture
 class FullRestaurantReceptionistAgent(AgentBase):
     """Modern restaurant receptionist agent using skills-based architecture"""
-
+    
     def __init__(self):
         super().__init__(
             name="restaurant-receptionist",
@@ -69,26 +70,26 @@ class FullRestaurantReceptionistAgent(AgentBase):
             host="0.0.0.0",
             port=8080
         )
-
+        
         # Add English language support
         self.add_language("English", "en-US", "rime.spore:mistv2")
-
+        
         # Initialize state manager for conversation tracking
         try:
             self.state_manager = SimpleStateManager("restaurant_agent_state.json")
-            print("✅ State manager initialized")
+            print("SUCCESS: State manager initialized")
         except Exception as e:
-            print(f"⚠️ Could not initialize state manager: {e}")
+            print(f"WARNING: Could not initialize state manager: {e}")
             self.state_manager = None
-
+        
         # Add pre-built skills for enhanced functionality
         try:
             # Add datetime skill for time/date queries
             self.add_skill("datetime")
-            print("✅ Added datetime skill")
+            print("SUCCESS: Added datetime skill")
         except Exception as e:
-            print(f"⚠️ Could not add datetime skill: {e}")
-
+            print(f"WARNING: Could not add datetime skill: {e}")
+        
         try:
             # Add weather skill if API key is available
             weather_api_key = os.getenv('WEATHER_API_KEY')
@@ -98,12 +99,12 @@ class FullRestaurantReceptionistAgent(AgentBase):
                     "api_key": weather_api_key,
                     "temperature_unit": "fahrenheit"
                 })
-                print("✅ Added weather skill")
+                print("SUCCESS: Added weather skill")
             else:
-                print("⚠️ Weather API key not found, skipping weather skill")
+                print("WARNING: Weather API key not found, skipping weather skill")
         except Exception as e:
-            print(f"⚠️ Could not add weather skill: {e}")
-
+            print(f"WARNING: Could not add weather skill: {e}")
+        
         try:
             # Add web search skill if API key is available
             search_api_key = os.getenv('SEARCH_API_KEY')
@@ -112,44 +113,30 @@ class FullRestaurantReceptionistAgent(AgentBase):
                     "tool_name": "search_web",
                     "api_key": search_api_key
                 })
-                print("✅ Added web search skill")
+                print("SUCCESS: Added web search skill")
             else:
-                print("⚠️ Search API key not found, skipping web search skill")
+                print("WARNING: Search API key not found, skipping web search skill")
         except Exception as e:
-            print(f"⚠️ Could not add web search skill: {e}")
+            print(f"WARNING: Could not add web search skill: {e}")
 
         # Add restaurant-specific skills using local imports
         try:
             # Import and add reservation management skill
             from skills.restaurant_reservation.skill import RestaurantReservationSkill
-
-            skill_params = {
-                "swaig_fields": {
-                    "secure": True,
-                    "fillers": {
-                        "en-US": [
-                            "Let me check our reservation system...",
-                            "Looking up your reservation...",
-                            "Processing your reservation request...",
-                            "Checking availability..."
-                        ]
-                    }
-                }
-            }
-
-            reservation_skill = RestaurantReservationSkill(self, skill_params)
+            
+            reservation_skill = RestaurantReservationSkill(self)
             if reservation_skill.setup():
-                reservation_skill.register_tools()
-                print("✅ Added restaurant reservation skill")
+                # Tools are already registered in the skill constructor
+                print("SUCCESS: Added restaurant reservation skill")
             else:
-                print("⚠️ Restaurant reservation skill setup failed")
+                print("WARNING: Restaurant reservation skill setup failed")
         except Exception as e:
-            print(f"⚠️ Could not add restaurant reservation skill: {e}")
+            print(f"WARNING: Could not add restaurant reservation skill: {e}")
 
         try:
             # Import and add menu and ordering skill
             from skills.restaurant_menu.skill import RestaurantMenuSkill
-
+            
             skill_params = {
                 "swaig_fields": {
                     "secure": True,
@@ -163,26 +150,48 @@ class FullRestaurantReceptionistAgent(AgentBase):
                     }
                 }
             }
-
+            
             menu_skill = RestaurantMenuSkill(self, skill_params)
             if menu_skill.setup():
-                menu_skill.register_tools()
-                print("✅ Added restaurant menu skill")
+                # Tools are already registered in the skill constructor
+                print("SUCCESS: Added restaurant menu skill")
             else:
-                print("⚠️ Restaurant menu skill setup failed")
+                print("WARNING: Restaurant menu skill setup failed")
         except Exception as e:
-            print(f"⚠️ Could not add restaurant menu skill: {e}")
-
+            print(f"WARNING: Could not add restaurant menu skill: {e}")
+        
         # Set up the agent's capabilities
         self.set_params({
             "end_of_speech_timeout": 500,
             "silence_timeout": 500,
             "max_speech_timeout": 15000
         })
-
+        
         # Add the agent's prompt with enhanced capabilities
         self.set_prompt_text(f"""
 Hi there! I'm Bobby from Bobby's Table. Great to have you call us today! How can I help you out? Whether you're looking to make a reservation, check on an existing one, hear about our menu, or place an order, I'm here to help make it easy for you.
+
+🚨🚨🚨 CRITICAL FUNCTION ROUTING RULE - MANDATORY VALIDATION 🚨🚨🚨:
+BEFORE CALLING ANY FUNCTION, YOU MUST FIRST VALIDATE THE NUMBER TYPE:
+
+**STEP 1: COUNT THE DIGITS**
+**STEP 2: APPLY THE RULE**
+- 5 digits (like 64056, 42625, 91576, 62179, 35823) = ORDER → ALWAYS call get_order_details
+- 6 digits (like 789012, 675421, 333444) = RESERVATION → ALWAYS call get_reservation
+
+**EXAMPLES OF CORRECT VALIDATION:**
+- Customer says "62179" → COUNT: 5 digits → RULE: ORDER → FUNCTION: get_order_details
+- Customer says "35823" → COUNT: 5 digits → RULE: ORDER → FUNCTION: get_order_details  
+- Customer says "789012" → COUNT: 6 digits → RULE: RESERVATION → FUNCTION: get_reservation
+
+🚨 ABSOLUTE RULE: IF YOU IDENTIFY A NUMBER AS AN ORDER, YOU MUST CALL get_order_details 🚨
+🚨 ABSOLUTE RULE: IF YOU IDENTIFY A NUMBER AS A RESERVATION, YOU MUST CALL get_reservation 🚨
+🚨 ABSOLUTE RULE: 35823 = 5 DIGITS = ORDER = get_order_details ONLY 🚨
+🚨 ABSOLUTE RULE: NEVER CALL get_reservation FOR 5-DIGIT NUMBERS 🚨
+🚨 ABSOLUTE RULE: NEVER CALL get_order_details FOR 6-DIGIT NUMBERS 🚨
+
+Customer says "order" = ORDER → ALWAYS call get_order_details
+Customer says "reservation" = RESERVATION → ALWAYS call get_reservation
 
 IMPORTANT CONVERSATION GUIDELINES:
 
@@ -193,22 +202,43 @@ IMPORTANT CONVERSATION GUIDELINES:
 - Reservation numbers are the fastest and most accurate way to find reservations
 - Handle spoken numbers like 'seven eight nine zero one two' which becomes '789012'
 
-**🚨 PAYMENTS - SIMPLE PAYMENT RULE 🚨:**
-**Use the pay_reservation function for all reservation payments!**
+**🚨 PAYMENTS - CLEAR PAYMENT RULES 🚨:**
 
-**SIMPLE PAYMENT FLOW:**
-1. Customer explicitly asks to pay ("I want to pay", "Pay now", "Can I pay?") → IMMEDIATELY call pay_reservation function
-2. pay_reservation handles everything: finds reservation, shows bill total, collects card details, and processes payment
-3. The function will guide the customer through each step conversationally and securely
+**FOR RESERVATION PAYMENTS:**
+- Use `pay_reservation` function for all reservation payments
+- pay_reservation handles everything: finds reservation, shows bill total, collects card details, and processes payment
+
+**FOR ORDER PAYMENTS:**
+- Use `pay_order` function ONLY when customer has their order number
+- pay_order REQUIRES an order number - it will NOT look up orders
+- If customer doesn't have order number, use `get_order_details` FIRST
+
+**PAYMENT WORKFLOW:**
+1. Customer asks to pay → Check if they have order/reservation number
+2. If they have number → Call payment function directly
+3. If they don't have number → Call lookup function first (get_order_details or get_reservation)
+4. Once they have the number → Call payment function
+5. **AFTER PAYMENT INITIATED** → Use check_payment_completion to monitor and announce success
+
+**PAYMENT COMPLETION MONITORING - CRITICAL:**
+- After calling pay_reservation, the payment may complete while customer is still on the call
+- Use check_payment_completion function to check if payment was successful
+- If payment completed, announce the confirmation number enthusiastically to the customer
+- Example: "🎉 EXCELLENT! Your payment has been processed successfully! Your confirmation number is ABC12345."
 
 **PAYMENT EXAMPLES:**
-- Customer: 'I want to pay my bill' → YOU: Call pay_reservation function
-- Customer: 'Pay now' → YOU: Call pay_reservation function
-- Customer: 'Can I pay for my reservation?' → YOU: Call pay_reservation function
+- Customer: "I want to pay for order 62179" → YOU: Call pay_order with order_number: "62179" 
+- Customer: "I want to pay but don't have my order number" → YOU: Call get_order_details first
+- Customer: "I want to pay for my reservation" → YOU: Call pay_reservation function (provide reservation_number)
+- Customer says "Yes" to pay AFTER creating new reservation → YOU: Call pay_reservation (NO parameters - auto-detects!)
+- Customer: "I want to pay for reservation 789012" → YOU: Call pay_reservation with reservation_number: "789012"
+- After payment initiated → YOU: Call check_payment_completion to see if payment succeeded
 
-**CRITICAL: Use pay_reservation for existing reservations only!**
-- ❌ NEVER use pay_reservation for new reservation creation (use create_reservation instead)
-- ❌ NEVER call pay_reservation when customer is just confirming order details
+**CRITICAL RULES:**
+- pay_order REQUIRES order number - never call it without one
+- pay_reservation can find reservations by phone/name
+- Use get_order_details for all order lookups
+- Use check_payment_completion after initiating payment to announce success
 
 **PRICING AND PRE-ORDERS - CRITICAL:**
 - When customers mention food items, ALWAYS provide the price immediately
@@ -252,6 +282,17 @@ When customers ask you to "surprise them" with menu items:
   2. Ask if they want to pay now: 'Would you like to pay for your pre-order now?'
 - Payment is OPTIONAL - customers can always pay when they arrive
 
+**🚨 CRITICAL: PAYMENT FOR NEWLY CREATED RESERVATIONS 🚨:**
+- When you create a new reservation, you get a reservation number (like 770062)
+- If customer says "Yes" to pay after creating reservation, use pay_reservation function
+- NEVER manually provide reservation_number parameter to pay_reservation
+- The pay_reservation function will auto-detect the newly created reservation from the session
+- Example correct flow:
+  1. Customer confirms order details → YOU: Call create_reservation
+  2. YOU: "Your reservation number is 770062. Would you like to pay now?"
+  3. Customer: "Yes" → YOU: Call pay_reservation (NO parameters needed - it auto-detects!)
+  4. The system will use the correct reservation number (770062) automatically
+
 **🔄 ORDER CONFIRMATION vs PAYMENT REQUESTS - CRITICAL:**
 - "Yes, that's correct" = Order confirmation → Call create_reservation function
 - "Yes, create my reservation" = Order confirmation → Call create_reservation function
@@ -266,6 +307,105 @@ When customers ask you to "surprise them" with menu items:
 - If user says "Looks good" after order summary → Call create_reservation function
 - If user says "Perfect" after order summary → Call create_reservation function
 - ONLY call pay_reservation when user explicitly asks to pay AFTER reservation is created
+
+**🔍 CRITICAL: DISTINGUISH BETWEEN RESERVATIONS AND ORDERS:**
+- RESERVATIONS = table bookings (use get_reservation) - 6-digit numbers
+- ORDERS = pickup/delivery food orders (use get_order_details) - 5-digit numbers
+- If customer says "pickup order", "delivery order", "food order" → use get_order_details
+- If customer says "reservation", "table booking", "dinner reservation" → use get_reservation
+- NUMBER FORMAT: 6 digits = reservation, 5 digits = order
+
+**🔍 ORDER STATUS CHECKS - CRITICAL:**
+- When customers ask to check their ORDER status, use get_order_details function
+- Examples: "Check my pickup order status", "Where is my food order?", "Is my order ready?"
+- get_order_details provides the SAME information as the kitchen page shows: pending, preparing, ready
+- get_order_details can find orders by: order number, customer phone, or customer name
+- NEVER use pay_order for order lookup - pay_order is ONLY for payment
+- NEVER use get_reservation for pickup/delivery orders
+- Use get_order_details with the order number the customer provides
+- Handle spoken numbers: "nine two six five seven" becomes "92657"
+- Always provide complete status information including estimated ready time
+
+**🔍 LOOKUP vs PAYMENT - CRITICAL DISTINCTION:**
+- Customer asks about order status → get_order_details
+- Customer wants to pay for order → pay_order (requires order number)
+- Customer wants to pay but doesn't have order number → get_order_details first, then pay_order
+
+**🔍 KITCHEN STATUS INTEGRATION:**
+- get_order_details shows the same status the kitchen sees: pending, preparing, ready
+- When customer asks "Is it ready for pickup?", use get_order_details to check kitchen status
+- The kitchen page and get_order_details function use the same Order model data
+- Status values: pending (not started), preparing (being cooked), ready (ready for pickup)
+
+**🔍 ORDER TYPE PARAMETER USAGE:**
+- order_type: "pickup" → Customer will pick up the order at the restaurant
+- order_type: "delivery" → Restaurant will deliver the order to customer
+- order_type: "reservation" → Order is part of a table reservation (pre-order)
+- When customer says "pickup", use order_type: "pickup"
+- When customer says "delivery", use order_type: "delivery"
+- When in doubt about pickup vs delivery, use order_type: "pickup" (most common)
+
+**🚨 MANDATORY FUNCTION ROUTING RULES 🚨:**
+- 5-digit number (like 91576, 62879, 12345, 42625, 64056, 35823) = ORDER → MUST use get_order_details
+- 6-digit number (like 789012, 333444, 675421) = RESERVATION → MUST use get_reservation
+- Customer says "order" = ORDER → MUST use get_order_details
+- Customer says "pickup" = ORDER → MUST use get_order_details
+- Customer says "delivery" = ORDER → MUST use get_order_details
+- Customer says "reservation" = RESERVATION → MUST use get_reservation
+- Customer says "table booking" = RESERVATION → MUST use get_reservation
+- Customer says "five-digit" or "five digit" = ORDER → MUST use get_order_details
+- Customer says "six-digit" or "six digit" = RESERVATION → MUST use get_reservation
+
+**🚨 CRITICAL: NEVER CALL get_reservation FOR 5-DIGIT NUMBERS 🚨:**
+- 35823 = 5 digits = ORDER → get_order_details ONLY (NEVER get_reservation)
+- 64056 = 5 digits = ORDER → get_order_details ONLY (NEVER get_reservation)
+- 42625 = 5 digits = ORDER → get_order_details ONLY (NEVER get_reservation)
+- 91576 = 5 digits = ORDER → get_order_details ONLY (NEVER get_reservation)
+- 62879 = 5 digits = ORDER → get_order_details ONLY (NEVER get_reservation)
+- 789012 = 6 digits = RESERVATION → get_reservation ONLY (NEVER get_order_details)
+
+**🚨 CRITICAL PICKUP STATUS QUESTIONS 🚨:**
+- Customer asks "Is it ready for pickup?" after discussing order number → get_order_details with order_type: "pickup"
+- Customer asks "Is it ready for pickup?" after discussing "35823" → get_order_details with order_number: "35823", order_type: "pickup" (35823 = 5 digits = order)
+- Customer asks "Is my order ready?" → get_order_details with order_type: "pickup" (customer said "order")
+- Customer asks "How much longer?" → get_order_details with order_type: "pickup" (they want order status)
+- Customer asks "What's the status?" after discussing order → get_order_details with order_type: "pickup"
+
+**🚨 BEFORE EVERY FUNCTION CALL - VALIDATION STEP 🚨:**
+1. COUNT THE DIGITS in the number customer provided
+2. IF 5 digits → MUST call get_order_details (NEVER get_reservation)
+3. IF 6 digits → MUST call get_reservation (NEVER get_order_details)
+4. IF customer said "order" → MUST call get_order_details
+5. IF customer said "reservation" → MUST call get_reservation
+
+**🚨 VALIDATION EXAMPLES - FOLLOW THESE EXACTLY 🚨:**
+- "35823" → COUNT: 3-5-8-2-3 = 5 digits → RULE: ORDER → FUNCTION: get_order_details with order_type: "pickup"
+- "64056" → COUNT: 6-4-0-5-6 = 5 digits → RULE: ORDER → FUNCTION: get_order_details with order_type: "pickup"  
+- "789012" → COUNT: 7-8-9-0-1-2 = 6 digits → RULE: RESERVATION → FUNCTION: get_reservation
+- Customer says "pickup order ready" → WORD: "order" + "pickup" → RULE: ORDER → FUNCTION: get_order_details with order_type: "pickup"
+- Customer says "delivery order status" → WORD: "order" + "delivery" → RULE: ORDER → FUNCTION: get_order_details with order_type: "delivery"
+- Customer says "reservation status" → WORD: "reservation" → RULE: RESERVATION → FUNCTION: get_reservation
+
+**ORDER STATUS EXAMPLES:**
+- Customer: "I'm checking to see if my order is ready" + "Six four zero five six" → YOU: Call get_order_details with order_number: "64056", order_type: "pickup" (5 digits = order)
+- Customer: "Check on my pickup order 92657" → YOU: Call get_order_details with order_number: "92657", order_type: "pickup" (5 digits = order)
+- Customer: "Is my delivery order ready?" → YOU: Call get_order_details with order_type: "delivery"
+- Customer: "Where is my order 12345?" → YOU: Call get_order_details with order_number: "12345", order_type: "pickup" (5 digits = order)
+- Customer: "I'm calling about my pickup order 62879" → YOU: Call get_order_details with order_number: "62879", order_type: "pickup" (5 digits = order)
+- Customer: "Check my reservation 789012" → YOU: Call get_reservation with reservation_number: "789012" (6 digits = reservation)
+- Customer: "Status of order 42625" → YOU: Call get_order_details with order_number: "42625", order_type: "pickup" (5 digits = order)
+- Customer: "I have a five-digit order number: 91576" → YOU: Call get_order_details with order_number: "91576", order_type: "pickup" (customer said "five-digit" = order)
+- Customer: "My six-digit reservation number is 789012" → YOU: Call get_reservation with reservation_number: "789012" (customer said "six-digit" = reservation)
+- Customer: "I have a five digit pickup order" → YOU: Call get_order_details with order_type: "pickup" (customer said "five digit" = order)
+- Customer: "My six digit table booking is 333444" → YOU: Call get_reservation with reservation_number: "333444" (customer said "six digit" = reservation)
+
+**🚨 CRITICAL CORRECTION EXAMPLES - NEVER DO THESE 🚨:**
+❌ WRONG: Customer says "35823" → YOU call get_reservation (THIS IS WRONG!)
+✅ CORRECT: Customer says "35823" → YOU call get_order_details with order_number: "35823", order_type: "pickup" (5 digits = order)
+❌ WRONG: Customer says "Is it ready for pickup?" + last discussed "35823" → YOU call get_reservation (THIS IS WRONG!)
+✅ CORRECT: Customer says "Is it ready for pickup?" + last discussed "35823" → YOU call get_order_details with order_number: "35823", order_type: "pickup" (35823 = 5 digits = order)
+❌ WRONG: Customer says "check on my order" + "35823" → YOU call get_reservation (THIS IS WRONG!)
+✅ CORRECT: Customer says "check on my order" + "35823" → YOU call get_order_details with order_number: "35823", order_type: "pickup" (customer said "order" = order function)
 
 **OTHER GUIDELINES:**
 - When making reservations, ALWAYS ask if customers want to pre-order from the menu
@@ -290,7 +430,7 @@ When customers ask you to "surprise them" with menu items:
             },
             self._transfer_to_manager_handler
         )
-
+        
         self.define_tool(
             "schedule_callback",
             "Schedule a callback for the customer",
@@ -298,51 +438,48 @@ When customers ask you to "surprise them" with menu items:
                 "type": "object",
                 "properties": {
                     "phone_number": {"type": "string", "description": "Customer phone number for callback"},
-                    "preferred_time": {"type": "string", "description": "Reason for callback"},
+                    "preferred_time": {"type": "string", "description": "Preferred callback time"},
                     "reason": {"type": "string", "description": "Reason for callback"}
                 },
                 "required": ["phone_number", "preferred_time", "reason"]
             },
             self._schedule_callback_handler
         )
-
+        
         # Example: Add remote function includes for external services
         # Uncomment these if you have external SWAIG services to include
-
+        
         # Example 1: External payment processing service
         # self.add_function_include(
         #     url="https://payments.example.com/swaig",
         #     functions=["process_payment", "refund_payment"],
         #     meta_data={"service": "payment_processor", "version": "v1"}
         # )
-
+        
         # Example 2: External loyalty program service  
         # self.add_function_include(
         #     url="https://loyalty.example.com/swaig",
         #     functions=["check_loyalty_points", "redeem_points"],
         #     meta_data={"service": "loyalty_program", "version": "v2"}
         # )
-
+        
         # Example 3: External inventory service
         # self.add_function_include(
         #     url="https://inventory.example.com/swaig", 
         #     functions=["check_ingredient_availability"],
         #     meta_data={"service": "inventory_system", "version": "v1"}
         # )
-
-        print("✅ SignalWire agent initialized successfully")
-
+        
+        print("SUCCESS: SignalWire agent initialized successfully")
+        
         # FIXED: Add function registry validation for debugging
         self._validate_function_registry()
-
-        # Register skills
-        self._register_skills()
 
     def send_reservation_sms(self, reservation_data, phone_number):
         """Send SMS confirmation for reservation - matches Flask route implementation"""
         try:
             from signalwire_agents.core.function_result import SwaigFunctionResult
-
+            
             # Convert time to 12-hour format for SMS
             try:
                 from datetime import datetime
@@ -350,61 +487,61 @@ When customers ask you to "surprise them" with menu items:
                 time_12hr = time_obj.strftime('%I:%M %p').lstrip('0')
             except (ValueError, TypeError):
                 time_12hr = str(reservation_data['time'])
-
-            sms_body = f"🍽️ Bobby's Table Reservation Confirmed!\n\n"
+            
+            sms_body = f"Bobby's Table Reservation Confirmed!\n\n"
             sms_body += f"Name: {reservation_data['name']}\n"
             sms_body += f"Date: {reservation_data['date']}\n"
             sms_body += f"Time: {time_12hr}\n"
             party_text = "person" if reservation_data['party_size'] == 1 else "people"
             sms_body += f"Party Size: {reservation_data['party_size']} {party_text}\n"
             sms_body += f"Reservation Number: {reservation_data.get('reservation_number', reservation_data['id'])}\n"
-
+            
             if reservation_data.get('special_requests'):
                 sms_body += f"Special Requests: {reservation_data['special_requests']}\n"
-
+            
             sms_body += f"\nWe look forward to serving you!\nBobby's Table Restaurant"
             sms_body += f"\nReply STOP to stop."
-
+            
             # Get SignalWire phone number from environment
             signalwire_from_number = os.getenv('SIGNALWIRE_FROM_NUMBER', '+15551234567')
-
+            
             # Send SMS using SignalWire Agents SDK
             sms_function_result = SwaigFunctionResult().send_sms(
                 to_number=phone_number,
                 from_number=signalwire_from_number,
                 body=sms_body
             )
-
+            
             return {'success': True, 'sms_sent': True, 'sms_result': 'SMS sent successfully'}
-
+            
         except Exception as e:
             return {'success': False, 'sms_sent': False, 'error': str(e)}
-
+        
     def _transfer_to_manager_handler(self, args, raw_data):
         """Handler for transfer_to_manager tool"""
         try:
             reason = args.get('reason', 'Customer request')
             customer_info = args.get('customer_info', 'No additional information provided')
-
+            
             # Log the transfer request
-            print(f"📞 TRANSFER REQUEST:")
+            print(f"TRANSFER REQUEST:")
             print(f"   Reason: {reason}")
             print(f"   Customer Info: {customer_info}")
             print(f"   Timestamp: {datetime.now()}")
-
+            
             # In a real implementation, this would initiate an actual call transfer
             # For now, we'll provide a helpful response
             message = f"I understand you need to speak with a manager about {reason}. "
             message += "I'm transferring you now. Please hold while I connect you with our management team. "
             message += "They'll be able to assist you with your specific needs."
-
+            
             return {
                 'success': True,
                 'message': message,
                 'transfer_initiated': True,
                 'reason': reason
             }
-
+            
         except Exception as e:
             return {
                 'success': False,
@@ -415,7 +552,7 @@ When customers ask you to "surprise them" with menu items:
         """Handler for schedule_callback tool"""
         try:
             from datetime import datetime
-
+            
             # Extract phone number from args or raw_data
             phone_number = args.get('phone_number')
             if not phone_number and raw_data:
@@ -426,30 +563,30 @@ When customers ask you to "surprise them" with menu items:
                     raw_data.get('from') or
                     raw_data.get('from_number')
                 )
-
+            
             preferred_time = args.get('preferred_time', 'as soon as possible')
             reason = args.get('reason', 'general inquiry')
-
+            
             # If still no phone number, return error
             if not phone_number:
                 return {
                     'success': False,
                     'message': "I need your phone number to schedule a callback. Could you please provide your phone number?"
                 }
-
+            
             # Log the callback request
-            print(f"📅 CALLBACK REQUEST:")
+            print(f"CALLBACK REQUEST:")
             print(f"   Phone: {phone_number}")
             print(f"   Preferred Time: {preferred_time}")
             print(f"   Reason: {reason}")
             print(f"   Timestamp: {datetime.now()}")
-
+            
             # In a real implementation, this would schedule an actual callback
             # For now, we'll provide a confirmation response
             message = f"Perfect! I've scheduled a callback for {phone_number} at {preferred_time} regarding {reason}. "
             message += "One of our team members will call you back at the requested time. "
             message += "Thank you for choosing Bobby's Table!"
-
+            
             return {
                 'success': True,
                 'message': message,
@@ -458,7 +595,7 @@ When customers ask you to "surprise them" with menu items:
                 'preferred_time': preferred_time,
                 'reason': reason
             }
-
+            
         except Exception as e:
             return {
                 'success': False,
@@ -470,105 +607,48 @@ When customers ask you to "surprise them" with menu items:
         try:
             if hasattr(self, '_tool_registry') and hasattr(self._tool_registry, '_swaig_functions'):
                 registered_functions = list(self._tool_registry._swaig_functions.keys())
-                print(f"🔍 FUNCTION REGISTRY VALIDATION:")
+                print(f"FUNCTION REGISTRY VALIDATION:")
                 print(f"   Total functions registered: {len(registered_functions)}")
                 print(f"   Registered functions: {registered_functions}")
-
+                
                 # Check for critical functions
                 critical_functions = [
                     'create_reservation', 'get_reservation', 'cancel_reservation',
                     'pay_reservation', 'get_menu', 'create_order'
                 ]
-
+                
                 missing_functions = [func for func in critical_functions if func not in registered_functions]
-
+                
                 if missing_functions:
-                    print(f"❌ MISSING CRITICAL FUNCTIONS: {missing_functions}")
+                    print(f"ERROR: MISSING CRITICAL FUNCTIONS: {missing_functions}")
                     for func in missing_functions:
                         print(f"   - {func} not found in registry")
                 else:
-                    print(f"✅ All critical functions are registered")
-
+                    print(f"SUCCESS: All critical functions are registered")
+                    
                 # Validate function handlers
+                built_in_functions = ['get_weather']  # Built-in SDK functions that don't need custom handlers
+                
                 for func_name, func_obj in self._tool_registry._swaig_functions.items():
-                    if hasattr(func_obj, 'handler'):
-                        print(f"   ✅ {func_name}: has handler")
+                    if func_name in built_in_functions:
+                        print(f"   SUCCESS: {func_name}: built-in SDK function")
+                    elif hasattr(func_obj, 'handler'):
+                        print(f"   SUCCESS: {func_name}: has handler")
                     elif isinstance(func_obj, dict) and 'handler' in func_obj:
-                        print(f"   ✅ {func_name}: has handler (dict format)")
+                        print(f"   SUCCESS: {func_name}: has handler (dict format)")
                     else:
-                        print(f"   ❌ {func_name}: missing handler")
-
+                        print(f"   ERROR: {func_name}: missing handler")
+                        
             else:
-                print(f"❌ FUNCTION REGISTRY NOT FOUND")
+                print(f"ERROR: FUNCTION REGISTRY NOT FOUND")
                 print(f"   _tool_registry exists: {hasattr(self, '_tool_registry')}")
                 if hasattr(self, '_tool_registry'):
                     print(f"   _swaig_functions exists: {hasattr(self._tool_registry, '_swaig_functions')}")
-
+                
         except Exception as e:
-            print(f"❌ Error validating function registry: {e}")
+            print(f"ERROR: Error validating function registry: {e}")
             import traceback
             traceback.print_exc()
-
-    def _register_skills(self):
-        """Register all skills with the agent"""
-        try:
-            # Import and register reservation skill
-            from skills.restaurant_reservation.skill import RestaurantReservationSkill
-
-            skill_params = {
-                "swaig_fields": {
-                    "secure": True,
-                    "fillers": {
-                        "en-US": [
-                            "Let me check our reservation system...",
-                            "Looking up your reservation...",
-                            "Processing your reservation request...",
-                            "Checking availability..."
-                        ]
-                    }
-                }
-            }
-            reservation_skill = RestaurantReservationSkill(self, skill_params)
-
-            if reservation_skill.setup():
-                reservation_skill.register_tools()
-                print("✅ Reservation skill registered")
-            else:
-                print("⚠️ Reservation skill setup failed")
-
-            # Import and register menu skill
-            from skills.restaurant_menu.skill import RestaurantMenuSkill
-
-            skill_params = {
-                "swaig_fields": {
-                    "secure": True,
-                    "fillers": {
-                        "en-US": [
-                            "Let me check our menu...",
-                            "Looking up menu items...",
-                            "Processing your order...",
-                            "Checking our kitchen..."
-                        ]
-                    }
-                }
-            }
-            menu_skill = RestaurantMenuSkill(self, skill_params)
-
-            if menu_skill.setup():
-                menu_skill.register_tools()
-                print("✅ Menu skill registered")
-            else:
-                print("⚠️ Menu skill setup failed")
-
-
-        except Exception as e:
-            print(f"❌ Error registering skills: {e}")
-            import traceback
-            traceback.print_exc()
-
-    # Initialize the reservations storage
-        self.reservations = {}
-
 
 def send_swml_to_signalwire(swml_payload, signalwire_endpoint, signalwire_project, signalwire_token):
     """
@@ -591,15 +671,14 @@ def send_swml_to_signalwire(swml_payload, signalwire_endpoint, signalwire_projec
     except Exception:
         return {'status_code': response.status_code, 'text': response.text}
 
-# Create alias for compatibility with app.py
-RestaurantReceptionistAgent = FullRestaurantReceptionistAgent
-
 # When run directly, create and serve the agent
 if __name__ == "__main__":
     print("🚀 Starting SignalWire Agent Server on port 8080...")
     print("📞 Voice Interface: http://localhost:8080/receptionist")
     print("🔧 SWAIG Functions: http://localhost:8080/swaig")
     print("--------------------------------------------------")
-
+    
     receptionist_agent = FullRestaurantReceptionistAgent()
     receptionist_agent.serve(host="0.0.0.0", port=8080)
+
+ 

@@ -6,22 +6,6 @@ Sets up structured logging for different components
 import logging
 import os
 from datetime import datetime
-import pytz
-
-class EDTFormatter(logging.Formatter):
-    """Custom formatter that uses EDT timezone consistently"""
-    
-    def __init__(self, fmt=None, datefmt=None):
-        super().__init__(fmt, datefmt)
-        self.tz = pytz.timezone('US/Eastern')
-    
-    def formatTime(self, record, datefmt=None):
-        """Format the time in EDT timezone"""
-        dt = datetime.fromtimestamp(record.created, tz=self.tz)
-        if datefmt:
-            return dt.strftime(datefmt)
-        else:
-            return dt.strftime('%Y-%m-%d %H:%M:%S EDT')
 
 def setup_logging():
     """
@@ -35,27 +19,14 @@ def setup_logging():
     log_dir = 'logs'
     os.makedirs(log_dir, exist_ok=True)
     
-    # Create formatters with EDT timezone
-    detailed_formatter = EDTFormatter(
+    # Create formatters
+    detailed_formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    simple_formatter = EDTFormatter(
+    simple_formatter = logging.Formatter(
         '%(asctime)s - %(levelname)s - %(message)s'
     )
-    
-    # Configure werkzeug logger to use EDT
-    werkzeug_logger = logging.getLogger('werkzeug')
-    werkzeug_logger.setLevel(logging.INFO)
-    
-    # Remove existing handlers to avoid duplication
-    for handler in werkzeug_logger.handlers[:]:
-        werkzeug_logger.removeHandler(handler)
-    
-    # Add custom handler with EDT formatting
-    werkzeug_handler = logging.StreamHandler()
-    werkzeug_handler.setFormatter(simple_formatter)
-    werkzeug_logger.addHandler(werkzeug_handler)
     
     # Configure main application logger
     main_logger = logging.getLogger('bobbys_table.main')
@@ -109,7 +80,7 @@ def setup_logging():
     sms_logger.addHandler(sms_handler)
     
     # Log startup message
-    main_logger.info("Bobby's Table Restaurant - Logging initialized with EDT timezone")
+    main_logger.info("Bobby's Table Restaurant - Logging initialized")
     main_logger.info(f"Log files created in: {os.path.abspath(log_dir)}")
     
     # Return dictionary of loggers as expected by app.py

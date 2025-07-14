@@ -8,6 +8,7 @@ import copy
 from datetime import datetime, timedelta
 from signalwire_agents.core.skill_base import SkillBase
 from signalwire_agents.core.function_result import SwaigFunctionResult
+import re
 
 class RestaurantMenuSkill(SkillBase):
     """Restaurant menu skill with data validation"""
@@ -22,10 +23,34 @@ class RestaurantMenuSkill(SkillBase):
         super().__init__(agent)
         self.skill_params = skill_params or {}
         self.description = "Restaurant menu system with data validation"
+        # Register tools automatically when skill is initialized
+        self.register_tools()
 
     def setup(self):
         """Setup method required by SkillBase"""
         return True
+
+    def _format_phone_number(self, phone_number):
+        """Format phone number for display - converts +15555555555 to (555) 555-5555"""
+        if not phone_number:
+            return "(555) 555-5555"  # fallback
+        
+        # Remove any non-digit characters
+        digits = re.sub(r'\D', '', phone_number)
+        
+        # If it's an 11-digit number starting with 1, format as (XXX) XXX-XXXX
+        if len(digits) == 11 and digits.startswith('1'):
+            area_code = digits[1:4]
+            exchange = digits[4:7]
+            number = digits[7:11]
+            return f"({area_code}) {exchange}-{number}"
+        elif len(digits) == 10:
+            area_code = digits[0:3]
+            exchange = digits[3:6]
+            number = digits[6:10]
+            return f"({area_code}) {exchange}-{number}"
+        else:
+            return phone_number  # return as-is if we can't format it
 
     def _ensure_menu_cached(self, raw_data):
         """Cache menu with validation"""
@@ -352,14 +377,14 @@ class RestaurantMenuSkill(SkillBase):
             
             # Check order status tool
             self.agent.define_tool(
-                name="check_order_status",
-                description="Check the status of a to-go order for pickup or delivery",
+                name="get_order_details",
+                description="Get order details and status for a to-go order for pickup or delivery. Search by order number, customer phone number, or customer name. Use this when customers ask about their order status or details.",
                 parameters={
                     "type": "object",
                     "properties": {
                         "order_number": {
                             "type": "string",
-                                                            "description": "5-digit order number"
+                            "description": "5-digit order number"
                         },
                         "customer_phone": {
                             "type": "string", 
@@ -367,14 +392,92 @@ class RestaurantMenuSkill(SkillBase):
                         },
                         "customer_name": {
                             "type": "string",
-                            "description": "Customer name (optional, for verification)"
+                            "description": "Customer name to search for orders"
+                        },
+                        "format": {
+                            "type": "string",
+                            "enum": ["text", "json"],
+                            "description": "Response format: 'text' for voice-friendly formatted text (default), 'json' for structured data",
+                            "default": "text"
                         }
                     },
                     "required": []
                 },
                 handler=self._check_order_status_handler
             )
-            print("Registered check_order_status tool")
+            print("Registered get_order_details tool")
+            
+            # Update order items tool
+            self.agent.define_tool(
+                name="update_order_items",
+                description="Add or remove items from an existing order. Reservation orders can be updated if not paid yet. Pickup orders can only be updated if status is pending.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "order_number": {
+                            "type": "string",
+                            "description": "5-digit order number"
+                        },
+                        "customer_phone": {
+                            "type": "string",
+                            "description": "Customer phone number to find the order"
+                        },
+                        "customer_name": {
+                            "type": "string",
+                            "description": "Customer name to find the order"
+                        },
+                        "action": {
+                            "type": "string",
+                            "enum": ["add", "remove"],
+                            "description": "Whether to add or remove items"
+                        },
+                        "items": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "name": {
+                                        "type": "string",
+                                        "description": "Menu item name"
+                                    },
+                                    "quantity": {
+                                        "type": "integer",
+                                        "description": "Quantity to add or remove",
+                                        "default": 1
+                                    }
+                                },
+                                "required": ["name"]
+                            },
+                            "description": "List of items to add or remove"
+                        }
+                    },
+                    "required": ["action", "items"]
+                },
+                handler=self._update_order_items_handler
+            )
+            print("Registered update_order_items tool")
+            
+            # Pay order tool
+            self.agent.define_tool(
+                name="pay_order",
+                description="Process payment for an existing order using SignalWire Pay and Stripe. REQUIRES order number - use get_order_details first if customer doesn't have their order number. Use this ONLY when customers want to pay for their order over the phone.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "order_number": {
+                            "type": "string",
+                            "description": "5-digit order number to pay for (REQUIRED for payment)"
+                        },
+                        "order_id": {
+                            "type": "integer",
+                            "description": "Order ID (alternative to order_number)"
+                        }
+                    },
+                    "required": ["order_number"]
+                },
+                handler=self._pay_order_handler
+            )
+            print("Registered pay_order tool")
             
         except Exception as e:
             print(f"Error registering restaurant menu tools: {e}")
@@ -812,7 +915,7 @@ class RestaurantMenuSkill(SkillBase):
                     sms_body += f"💰 Pre-order Total: ${pre_order_total:.2f}\n"
                 
                 sms_body += f"\n📍 Location: Bobby's Table Restaurant\n"
-                sms_body += f"📞 Call us: (412) 555-5555\n\n"
+                sms_body += f"📞 Call us: {self._format_phone_number(os.getenv('SIGNALWIRE_FROM_NUMBER', '+15555555555'))}\n\n"
                 sms_body += f"We look forward to serving you!\n"
                 sms_body += f"Reply STOP to opt out."
                 
@@ -830,10 +933,10 @@ class RestaurantMenuSkill(SkillBase):
                 sms_body += f"Your reservation has been updated.\n"
                 if reservation_date and reservation_time:
                     sms_body += f"📅 New time: {reservation_date} at {reservation_time}\n"
-                sms_body += f"\nQuestions? Call us: (412) 555-5555"
+                sms_body += f"\nQuestions? Call us: {self._format_phone_number(os.getenv('SIGNALWIRE_FROM_NUMBER', '+15555555555'))}"
             
             # Get SignalWire credentials from environment
-            signalwire_from_number = os.getenv('SIGNALWIRE_FROM_NUMBER', '+14125555555')
+            signalwire_from_number = os.getenv('SIGNALWIRE_FROM_NUMBER', '+15555555555')
             
             print(f"📱 Sending SMS via SignalWire:")
             print(f"   From: {signalwire_from_number}")
@@ -965,12 +1068,12 @@ class RestaurantMenuSkill(SkillBase):
             sms_body += f"✅ Payment Status: COMPLETED\n"
             sms_body += f"📅 Processed: {datetime.now().strftime('%m/%d/%Y %I:%M %p')}\n\n"
             sms_body += f"📍 Bobby's Table Restaurant\n"
-            sms_body += f"📞 Questions? Call: (412) 555-5555\n\n"
+            sms_body += f"📞 Questions? Call: {self._format_phone_number(os.getenv('SIGNALWIRE_FROM_NUMBER', '+15555555555'))}\n\n"
             sms_body += f"Thank you for dining with us!\n"
             sms_body += f"Reply STOP to opt out."
             
             # Get SignalWire credentials from environment
-            signalwire_from_number = os.getenv('SIGNALWIRE_FROM_NUMBER', '+14125555555')
+            signalwire_from_number = os.getenv('SIGNALWIRE_FROM_NUMBER', '+15555555555')
             
             print(f"📱 Sending Payment Receipt SMS via SignalWire:")
             print(f"   From: {signalwire_from_number}")
@@ -1001,7 +1104,7 @@ class RestaurantMenuSkill(SkillBase):
             return {'success': False, 'error': f"SMS sending failed: {str(e)}"}
 
     def _check_order_status_handler(self, args, raw_data):
-        """Handle checking order status"""
+        """Handle getting order details and status"""
         try:
             import sys
             import os
@@ -1015,18 +1118,18 @@ class RestaurantMenuSkill(SkillBase):
             from app import app
             from models import Order, OrderItem, MenuItem, db
             
-            order_number = args.get('order_number', '').strip()
-            customer_phone = args.get('customer_phone', '').strip()
-            customer_name = args.get('customer_name', '').strip()
+            order_number = (args.get('order_number') or '').strip()
+            customer_phone = (args.get('customer_phone') or '').strip()
+            customer_name = (args.get('customer_name') or '').strip()
             
             print(f"📋 Check Order Status Request:")
             print(f"   Order Number: {order_number}")
             print(f"   Customer Phone: {customer_phone}")
             print(f"   Customer Name: {customer_name}")
             
-            # Validate input - need either order number or phone number
-            if not order_number and not customer_phone:
-                return SwaigFunctionResult("I need either your order number or phone number to check your order status.")
+            # Validate input - need either order number, phone number, or customer name
+            if not order_number and not customer_phone and not customer_name:
+                return SwaigFunctionResult("I need either your order number, phone number, or customer name to check your order status.")
             
             with app.app_context():
                 # Build query based on available information
@@ -1047,7 +1150,19 @@ class RestaurantMenuSkill(SkillBase):
                     elif not phone_clean.startswith('+'):
                         phone_clean = f"+{phone_clean}"
                     
-                    query = query.filter(Order.customer_phone == phone_clean)
+                    # Search by customer_phone OR by reservation phone number
+                    from models import Reservation
+                    query = query.outerjoin(Reservation, Order.reservation_id == Reservation.id)
+                    query = query.filter(
+                        (Order.customer_phone == phone_clean) | 
+                        (Reservation.phone_number == phone_clean)
+                    )
+                
+                # Add name-based search if provided (and no order number specified)
+                if customer_name and not order_number:
+                    # Search by customer name in order records
+                    query = query.filter(Order.person_name.ilike(f"%{customer_name}%"))
+                    print(f"🔍 Searching by customer name: {customer_name}")
                 
                 # Get orders, prioritizing recent ones
                 orders = query.order_by(Order.created_at.desc()).limit(5).all()
@@ -1097,6 +1212,35 @@ class RestaurantMenuSkill(SkillBase):
                     'cancelled': 'Order has been cancelled'
                 }
                 
+                # Get the format from args, default to text
+                response_format = args.get('format', 'text').lower()
+
+                if response_format == 'json':
+                    # Build structured JSON response
+                    order_data = {
+                        'order_number': order.order_number,
+                        'customer_name': order.person_name or 'N/A',
+                        'customer_phone': order.customer_phone or 'N/A',
+                        'order_type': order.order_type.title() if order.order_type else 'Pickup',
+                        'status': order.status.upper(),
+                        'status_description': status_descriptions.get(order.status, 'Status information not available'),
+                        'target_date': order.target_date,
+                        'target_time': order.target_time,
+                        'items': [
+                            {
+                                'name': item.menu_item.name if item.menu_item else "Unknown Item",
+                                'quantity': item.quantity,
+                                'price': item.price_at_time * item.quantity,
+                                'notes': item.notes
+                            } for item in order.items
+                        ],
+                        'total_amount': order.total_amount,
+                        'special_instructions': order.special_instructions,
+                        'customer_address': order.customer_address if order.order_type == 'delivery' else None,
+                        'payment_status': order.payment_status.title() if order.payment_status else 'N/A'
+                    }
+                    return SwaigFunctionResult(json.dumps(order_data))
+
                 message = f"📋 **ORDER STATUS UPDATE**\n\n"
                 message += f"🔢 Order Number: #{order.order_number}\n"
                 message += f"👤 Customer: {order.person_name or 'N/A'}\n"
@@ -1160,7 +1304,7 @@ class RestaurantMenuSkill(SkillBase):
                     message += f"\n💳 Payment: {payment_emoji.get(order.payment_status, '❓')} {order.payment_status.title()}\n"
                 
                 # Add helpful next steps
-                message += f"\n📞 Questions? Call us at (412) 555-5555\n"
+                message += f"\n📞 Questions? Call us at {self._format_phone_number(os.getenv('SIGNALWIRE_FROM_NUMBER', '+15555555555'))}\n"
                 message += f"🏪 Bobby's Table Restaurant"
                 
                 # Update metadata
@@ -1181,4 +1325,426 @@ class RestaurantMenuSkill(SkillBase):
             print(f"Error checking order status: {e}")
             import traceback
             traceback.print_exc()
-            return SwaigFunctionResult("Sorry, there was an error checking your order status. Please try again or contact us directly at (412) 555-5555.") 
+            return SwaigFunctionResult(f"Sorry, there was an error checking your order status. Please try again or contact us directly at {self._format_phone_number(os.getenv('SIGNALWIRE_FROM_NUMBER', '+15555555555'))}.") 
+
+    def _update_order_items_handler(self, args, raw_data):
+        """Handle updating order items (add/remove)"""
+        try:
+            import sys
+            import os
+            from datetime import datetime
+            
+            # Add the parent directory to sys.path to import app
+            parent_dir = os.path.dirname(os.path.dirname(__file__))
+            if parent_dir not in sys.path:
+                sys.path.insert(0, parent_dir)
+            
+            from app import app
+            from models import Order, OrderItem, MenuItem, Reservation, db
+            
+            order_number = (args.get('order_number') or '').strip()
+            customer_phone = (args.get('customer_phone') or '').strip()
+            customer_name = (args.get('customer_name') or '').strip()
+            action = args.get('action', 'add').lower()
+            items = args.get('items', [])
+            
+            print(f"📋 Update Order Items Request:")
+            print(f"   Order Number: {order_number}")
+            print(f"   Customer Phone: {customer_phone}")
+            print(f"   Customer Name: {customer_name}")
+            print(f"   Action: {action}")
+            print(f"   Items: {items}")
+            
+            # Validate input
+            if not order_number and not customer_phone and not customer_name:
+                return SwaigFunctionResult("I need either your order number, phone number, or customer name to find your order.")
+            
+            if not items:
+                return SwaigFunctionResult("Please specify which items you'd like to add or remove.")
+            
+            if action not in ['add', 'remove']:
+                return SwaigFunctionResult("Please specify whether you want to 'add' or 'remove' items.")
+            
+            with app.app_context():
+                # Ensure menu is cached for item validation
+                cached_menu, meta_data = self._ensure_menu_cached(raw_data)
+                
+                if not cached_menu:
+                    return SwaigFunctionResult("Sorry, our menu system is temporarily unavailable. Please try again later.")
+                
+                # Find the order using the same logic as get_order_details
+                query = Order.query
+                
+                if order_number:
+                    # Clean up order number (remove any non-digits)
+                    order_number_clean = ''.join(filter(str.isdigit, order_number))
+                    query = query.filter(Order.order_number == order_number_clean)
+                
+                if customer_phone:
+                    # Clean up phone number
+                    phone_clean = ''.join(filter(str.isdigit, customer_phone))
+                    if len(phone_clean) == 10:
+                        phone_clean = f"+1{phone_clean}"
+                    elif len(phone_clean) == 11 and phone_clean.startswith('1'):
+                        phone_clean = f"+{phone_clean}"
+                    elif not phone_clean.startswith('+'):
+                        phone_clean = f"+{phone_clean}"
+                    
+                    # Search by customer_phone OR by reservation phone number
+                    query = query.outerjoin(Reservation, Order.reservation_id == Reservation.id)
+                    query = query.filter(
+                        (Order.customer_phone == phone_clean) | 
+                        (Reservation.phone_number == phone_clean)
+                    )
+                
+                # Add name-based search if provided (and no order number specified)
+                if customer_name and not order_number:
+                    query = query.filter(Order.person_name.ilike(f"%{customer_name}%"))
+                
+                # Get orders, prioritizing recent ones
+                orders = query.order_by(Order.created_at.desc()).limit(5).all()
+                
+                if not orders:
+                    if order_number:
+                        return SwaigFunctionResult(f"❌ No order found with number {order_number}. Please check your order number and try again.")
+                    else:
+                        return SwaigFunctionResult("❌ No orders found. Please check your information and try again.")
+                
+                # If multiple orders, we need to be more specific
+                if len(orders) > 1 and not order_number:
+                    message = f"📋 I found {len(orders)} orders. Please provide your specific order number:\n\n"
+                    for order in orders[:3]:  # Show up to 3 recent orders
+                        message += f"• Order #{order.order_number} - {order.status.title()} - ${order.total_amount:.2f}\n"
+                        message += f"  Placed: {order.created_at.strftime('%m/%d/%Y %I:%M %p')}\n\n"
+                    return SwaigFunctionResult(message)
+                
+                # Get the order
+                order = orders[0]
+                
+                # Check if order can be updated based on type and status
+                can_update = False
+                reason = ""
+                
+                if order.order_type == 'reservation':
+                    # For reservation orders, check payment status
+                    if order.payment_status != 'paid':
+                        can_update = True
+                    else:
+                        reason = "This reservation order has already been paid for and cannot be modified."
+                elif order.order_type in ['pickup', 'delivery']:
+                    # For pickup/delivery orders, check order status
+                    if order.status == 'pending':
+                        can_update = True
+                    else:
+                        reason = f"This {order.order_type} order is already {order.status} and cannot be modified."
+                else:
+                    # Default check for other order types
+                    if order.status == 'pending' and order.payment_status != 'paid':
+                        can_update = True
+                    else:
+                        reason = f"This order is {order.status} and cannot be modified."
+                
+                if not can_update:
+                    return SwaigFunctionResult(f"❌ {reason}")
+                
+                # Create menu lookup for faster access
+                menu_lookup = {item['name'].lower(): item for item in cached_menu}
+                
+                # Process items
+                updated_items = []
+                total_change = 0.0
+                
+                for item_spec in items:
+                    item_name = item_spec.get('name', '').strip()
+                    quantity = item_spec.get('quantity', 1)
+                    
+                    if not item_name:
+                        continue
+                    
+                    # Validate quantity
+                    try:
+                        quantity = int(quantity)
+                        if quantity <= 0:
+                            quantity = 1
+                    except (ValueError, TypeError):
+                        quantity = 1
+                    
+                    # Find menu item with validation
+                    menu_item_data = None
+                    item_name_lower = item_name.lower()
+                    
+                    # Try exact match first
+                    if item_name_lower in menu_lookup:
+                        menu_item_data = menu_lookup[item_name_lower]
+                    else:
+                        # Try fuzzy matching
+                        best_match = None
+                        best_score = 0
+                        
+                        for cached_item in cached_menu:
+                            cached_name_lower = cached_item['name'].lower()
+                            
+                            # Check for partial matches
+                            if item_name_lower in cached_name_lower or cached_name_lower in item_name_lower:
+                                # Calculate match score
+                                common_words = set(item_name_lower.split()) & set(cached_name_lower.split())
+                                score = len(common_words) / max(len(cached_name_lower.split()), 1)
+                                
+                                if score > best_score and score > 0.3:
+                                    best_match = cached_item
+                                    best_score = score
+                        
+                        menu_item_data = best_match
+                    
+                    if not menu_item_data:
+                        return SwaigFunctionResult(f"Sorry, I couldn't find '{item_name}' on our menu. Please check the menu and try again.")
+                    
+                    if not menu_item_data['is_available']:
+                        return SwaigFunctionResult(f"Sorry, {menu_item_data['name']} is currently unavailable.")
+                    
+                    # Process the action
+                    if action == 'add':
+                        # Add items to order
+                        existing_item = OrderItem.query.filter_by(
+                            order_id=order.id,
+                            menu_item_id=menu_item_data['id']
+                        ).first()
+                        
+                        if existing_item:
+                            existing_item.quantity += quantity
+                            updated_items.append(f"Added {quantity}x {menu_item_data['name']} (now {existing_item.quantity} total)")
+                        else:
+                            new_order_item = OrderItem(
+                                order_id=order.id,
+                                menu_item_id=menu_item_data['id'],
+                                quantity=quantity,
+                                price_at_time=menu_item_data['price']
+                            )
+                            db.session.add(new_order_item)
+                            updated_items.append(f"Added {quantity}x {menu_item_data['name']}")
+                        
+                        total_change += menu_item_data['price'] * quantity
+                        
+                    elif action == 'remove':
+                        # Remove items from order
+                        existing_item = OrderItem.query.filter_by(
+                            order_id=order.id,
+                            menu_item_id=menu_item_data['id']
+                        ).first()
+                        
+                        if not existing_item:
+                            return SwaigFunctionResult(f"'{menu_item_data['name']}' is not in your order, so I can't remove it.")
+                        
+                        if existing_item.quantity <= quantity:
+                            # Remove the item entirely
+                            removed_quantity = existing_item.quantity
+                            total_change -= menu_item_data['price'] * removed_quantity
+                            db.session.delete(existing_item)
+                            updated_items.append(f"Removed all {removed_quantity}x {menu_item_data['name']}")
+                        else:
+                            # Reduce quantity
+                            existing_item.quantity -= quantity
+                            total_change -= menu_item_data['price'] * quantity
+                            updated_items.append(f"Removed {quantity}x {menu_item_data['name']} (now {existing_item.quantity} remaining)")
+                
+                # Update order total
+                order.total_amount = (order.total_amount or 0.0) + total_change
+                
+                # Commit changes
+                db.session.commit()
+                
+                # Build response message
+                action_word = "added to" if action == 'add' else "removed from"
+                message = f"✅ **ORDER UPDATED SUCCESSFULLY**\n\n"
+                message += f"🔢 Order Number: #{order.order_number}\n"
+                message += f"👤 Customer: {order.person_name or 'N/A'}\n\n"
+                message += f"📝 **Items {action_word} your order:**\n"
+                
+                for item in updated_items:
+                    message += f"• {item}\n"
+                
+                message += f"\n💰 **Order Total: ${order.total_amount:.2f}**"
+                
+                if total_change > 0:
+                    message += f" (increased by ${total_change:.2f})"
+                elif total_change < 0:
+                    message += f" (decreased by ${abs(total_change):.2f})"
+                
+                message += f"\n\n📋 **Order Status:** {order.status.title()}"
+                
+                if order.order_type == 'reservation':
+                    message += f"\n🏠 **Type:** Reservation Order"
+                else:
+                    message += f"\n📦 **Type:** {order.order_type.title()}"
+                
+                message += f"\n\n📞 Questions? Call us at {self._format_phone_number(os.getenv('SIGNALWIRE_FROM_NUMBER', '+15555555555'))}"
+                
+                return SwaigFunctionResult(message)
+                
+        except Exception as e:
+            print(f"Error updating order items: {e}")
+            import traceback
+            traceback.print_exc()
+            return SwaigFunctionResult(f"Sorry, there was an error updating your order. Please try again or call us directly at {self._format_phone_number(os.getenv('SIGNALWIRE_FROM_NUMBER', '+15555555555'))}.")
+
+    def _pay_order_handler(self, args, raw_data):
+        """Process payment for an existing order using SignalWire Pay and Stripe"""
+        print("🔧 Entering _pay_order_handler")
+        print(f"🔍 Function args: {args}")
+        print(f"🔍 Function raw_data keys: {list(raw_data.keys()) if raw_data else None}")
+        
+        try:
+            from signalwire_agents.core.function_result import SwaigFunctionResult
+            import os
+            import sys
+            
+            # Add the parent directory to sys.path to import app
+            parent_dir = os.path.dirname(os.path.dirname(__file__))
+            if parent_dir not in sys.path:
+                sys.path.insert(0, parent_dir)
+            
+            from app import app, start_payment_session
+            from models import Order, OrderItem, MenuItem, db
+            
+            with app.app_context():
+                # Extract parameters
+                order_number = args.get('order_number')
+                order_id = args.get('order_id')
+                customer_name = args.get('customer_name')
+                customer_phone = args.get('customer_phone')
+                
+                # Get call_id for payment session integration
+                call_id = raw_data.get('call_id') if raw_data else None
+                print(f"🔍 Call ID: {call_id}")
+                
+                # Get phone number from caller ID if not provided
+                if not customer_phone:
+                    caller_phone = raw_data.get('caller_id_num') or raw_data.get('caller_id_number')
+                    if caller_phone:
+                        customer_phone = caller_phone
+                        print(f"🔄 Using phone number from caller ID: {customer_phone}")
+                
+                # SIMPLIFIED: Only find order by order_number - no lookup logic
+                order = None
+                
+                if order_number:
+                    # Search by order number ONLY
+                    order = Order.query.filter_by(order_number=order_number).first()
+                    if not order:
+                        return SwaigFunctionResult(f"❌ Order #{order_number} not found. Please check the order number and try again or contact us directly at {self._format_phone_number(os.getenv('SIGNALWIRE_FROM_NUMBER', '+15555555555'))}.")
+                elif order_id:
+                    # Search by order ID ONLY
+                    order = Order.query.get(order_id)
+                    if not order:
+                        return SwaigFunctionResult(f"❌ Order ID {order_id} not found.")
+                else:
+                    # NO LOOKUP LOGIC - require specific order number
+                    return SwaigFunctionResult("❌ To process payment, I need your specific order number. If you don't have it, please ask me to check your order status first using get_order_details, then I can process your payment.")
+                
+                # Check if order can be paid
+                if order.payment_status == 'paid':
+                    return SwaigFunctionResult(f"✅ Order #{order.order_number} has already been paid for. Your payment confirmation number is {order.confirmation_number or 'N/A'}.")
+                
+                if order.status == 'cancelled':
+                    return SwaigFunctionResult(f"❌ Order #{order.order_number} has been cancelled and cannot be paid for.")
+                
+                # Get order items for display
+                order_items = OrderItem.query.filter_by(order_id=order.id).all()
+                
+                # Build order summary
+                message = f"💳 **PROCESSING PAYMENT FOR ORDER #{order.order_number}**\n\n"
+                message += f"👤 **Customer:** {order.person_name or 'N/A'}\n"
+                message += f"📞 **Phone:** {order.customer_phone or 'N/A'}\n"
+                message += f"📦 **Type:** {order.order_type.title()}\n"
+                message += f"📋 **Status:** {order.status.title()}\n\n"
+                
+                if order_items:
+                    message += "🍽️ **Order Items:**\n"
+                    for item in order_items:
+                        menu_item = MenuItem.query.get(item.menu_item_id)
+                        item_name = menu_item.name if menu_item else f"Item #{item.menu_item_id}"
+                        message += f"• {item.quantity}x {item_name} - ${item.price_at_time * item.quantity:.2f}\n"
+                    message += "\n"
+                
+                message += f"💰 **Total Amount:** ${order.total_amount:.2f}\n\n"
+                
+                # CRITICAL: Start payment session for callback tracking
+                if call_id:
+                    start_payment_session(call_id, order.order_number)
+                    print(f"✅ Started payment session for call {call_id}, order {order.order_number}")
+                else:
+                    print(f"⚠️ No call_id provided - payment session tracking may be limited")
+                
+                # Get SignalWire configuration
+                project_id = os.environ.get('SIGNALWIRE_PROJECT_ID')
+                token = os.environ.get('SIGNALWIRE_TOKEN')
+                space_url = os.environ.get('SIGNALWIRE_SPACE_URL', 'bobbys-table.signalwire.com')
+                
+                if not project_id or not token:
+                    return SwaigFunctionResult("❌ Payment system is temporarily unavailable. Please try again later or pay when you pick up your order.")
+                
+                # Create payment connector URL
+                payment_connector_url = f"https://{space_url}/api/relay/rest/signalwire_agents/payment_connector"
+                print(f"🔗 Using payment connector URL: {payment_connector_url}")
+                
+                # Use SignalWire SDK pay() method
+                try:
+                    print(f"✅ Using SignalWire SDK pay() method")
+                    
+                    # Create payment request
+                    payment_amount = int(order.total_amount * 100)  # Convert to cents
+                    
+                    message += "🔒 **Starting secure payment process...**\n"
+                    message += "Please follow the prompts to enter your payment information securely.\n\n"
+                    message += "📱 You'll receive an SMS receipt once payment is complete."
+                    
+                    # Create SwaigFunctionResult and configure payment
+                    result = SwaigFunctionResult(message)
+                    
+                    # Create parameters array for payment connector
+                    parameters_array = [
+                        {"name": "order_id", "value": str(order.id)},
+                        {"name": "order_number", "value": order.order_number},
+                        {"name": "customer_name", "value": order.person_name},
+                        {"name": "customer_phone", "value": customer_phone or order.customer_phone},
+                        {"name": "payment_type", "value": "order"}
+                    ]
+                    
+                    # Only add call_id if it has a non-empty value
+                    if call_id and call_id.strip():
+                        parameters_array.append({"name": "call_id", "value": call_id})
+                    
+                    # Use the result.pay() method (same as reservation payments)
+                    result.pay(
+                        payment_connector_url=payment_connector_url,
+                        input_method="dtmf",
+                        payment_method="credit-card",
+                        timeout=120,  # Increased to 2 minutes for realistic phone payment
+                        max_attempts=5,  # Increased to 5 attempts
+                        security_code=True,
+                        postal_code=True,
+                        min_postal_code_length=5,
+                        token_type="one-time",
+                        charge_amount=f"{order.total_amount:.2f}",
+                        currency="usd",
+                        language="en-US",
+                        voice="rime.spore",
+                        description=f"Bobby's Table Order #{order.order_number}",
+                        valid_card_types="visa mastercard amex discover diners jcb unionpay",
+                        parameters=parameters_array
+                    )
+                    
+                    print(f"✅ Payment collection configured for ${order.total_amount} - Order #{order.order_number}")
+                    return result
+                    
+                except Exception as e:
+                    print(f"❌ SignalWire payment error: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    return SwaigFunctionResult("❌ Payment system error. Please try again later or pay when you pick up your order.")
+                
+        except Exception as e:
+            print(f"❌ Error in _pay_order_handler: {e}")
+            import traceback
+            traceback.print_exc()
+            return SwaigFunctionResult(f"❌ Payment system error. Please try again later or call us directly at {self._format_phone_number(os.getenv('SIGNALWIRE_FROM_NUMBER', '+15555555555'))}.") 

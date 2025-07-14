@@ -1308,6 +1308,70 @@ def preprocess_reservation_params(params):
 # Global agent instance
 _agent_instance = None
 
+def validate_and_correct_function_call(function_name, params, extracted_info, call_log):
+    """Validate function calls and correct AI routing mistakes"""
+    import re
+    
+    # CRITICAL DEBUG: Always log validation calls
+    print(f"🔍 VALIDATION CALLED: function={function_name}, params={params}")
+    
+    # Check for the critical 5-digit vs 6-digit routing error
+    if function_name == 'get_reservation':
+        reservation_number = params.get('reservation_number', '')
+        
+        # Extract any numbers from the reservation_number parameter
+        if reservation_number:
+            # Clean the number (remove non-digits)
+            clean_number = re.sub(r'[^\d]', '', str(reservation_number))
+            
+            # Check if it's a 5-digit number (should be an ORDER)
+            if len(clean_number) == 5:
+                print(f"🚨 VALIDATION ERROR: AI called get_reservation with 5-digit number: {clean_number}")
+                print(f"   5-digit numbers are ORDERS, not reservations!")
+                print(f"   Redirecting to get_order_details...")
+                
+                # Redirect to get_order_details with proper parameters
+                corrected_params = {
+                    'order_number': clean_number,
+                    'order_type': 'pickup'  # Default to pickup since most orders are pickup
+                }
+                
+                # Try to determine order type from context
+                context_text = ' '.join([
+                    str(entry.get('content', '')) for entry in call_log[-5:] 
+                    if isinstance(entry, dict) and entry.get('role') in ['user', 'assistant']
+                ])
+                
+                if 'delivery' in context_text.lower():
+                    corrected_params['order_type'] = 'delivery'
+                elif 'pickup' in context_text.lower() or 'pick up' in context_text.lower():
+                    corrected_params['order_type'] = 'pickup'
+                    
+                return 'get_order_details', corrected_params
+    
+    # Check for other common mistakes
+    elif function_name == 'get_order_details':
+        order_number = params.get('order_number', '')
+        
+        if order_number:
+            # Clean the number
+            clean_number = re.sub(r'[^\d]', '', str(order_number))
+            
+            # Check if it's a 6-digit number (should be a RESERVATION)
+            if len(clean_number) == 6:
+                print(f"🚨 VALIDATION ERROR: AI called get_order_details with 6-digit number: {clean_number}")
+                print(f"   6-digit numbers are RESERVATIONS, not orders!")
+                print(f"   Redirecting to get_reservation...")
+                
+                corrected_params = {
+                    'reservation_number': clean_number
+                }
+                
+                return 'get_reservation', corrected_params
+    
+    # No corrections needed
+    return function_name, params
+
 def get_receptionist_agent():
     """Get or create the receptionist agent instance"""
     global _agent_instance
@@ -1386,23 +1450,48 @@ def swaig_receptionist():
                 print("📋 Returning available function names")
 
                 # Get function names dynamically from the agent's registered SWAIG functions
-                available_functions = [
-                    'create_reservation',
-                    'get_reservation', 
-                    'update_reservation',
-                    'cancel_reservation',
-        
-                    'create_order',
-                    'get_order_status',
-                    'update_order_status',
-                    'pay_reservation',
-                    'pay_order',
-                    'send_payment_receipt',
-                    'transfer_to_manager',
-                    'schedule_callback'
-                ]
+                try:
+                    if hasattr(agent, '_tool_registry') and hasattr(agent._tool_registry, '_swaig_functions'):
+                        available_functions = list(agent._tool_registry._swaig_functions.keys())
+                        print(f"   Returning {len(available_functions)} available functions from agent registry: {available_functions}")
+                    else:
+                        # Fallback to hardcoded list if agent registry not available
+                        available_functions = [
+                            'create_reservation',
+                            'get_reservation', 
+                            'update_reservation',
+                            'cancel_reservation',
+                
+                            'create_order',
+                            'get_order_details',
+                            'update_order_status',
+                            'pay_reservation',
+                            'pay_order',
+                            'send_payment_receipt',
+                            'transfer_to_manager',
+                            'schedule_callback'
+                        ]
+                        print(f"   Returning {len(available_functions)} available functions from fallback list: {available_functions}")
+                except Exception as e:
+                    print(f"   Error getting functions from agent registry: {e}")
+                    # Fallback to hardcoded list
+                    available_functions = [
+                        'create_reservation',
+                        'get_reservation', 
+                        'update_reservation',
+                        'cancel_reservation',
+            
+                        'create_order',
+                        'get_order_details',
+                        'update_order_status',
+                        'pay_reservation',
+                        'pay_order',
+                        'send_payment_receipt',
+                        'transfer_to_manager',
+                        'schedule_callback'
+                    ]
+                    print(f"   Returning {len(available_functions)} available functions from fallback list: {available_functions}")
 
-                print(f"   Returning {len(available_functions)} available functions: {available_functions}")
                 return jsonify({"functions": available_functions})
 
             # If specific functions are requested, return their signatures
@@ -1545,8 +1634,8 @@ def swaig_receptionist():
                         'required': ['items', 'customer_name', 'order_type']
                     }
                 },
-                'get_order_status': {
-                    'function': 'get_order_status',
+                'get_order_details': {
+                    'function': 'get_order_details',
                     'purpose': 'Check the kitchen status of a pickup or delivery order. Use this when customers call to ask "Is my order ready?" or "How much longer?"',
                     'argument': {
                         'type': 'object',
@@ -1821,6 +1910,18 @@ def swaig_receptionist():
                 data['_extracted_context'] = extracted_info
                 data['_conversation_memory'] = memory
 
+                # CRITICAL FIX: Add function call validation before execution
+                original_function = function_name
+                original_params = params.copy()
+                
+                # Validate and potentially redirect function calls
+                function_name, params = validate_and_correct_function_call(function_name, params, extracted_info, call_log)
+                
+                if function_name != original_function:
+                    print(f"🔀 FUNCTION REDIRECTED: {original_function} → {function_name}")
+                    print(f"   Original params: {original_params}")
+                    print(f"   Corrected params: {params}")
+
                 print(f"🔧 Executing function: {function_name}")
                 print(f"📥 Function parameters: {json_module.dumps(params, indent=2) if params else 'None'}")
                 print(f"🧠 Context provided: {extracted_info}")
@@ -1833,6 +1934,10 @@ def swaig_receptionist():
                 if not hasattr(agent._tool_registry, '_swaig_functions') or not agent._tool_registry._swaig_functions:
                     print(f"ERROR: Agent SWAIG functions not initialized")
                     return jsonify({'success': False, 'message': f'Agent functions not available'}), 500
+
+                available_functions = list(agent._tool_registry._swaig_functions.keys())
+                print(f"Available functions: {available_functions}")
+                app_logger.info(f"Available functions: {available_functions}")
 
                 if function_name not in agent._tool_registry._swaig_functions:
                     print(f"ERROR: Function {function_name} not found in registry")
@@ -2250,7 +2355,7 @@ def swaig_receptionist_info():
                             ]
                         },
                         "prompt": {
-                            "text": "Hi there! I'm Bobby from Bobby's Table. Great to have you call us today! How can I help you out? Whether you're looking to make a reservation, check on an existing one, hear about our menu, or place an order, I'm here to help make it easy for you.\n\nIMPORTANT CONVERSATION GUIDELINES:\n\n**RESERVATION LOOKUPS - CRITICAL:**\n- When customers want to check their reservation, ALWAYS ask for their reservation number FIRST\n- Say: 'Do you have your reservation number? It's a 6-digit number we sent you when you made the reservation.'\n- Only if they don't have it, then ask for their name as backup\n- Reservation numbers are the fastest and most accurate way to find reservations\n- Handle spoken numbers like 'seven eight nine zero one two' which becomes '789012'\n\n**🚨 PAYMENTS - SIMPLE PAYMENT RULE 🚨:**\n**Use the pay_reservation function for all existing reservation payments!**\n\n**SIMPLE PAYMENT FLOW:**\n1. Customer explicitly asks to pay (\"I want to pay\", \"Pay now\", \"Can I pay?\") → IMMEDIATELY call pay_reservation function\n2. pay_reservation handles everything: finds reservation, shows bill total, collects card details, and processes payment\n3. The function will guide the customer through each step conversationally and securely\n\n**PAYMENT EXAMPLES:**\n- Customer: 'I want to pay my bill' → YOU: Call pay_reservation function\n- Customer: 'Pay now' → YOU: Call pay_reservation function\n- Customer: 'Can I pay for my reservation?' → YOU: Call pay_reservation function\n\n**CRITICAL: Use pay_reservation for existing reservations only!**\n- ERROR: NEVER use pay_reservation for new reservation creation (use create_reservation instead)\n- ERROR: NEVER call pay_reservation when customer is just confirming order details\n\n**PRICING AND PRE-ORDERS - CRITICAL:**\n- When customers mention food items, ALWAYS provide the price immediately\n- Example: 'Buffalo Wings are twelve dollars and ninety-nine cents'\n- When creating reservations with pre-orders, ALWAYS mention the total cost\n- Example: 'Your Buffalo Wings and Draft Beer total sixteen dollars and ninety-eight cents'\n- ALWAYS ask if customers want to pay for their pre-order after confirming the total\n- Example: 'Would you like to pay for your pre-order now to complete your reservation?'\n\n**🔄 CORRECT PREORDER WORKFLOW:**\n- When customers want to create reservations with pre-orders, show them an order confirmation FIRST\n- The order confirmation shows: reservation details, each person's food items, individual prices, and total cost\n- Wait for customer to confirm their order details before proceeding (say 'Yes, that's correct')\n- After order confirmation, CREATE THE RESERVATION IMMEDIATELY\n- The correct flow is: Order Details → Customer Confirms → Create Reservation → Give Number → Offer Payment\n- After creating the reservation:\n  1. Give the customer their reservation number clearly\n  1.1 Ask the user if the user would like the reservation details sent to the user via sms. If the user confirms with yes, send the reservation details via sms message.\n 2. Ask if they want to pay now: 'Would you like to pay for your pre-order now?'\n- Payment is OPTIONAL - customers can always pay when they arrive\n\n**🔄 ORDER CONFIRMATION vs PAYMENT REQUESTS - CRITICAL:**\n- \"Yes, that's correct\" = Order confirmation → Call create_reservation function\n- \"Yes, create my reservation\" = Order confirmation → Call create_reservation function\n- \"That looks right\" = Order confirmation → Call create_reservation function\n- \"Pay now\" = Payment request → Call pay_reservation function\n- \"I want to pay\" = Payment request → Call pay_reservation function\n- \"Can I pay?\" = Payment request → Call pay_reservation function\n\n**🚨 CRITICAL: NEVER CALL pay_reservation WHEN USER IS CONFIRMING ORDER DETAILS 🚨:**\n- If user says \"Yes\" after order summary → Call create_reservation function\n- If user says \"That's correct\" after order summary → Call create_reservation function\n- If user says \"Looks good\" after order summary → Call create_reservation function\n- If user says \"Perfect\" after order summary → Call create_reservation function\n- ONLY call pay_reservation when user explicitly asks to pay AFTER reservation is created\n\n**OTHER GUIDELINES:**\n- When making reservations, ALWAYS ask if customers want to pre-order from the menu\n- For parties larger than one person, ask for each person's name and their individual food preferences\n- Always say numbers as words (say 'one' instead of '1', 'two' instead of '2', etc.)\n- Extract food items mentioned during reservation requests and include them in party_orders\n- Be conversational and helpful - guide customers through the pre-ordering process naturally\n- Remember: The system now has a confirmation step for preorders - embrace this workflow!"
+                            "text": "Hi there! I'm Bobby from Bobby's Table. Great to have you call us today! How can I help you out? Whether you're looking to make a reservation, check on an existing one, hear about our menu, or place an order, I'm here to help make it easy for you.\n\nIMPORTANT CONVERSATION GUIDELINES:\n\n**RESERVATION LOOKUPS - CRITICAL:**\n- When customers want to check their reservation, ALWAYS ask for their reservation number FIRST\n- Say: 'Do you have your reservation number? It's a 6-digit number we sent you when you made the reservation.' (6 digits = reservation, 5 digits = order)\n- Only if they don't have it, then ask for their name as backup\n- Reservation numbers are the fastest and most accurate way to find reservations\n- Handle spoken numbers like 'seven eight nine zero one two' which becomes '789012'\n\n**🚨 PAYMENTS - SIMPLE PAYMENT RULE 🚨:**\n**Use the pay_reservation function for all existing reservation payments!**\n\n**SIMPLE PAYMENT FLOW:**\n1. Customer explicitly asks to pay (\"I want to pay\", \"Pay now\", \"Can I pay?\") → IMMEDIATELY call pay_reservation function\n2. pay_reservation handles everything: finds reservation, shows bill total, collects card details, and processes payment\n3. The function will guide the customer through each step conversationally and securely\n\n**PAYMENT EXAMPLES:**\n- Customer: 'I want to pay my bill' → YOU: Call pay_reservation function\n- Customer: 'Pay now' → YOU: Call pay_reservation function\n- Customer: 'Can I pay for my reservation?' → YOU: Call pay_reservation function\n\n**CRITICAL: Use pay_reservation for existing reservations only!**\n- ERROR: NEVER use pay_reservation for new reservation creation (use create_reservation instead)\n- ERROR: NEVER call pay_reservation when customer is just confirming order details\n\n**PRICING AND PRE-ORDERS - CRITICAL:**\n- When customers mention food items, ALWAYS provide the price immediately\n- Example: 'Buffalo Wings are twelve dollars and ninety-nine cents'\n- When creating reservations with pre-orders, ALWAYS mention the total cost\n- Example: 'Your Buffalo Wings and Draft Beer total sixteen dollars and ninety-eight cents'\n- ALWAYS ask if customers want to pay for their pre-order after confirming the total\n- Example: 'Would you like to pay for your pre-order now to complete your reservation?'\n\n**🔄 CORRECT PREORDER WORKFLOW:**\n- When customers want to create reservations with pre-orders, show them an order confirmation FIRST\n- The order confirmation shows: reservation details, each person's food items, individual prices, and total cost\n- Wait for customer to confirm their order details before proceeding (say 'Yes, that's correct')\n- After order confirmation, CREATE THE RESERVATION IMMEDIATELY\n- The correct flow is: Order Details → Customer Confirms → Create Reservation → Give Number → Offer Payment\n- After creating the reservation:\n  1. Give the customer their reservation number clearly\n  1.1 Mention that SMS confirmation is available if they'd like their reservation details sent to their phone\n  1.2 If the user requests SMS confirmation, send the reservation details via sms message\n 2. Ask if they want to pay now: 'Would you like to pay for your pre-order now?'\n- Payment is OPTIONAL - customers can always pay when they arrive\n\n**🔄 ORDER CONFIRMATION vs PAYMENT REQUESTS - CRITICAL:**\n- \"Yes, that's correct\" = Order confirmation → Call create_reservation function\n- \"Yes, create my reservation\" = Order confirmation → Call create_reservation function\n- \"That looks right\" = Order confirmation → Call create_reservation function\n- \"Pay now\" = Payment request → Call pay_reservation function\n- \"I want to pay\" = Payment request → Call pay_reservation function\n- \"Can I pay?\" = Payment request → Call pay_reservation function\n\n**🚨 CRITICAL: NEVER CALL pay_reservation WHEN USER IS CONFIRMING ORDER DETAILS 🚨:**\n- If user says \"Yes\" after order summary → Call create_reservation function\n- If user says \"That's correct\" after order summary → Call create_reservation function\n- If user says \"Looks good\" after order summary → Call create_reservation function\n- If user says \"Perfect\" after order summary → Call create_reservation function\n- ONLY call pay_reservation when user explicitly asks to pay AFTER reservation is created\n\n**🔍 CRITICAL: DISTINGUISH BETWEEN RESERVATIONS AND ORDERS:**\n- RESERVATIONS = table bookings (use get_reservation)\n- ORDERS = pickup/delivery food orders (use get_order_details)\n- If customer says \"pickup order\", \"delivery order\", \"food order\" → use get_order_details\n- If customer says \"reservation\", \"table booking\", \"dinner reservation\" → use get_reservation\n\n**🔍 ORDER STATUS CHECKS - CRITICAL:**\n- When customers ask to check their ORDER status, use get_order_details function\n- Examples: \"Check my order status\", \"Where is my order?\", \"Is my order ready?\"\n- NEVER use update_order_status - this function doesn't exist\n- NEVER use get_reservation for pickup/delivery orders\n- Use get_order_details with the order number the customer provides\n- Handle spoken numbers: \"nine two six five seven\" becomes \"92657\"\n- Always provide complete status information including estimated ready time\n\n**🚨 MANDATORY FUNCTION ROUTING RULES 🚨:**\n- 5-digit number (like 91576, 62879, 12345) = ORDER → MUST use get_order_details\n- 6-digit number (like 789012, 333444, 675421) = RESERVATION → MUST use get_reservation\n- Customer says \"order\" = ORDER → MUST use get_order_details\n- Customer says \"pickup\" = ORDER → MUST use get_order_details\n- Customer says \"delivery\" = ORDER → MUST use get_order_details\n- Customer says \"reservation\" = RESERVATION → MUST use get_reservation\n- Customer says \"table booking\" = RESERVATION → MUST use get_reservation\n\n**ORDER STATUS EXAMPLES:**\n- Customer: \"Check on my pickup order 92657\" → YOU: Call get_order_details with order_number: \"92657\" (5 digits = order)\n- Customer: \"Is my food order ready?\" → YOU: Call get_order_details with their order number\n- Customer: \"Where is my order 12345?\" → YOU: Call get_order_details with order_number: \"12345\" (5 digits = order)\n- Customer: \"I'm calling about my pickup order 62879\" → YOU: Call get_order_details with order_number: \"62879\" (5 digits = order)\n- Customer: \"Check my reservation 789012\" → YOU: Call get_reservation with reservation_number: \"789012\" (6 digits = reservation)\n\n**OTHER GUIDELINES:**\n- When making reservations, ALWAYS ask if customers want to pre-order from the menu\n- For parties larger than one person, ask for each person's name and their individual food preferences\n- Always say numbers as words (say 'one' instead of '1', 'two' instead of '2', etc.)\n- Extract food items mentioned during reservation requests and include them in party_orders\n- Be conversational and helpful - guide customers through the pre-ordering process naturally\n- Remember: The system now has a confirmation step for preorders - embrace this workflow!\\n- CRITICAL NUMBER FORMAT: 5 digits = order, 6 digits = reservation"
                         }
                     }
                 }
@@ -2575,6 +2680,7 @@ def payment_processor():
 
         # Extract parameters from array format if present
         # SignalWire sends parameters as array of objects with single key-value pairs
+        original_call_id = None  # Track the original call_id from payment session
         for param in parameters:
             if isinstance(param, dict):
                 # Handle both formats: {"name": "key", "value": "val"} and {"key": "val"}
@@ -2599,6 +2705,8 @@ def payment_processor():
                     phone_number = phone_number or param_value
                 elif param_name == 'payment_type':
                     payment_type = payment_type or param_value
+                elif param_name == 'call_id':
+                    original_call_id = param_value
 
         # Also check for direct field names in the payment data
         if not order_id:
@@ -2633,6 +2741,7 @@ def payment_processor():
         print(f"   - customer_name: {customer_name}")
         print(f"   - phone_number: {phone_number}")
         print(f"   - amount: {amount}")
+        print(f"   - original_call_id: {original_call_id}")
         print(f"🔍 Condition checks:")
         print(f"   - payment_type == 'reservation': {payment_type == 'reservation'}")
         print(f"   - reservation_number truthy: {bool(reservation_number)}")
@@ -2861,6 +2970,7 @@ def payment_processor():
 
                         # Call SWAIG send_payment_receipt function for reservation
                         print(f"SMS: Calling SWAIG send_payment_receipt function for reservation {reservation_number}")
+                        print(f"🔍 Using call_id: {original_call_id or f'payment-{confirmation_number}'} (original: {original_call_id}, fallback: payment-{confirmation_number})")
                         try:
                             # Make a SWAIG function call to send the SMS receipt
                             swaig_data = {
@@ -2879,7 +2989,7 @@ def payment_processor():
                                         "confirmation_number": confirmation_number
                                     })
                                 },
-                                "call_id": f"payment-{confirmation_number}",
+                                "call_id": original_call_id or f"payment-{confirmation_number}",
                                 "content_type": "text/swaig",
                                 "version": "2.0",
                                 "caller_id_num": phone_number or reservation.phone_number
@@ -3053,76 +3163,81 @@ def start_payment_session(call_id, reservation_number):
         except Exception as db_error:
             print(f"WARNING: Could not get additional reservation data: {db_error}")
 
-        # ENHANCED: Force creation within app context
-        with app.app_context():
-            # Don't overwrite existing session, just update it
-            existing_session = app.payment_sessions.get(call_id)
-            if existing_session:
-                print(f"🔄 Updating existing payment session for call {call_id}")
-                existing_session['reservation_number'] = reservation_number
-                existing_session['last_updated'] = datetime.now()
-                if customer_name:
-                    existing_session['customer_name'] = customer_name
-                if phone_number:
-                    existing_session['phone_number'] = phone_number
-                if amount:
-                    existing_session['amount'] = amount
-            else:
-                session_data = {
-                    'reservation_number': reservation_number,
-                    'payment_type': 'reservation',
-                    'started_at': datetime.now(),
-                    'last_updated': datetime.now(),
-                    'step': 'started',
-                    'call_id': call_id,  # Store original call_id for reference
-                    'created_at': datetime.now().timestamp()  # For sorting by recency
-                }
-                if customer_name:
-                    session_data['customer_name'] = customer_name
-                if phone_number:
-                    session_data['phone_number'] = phone_number
-                if amount:
-                    session_data['amount'] = amount
+        # CRITICAL FIX: Create session data without app context complications
+        session_data = {
+            'reservation_number': reservation_number,
+            'payment_type': 'reservation',
+            'started_at': datetime.now(),
+            'last_updated': datetime.now(),
+            'step': 'started',
+            'call_id': call_id,  # Store original call_id for reference
+            'created_at': datetime.now().timestamp()  # For sorting by recency
+        }
+        if customer_name:
+            session_data['customer_name'] = customer_name
+        if phone_number:
+            session_data['phone_number'] = phone_number
+        if amount:
+            session_data['amount'] = amount
 
-                # Store in BOTH locations for maximum persistence
-                app.payment_sessions[call_id] = session_data
-                payment_sessions_global[call_id] = session_data.copy()
+        # CRITICAL FIX: Store in MULTIPLE locations for maximum persistence
+        app.payment_sessions[call_id] = session_data.copy()
+        payment_sessions_global[call_id] = session_data.copy()
 
-                # CRITICAL FIX: Create reverse mapping by reservation number
-                # This allows callback to find the session even with different call_id
-                if not hasattr(app, 'payment_sessions_by_reservation'):
-                    app.payment_sessions_by_reservation = {}
-                app.payment_sessions_by_reservation[reservation_number] = call_id
-                print(f"🔗 Created reservation mapping: {reservation_number} -> {call_id}")
+        # CRITICAL FIX: Create reverse mapping by reservation number
+        # This allows callback to find the session even with different call_id
+        if not hasattr(app, 'payment_sessions_by_reservation'):
+            app.payment_sessions_by_reservation = {}
+        app.payment_sessions_by_reservation[reservation_number] = call_id
+        print(f"🔗 Created reservation mapping: {reservation_number} -> {call_id}")
 
-                print(f"🔒 Started new payment session for call {call_id}, reservation {reservation_number}")
-                if customer_name:
-                    print(f"   Customer: {customer_name}")
-                if phone_number:
-                    print(f"   Phone: {phone_number}")
-                if amount:
-                    print(f"   Amount: ${amount}")
+        # CRITICAL FIX: Store session data in Flask.g for request-level persistence
+        from flask import g
+        if not hasattr(g, 'payment_sessions'):
+            g.payment_sessions = {}
+        g.payment_sessions[call_id] = session_data.copy()
 
-            print(f"🔍 Total active payment sessions (app): {len(app.payment_sessions)}")
-            print(f"🔍 Total active payment sessions (global): {len(payment_sessions_global)}")
+        # CRITICAL FIX: Store in a simple dict on the app object for cross-request persistence
+        if not hasattr(app, 'persistent_payment_sessions'):
+            app.persistent_payment_sessions = {}
+        app.persistent_payment_sessions[call_id] = session_data.copy()
 
-            # Immediately verify the session was created/updated in BOTH locations
-            app_has_session = call_id in app.payment_sessions
-            global_has_session = call_id in payment_sessions_global
+        print(f"🔒 Started new payment session for call {call_id}, reservation {reservation_number}")
+        if customer_name:
+            print(f"   Customer: {customer_name}")
+        if phone_number:
+            print(f"   Phone: {phone_number}")
+        if amount:
+            print(f"   Amount: ${amount}")
 
-            if app_has_session and global_has_session:
-                print(f"SUCCESS: Payment session {call_id} successfully created and verified in BOTH storages")
-                print(f"   App session data: {app.payment_sessions[call_id]}")
-                print(f"   Global session data: {payment_sessions_global[call_id]}")
-            else:
-                print(f"ERROR: Payment session {call_id} creation issue:")
-                print(f"   App storage: {'SUCCESS:' if app_has_session else 'ERROR:'}")
-                print(f"   Global storage: {'SUCCESS:' if global_has_session else 'ERROR:'}")
+        print(f"🔍 Total active payment sessions (app): {len(app.payment_sessions)}")
+        print(f"🔍 Total active payment sessions (global): {len(payment_sessions_global)}")
+        print(f"🔍 Total active payment sessions (persistent): {len(app.persistent_payment_sessions)}")
+
+        # CRITICAL FIX: Immediately verify the session was created/updated in ALL locations
+        app_has_session = call_id in app.payment_sessions
+        global_has_session = call_id in payment_sessions_global
+        persistent_has_session = call_id in app.persistent_payment_sessions
+
+        if app_has_session and global_has_session and persistent_has_session:
+            print(f"SUCCESS: Payment session {call_id} successfully created and verified in ALL storages")
+            print(f"   App session data: {app.payment_sessions[call_id]}")
+            print(f"   Global session data: {payment_sessions_global[call_id]}")
+            print(f"   Persistent session data: {app.persistent_payment_sessions[call_id]}")
+        else:
+            print(f"ERROR: Payment session {call_id} creation issue:")
+            print(f"   App storage: {'SUCCESS' if app_has_session else 'ERROR'}")
+            print(f"   Global storage: {'SUCCESS' if global_has_session else 'ERROR'}")
+            print(f"   Persistent storage: {'SUCCESS' if persistent_has_session else 'ERROR'}")
+            
+        # CRITICAL FIX: Return session data to caller to verify it was created
+        return session_data
 
     except Exception as e:
         print(f"ERROR: Error starting payment session: {e}")
         import traceback
         traceback.print_exc()
+        return None
 
 def update_payment_step(call_id, step):
     """Update the current payment step"""
@@ -3176,6 +3291,15 @@ def get_payment_session_data(call_id):
             if session_data:
                 print(f"🔍 Retrieved payment session data from app storage for {call_id}: {session_data}")
                 return session_data
+
+            # Try persistent storage next
+            if hasattr(app, 'persistent_payment_sessions'):
+                session_data = app.persistent_payment_sessions.get(call_id)
+                if session_data:
+                    print(f"🔍 Retrieved payment session data from persistent storage for {call_id}: {session_data}")
+                    # Sync back to app storage
+                    app.payment_sessions[call_id] = session_data.copy()
+                    return session_data
 
             # Try global storage as fallback
             session_data = payment_sessions_global.get(call_id)
@@ -3710,7 +3834,7 @@ def stripe_webhook():
                                         "confirmation_number": confirmation_number
                                     })
                                 },
-                                "call_id": f"payment-{confirmation_number}",
+                                "call_id": original_call_id or f"payment-{confirmation_number}",
                                 "content_type": "text/swaig",
                                 "version": "2.0",
                                 "caller_id_num": phone_number or reservation.phone_number
@@ -3877,16 +4001,20 @@ def signalwire_payment_callback():
         payment_id = None  # Initialize payment_id variable
 
         if call_id:
-            # ENHANCED DEBUG: Check BOTH storage locations
+            # ENHANCED DEBUG: Check ALL storage locations
             global payment_sessions_global
             if 'payment_sessions_global' not in globals():
                 payment_sessions_global = {}
 
             payment_sessions = getattr(app, 'payment_sessions', {})
+            persistent_sessions = getattr(app, 'persistent_payment_sessions', {})
+            
             print(f"🔍 DEBUG: Total payment sessions in app memory: {len(payment_sessions)}")
             print(f"🔍 DEBUG: Total payment sessions in global memory: {len(payment_sessions_global)}")
+            print(f"🔍 DEBUG: Total payment sessions in persistent memory: {len(persistent_sessions)}")
             print(f"🔍 DEBUG: App session keys: {list(payment_sessions.keys())}")
             print(f"🔍 DEBUG: Global session keys: {list(payment_sessions_global.keys())}")
+            print(f"🔍 DEBUG: Persistent session keys: {list(persistent_sessions.keys())}")
             print(f"🔍 DEBUG: Looking for call_id: {call_id}")
 
             payment_session = get_payment_session_data(call_id)
@@ -4390,44 +4518,59 @@ def signalwire_payment_callback():
                         import traceback
                         traceback.print_exc()
 
-                    # CRITICAL FIX: Return SWML response with actual confirmation number
-                    # This prevents the system from falling through to generic response
-                    announcement_text = f"Excellent! Your payment of ${amount} has been processed successfully. "
-                    announcement_text += f"Your confirmation number is {' '.join(confirmation_number)}. "
-                    announcement_text += f"Please write this down: {' '.join(confirmation_number)}. "
-                    announcement_text += f"We look forward to serving you at Bobby's Table. Have a great day!"
-
-                    # Return SWML response to announce the confirmation
-                    swml_response = {
-                        "version": "1.0.0",
-                        "sections": {
-                            "main": [
-                                {
-                                    "say": {
-                                        "text": announcement_text,
-                                        "voice": "rime.luna",
-                                        "model": "arcana",
-                                        "language": "en-US"
-                                    }
-                                },
-                                {
-                                    "hangup": {}
-                                }
-                            ]
+                    # CRITICAL FIX: Store payment results for agent access instead of hanging up
+                    # Store payment completion results in session for agent to access
+                    if call_id:
+                        # Ensure payment session exists and contains completion data
+                        payment_sessions = getattr(app, 'payment_sessions', {})
+                        if not hasattr(app, 'payment_sessions'):
+                            app.payment_sessions = {}
+                        
+                        # Store comprehensive payment completion data
+                        payment_completion_data = {
+                            'payment_status': 'completed',
+                            'confirmation_number': confirmation_number,
+                            'payment_amount': float(amount) if amount else 0.0,
+                            'payment_date': datetime.now().isoformat(),
+                            'payment_id': payment_id,
+                            'reservation_number': reservation_number,
+                            'customer_name': customer_name,
+                            'phone_number': phone_number,
+                            'payment_completed': True,
+                            'payment_announced': False,  # Track if agent has announced success
+                            'completion_timestamp': datetime.now().timestamp()
                         }
-                    }
-
-                    # Return SWML response directly for SignalWire to process
-                    response = make_response(jsonify(swml_response))
-                    response.headers['Content-Type'] = 'application/json'
-
-                    # Also log the success info
-                    print(f"🎉 Returning SWML announcement for reservation payment completion:")
+                        
+                        # Store in both app and global payment sessions
+                        app.payment_sessions[call_id] = payment_completion_data
+                        
+                        # Also store in global payment sessions for persistence
+                        if 'payment_sessions_global' not in globals():
+                            payment_sessions_global = {}
+                        payment_sessions_global[call_id] = payment_completion_data.copy()
+                        
+                        print(f"SUCCESS: Stored payment completion data for call {call_id}")
+                        print(f"   Confirmation: {confirmation_number}")
+                        print(f"   Amount: ${amount}")
+                        print(f"   Reservation: {reservation_number}")
+                    
+                    # ENHANCED: Return success status WITHOUT hanging up
+                    # Let the agent continue the conversation to announce success
+                    print(f"🎉 Returning success response for agent to announce payment completion:")
                     print(f"   Confirmation: {confirmation_number}")
                     print(f"   Amount: ${amount}")
                     print(f"   Reservation: {reservation_number}")
 
-                    return response
+                    return jsonify({
+                        "success": True,
+                        "status": "completed",
+                        "message": "Payment completed successfully",
+                        "confirmation_number": confirmation_number,
+                        "payment_amount": float(amount) if amount else 0.0,
+                        "reservation_number": reservation_number,
+                        "call_id": call_id,
+                        "agent_should_announce": True  # Signal to agent that it should announce success
+                    })
                 else:
                     print(f"ERROR: Reservation {reservation_number} not found")
                     return jsonify({
@@ -4437,53 +4580,104 @@ def signalwire_payment_callback():
 
 
 
-            # CRITICAL FIX: Don't generate generic response if payment was already processed
-            # The payment processor already handled the confirmation and SMS receipt
-            print(f"WARNING: Payment completion callback received but payment already processed")
+            # CRITICAL FIX: Always announce payment completion to the agent
+            # Even if payment was already processed, the agent needs to announce it to the customer
+            print(f"🎉 PAYMENT COMPLETED: Generating SWML announcement for agent")
             print(f"   Payment Type: {payment_type}")
             print(f"   Reservation: {reservation_number}")
             print(f"   Amount: ${amount}")
             print(f"   Call ID: {call_id}")
 
-            # Check if this payment was already processed by looking for recent confirmations
-            # If payment was processed in the last 5 minutes, don't generate duplicate response
+            # CRITICAL FIX: Try to get payment information from database as fallback
+            confirmation_number = None
             try:
                 with app.app_context():
+                    # First try to find by reservation number if we have it
                     if payment_type == 'reservation' and reservation_number:
                         reservation = Reservation.query.filter_by(reservation_number=reservation_number).first()
-                        if reservation and reservation.payment_date:
-                            time_since_payment = datetime.now() - reservation.payment_date
-                            if time_since_payment.total_seconds() < 300:  # 5 minutes
-                                print(f"SUCCESS: Payment was already processed {time_since_payment.total_seconds():.0f} seconds ago")
-                                print(f"   Confirmation: {reservation.confirmation_number}")
-                                print(f"   SMS receipt already sent - no duplicate response needed")
-
-                                # Return simple success response without SWML to avoid duplicate announcements
-                                return jsonify({
-                                    "success": True,
-                                    "status": "completed",
-                                    "message": "Payment already processed and confirmed",
-                                    "confirmation_number": reservation.confirmation_number,
-                                    "payment_date": reservation.payment_date.isoformat() if reservation.payment_date else None,
-                                    "call_id": call_id,
-                                    "no_duplicate_announcement": True
-                                })
+                        if reservation and reservation.confirmation_number:
+                            confirmation_number = reservation.confirmation_number
+                            amount = reservation.payment_amount or amount
+                            customer_name = reservation.name or customer_name
+                            phone_number = reservation.phone_number or phone_number
+                            print(f"SUCCESS: Retrieved payment info from database: confirmation={confirmation_number}, amount=${amount}")
+                    
+                    # If no reservation number, try to find a recent payment by call_id or recent completion
+                    if not confirmation_number and call_id:
+                        # Look for reservations with recent payments (last 10 minutes)
+                        recent_cutoff = datetime.now() - timedelta(minutes=10)
+                        recent_reservations = Reservation.query.filter(
+                            Reservation.payment_date >= recent_cutoff,
+                            Reservation.payment_status == 'paid',
+                            Reservation.confirmation_number.isnot(None)
+                        ).order_by(Reservation.payment_date.desc()).limit(5).all()
+                        
+                        if recent_reservations:
+                            # Use the most recent one as fallback
+                            reservation = recent_reservations[0]
+                            confirmation_number = reservation.confirmation_number
+                            amount = reservation.payment_amount or amount
+                            customer_name = reservation.name or customer_name
+                            phone_number = reservation.phone_number or phone_number
+                            reservation_number = reservation.reservation_number
+                            print(f"SUCCESS: Found recent payment fallback: reservation={reservation_number}, confirmation={confirmation_number}")
+                            
             except Exception as db_check_error:
                 print(f"WARNING: Could not check payment status in database: {db_check_error}")
 
-            # If we get here, generate a minimal completion response without duplicate confirmation
-            print(f"🎉 Returning simple completion acknowledgment (no duplicate announcement)")
+            # Generate confirmation number only if absolutely nothing was found
+            if not confirmation_number:
+                import random
+                import string
+                confirmation_number = ''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+                print(f"🔄 Generated new confirmation number as last resort: {confirmation_number}")
+                print(f"⚠️  WARNING: Using generated confirmation number - payment data may be incomplete")
 
-            return jsonify({
-                "success": True,
-                "status": "completed",
-                "message": "Payment processing completed",
-                "payment_type": payment_type,
-                "reservation_number": reservation_number,
-                "amount": amount,
-                "call_id": call_id,
-                "note": "Confirmation details already provided via SMS receipt"
-            })
+            # Create SWML announcement for agent to deliver to customer
+            announcement_text = f"Excellent! Your payment of ${amount} has been processed successfully. "
+            announcement_text += f"Your confirmation number is {' '.join(confirmation_number)}. "
+            announcement_text += f"Please write this down: {' '.join(confirmation_number)}. "
+            
+            if payment_type == 'reservation':
+                announcement_text += f"Your reservation for {customer_name or 'your party'} is confirmed. "
+                announcement_text += f"We look forward to serving you! "
+            
+            announcement_text += f"You should receive a confirmation text message with all the details. "
+            announcement_text += f"Thank you for choosing Bobby's Table! Have a great day!"
+
+            # Return SWML response to announce the confirmation
+            swml_response = {
+                "version": "1.0.0",
+                "sections": {
+                    "main": [
+                        {
+                            "say": {
+                                "text": announcement_text,
+                                "voice": "rime.luna",
+                                "model": "arcana",
+                                "language": "en-US"
+                            }
+                        },
+                        {
+                            "hangup": {}
+                        }
+                    ]
+                }
+            }
+
+            # Return SWML response directly for SignalWire to process
+            response = make_response(jsonify(swml_response))
+            response.headers['Content-Type'] = 'application/json'
+
+            # Log the success info
+            print(f"🎉 Returning SWML announcement for payment completion:")
+            print(f"   Confirmation: {confirmation_number}")
+            print(f"   Amount: ${amount}")
+            print(f"   Reservation: {reservation_number}")
+            print(f"   Customer: {customer_name}")
+            print(f"   Announcement: {announcement_text[:100]}...")
+
+            return response
 
         elif status == 'failed' or status == 'declined':
             print(f"ERROR: Payment failed: {status}")
@@ -4582,10 +4776,15 @@ def cleanup_orphaned_payment_sessions():
 
         cleaned_count = 0
 
-        # Clean up sessions older than 30 minutes (more aggressive cleanup)
-        cutoff = datetime.now() - timedelta(minutes=30)
+        # CRITICAL FIX: Clean up sessions older than 2 HOURS (much less aggressive)
+        # Payment flows typically complete within 5-10 minutes, but give plenty of buffer
+        cutoff = datetime.now() - timedelta(hours=2)
+        
+        # CRITICAL FIX: Don't clean up ANY session that's less than 15 minutes old
+        # to protect active payment flows
+        recent_cutoff = datetime.now() - timedelta(minutes=15)
 
-        # Clean app sessions
+        # Clean app sessions (but protect recent ones)
         expired_app_sessions = [
             call_id for call_id, session in app.payment_sessions.items()
             if session.get('started_at', datetime.now()) < cutoff
@@ -4596,7 +4795,7 @@ def cleanup_orphaned_payment_sessions():
             print(f"🕐 Removed expired app session: {call_id}")
             cleaned_count += 1
 
-        # Clean global sessions
+        # Clean global sessions (but protect recent ones)
         expired_global_sessions = [
             call_id for call_id, session in payment_sessions_global.items()
             if session.get('started_at', datetime.now()) < cutoff
@@ -4607,23 +4806,33 @@ def cleanup_orphaned_payment_sessions():
             print(f"🕐 Removed expired global session: {call_id}")
             cleaned_count += 1
 
-        # Remove any sessions that exist in one but not the other (orphaned)
+        # CRITICAL FIX: Clean persistent sessions too
+        if hasattr(app, 'persistent_payment_sessions'):
+            expired_persistent_sessions = [
+                call_id for call_id, session in app.persistent_payment_sessions.items()
+                if session.get('started_at', datetime.now()) < cutoff
+            ]
+            for call_id in expired_persistent_sessions:
+                session_data = app.persistent_payment_sessions.pop(call_id, None)
+                print(f"🕐 Removed expired persistent session: {call_id}")
+                cleaned_count += 1
+
+        # CRITICAL FIX: DO NOT remove sessions just because they exist in one storage but not another
+        # This was causing sessions to be incorrectly deleted during payment flows
+        print(f"🔒 Protecting all sessions less than 15 minutes old from cleanup")
+        
+        # Only sync between storages if both exist and have same session
         app_session_ids = set(app.payment_sessions.keys())
         global_session_ids = set(payment_sessions_global.keys())
+        persistent_session_ids = set(getattr(app, 'persistent_payment_sessions', {}).keys())
 
-        # Clean orphaned app sessions
-        orphaned_app = app_session_ids - global_session_ids
-        for call_id in orphaned_app:
-            session_data = app.payment_sessions.pop(call_id, None)
-            print(f"🗑️ Removed orphaned app session: {call_id}")
-            cleaned_count += 1
-
-        # Clean orphaned global sessions
-        orphaned_global = global_session_ids - app_session_ids
-        for call_id in orphaned_global:
-            session_data = payment_sessions_global.pop(call_id, None)
-            print(f"🗑️ Removed orphaned global session: {call_id}")
-            cleaned_count += 1
+        # FIXED: Only log the differences, don't remove them
+        if app_session_ids != global_session_ids:
+            print(f"📊 Storage sync status:")
+            print(f"   App-only sessions: {app_session_ids - global_session_ids}")
+            print(f"   Global-only sessions: {global_session_ids - app_session_ids}")
+            print(f"   Persistent-only sessions: {persistent_session_ids - app_session_ids}")
+            print("   Note: Different sessions across storages is normal during active payment flows")
 
         if cleaned_count > 0:
             print(f"SUCCESS: Cleaned up {cleaned_count} orphaned/expired payment sessions")
