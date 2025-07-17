@@ -1025,8 +1025,48 @@ class RestaurantReservationSkill(SkillBase):
             try:
                 self.agent.define_tool(
                     name="pay_reservation",
-                    description="Collect payment for an existing reservation. SignalWire handles all credit card collection automatically - only reservation number and phone number are needed.",
-                    parameters={"type": "object", "properties": {"reservation_number": {"type": "string", "description": "6-digit reservation number"}, "phone_number": {"type": "string", "description": "Customer phone number for SMS receipt"}}, "required": []},
+                    description="Collect payment for an existing reservation. Use this function to collect payment for an existing reservation.",
+                    parameters={
+                        "type": "object", 
+                        "properties": {
+                            "reservation_id": {"type": "integer", "description": "Reservation ID (internal database ID)"}, 
+                            "reservation_number": {"type": "string", "description": "6-digit reservation number"}, 
+                            "name": {"type": "string", "description": "Customer name"}, 
+                            "phone_number": {"type": "string", "description": "Customer phone number"}, 
+
+                            "total_amount": {"type": "number", "description": "Total bill amount to be charged in USD"}, 
+                            "payment_status": {"type": "string", "description": "Current payment status (unpaid, paid, partial)", "enum": ["unpaid", "paid", "partial"]}, 
+                            "party_size": {"type": "integer", "description": "Number of people in the party"}, 
+                            "reservation_date": {"type": "string", "description": "Date of the reservation (YYYY-MM-DD)"}, 
+                            "reservation_time": {"type": "string", "description": "Time of the reservation (HH:MM)"}, 
+                            "special_requests": {"type": "string", "description": "Special requests"}, 
+                            "old_school": {"type": "boolean", "description": "True for old school reservation (table only, no pre-ordering)", "default": False}, 
+                            "party_orders": {
+                                "type": "array", 
+                                "description": "Optional pre-orders for each person in the party", 
+                                "items": {
+                                    "type": "object", 
+                                    "properties": {
+                                        "person_name": {"type": "string", "description": "Name of person ordering (optional)"}, 
+                                        "items": {
+                                            "type": "array", 
+                                            "description": "Menu items ordered by this person", 
+                                            "items": {
+                                                "type": "object", 
+                                                "properties": {
+                                                    "menu_item_id": {"type": "integer", "description": "ID of the menu item"}, 
+                                                    "quantity": {"type": "integer", "description": "Quantity ordered"}
+                                                }, 
+                                                "required": ["menu_item_id", "quantity"]
+                                            }
+                                        }
+                                    }, 
+                                    "required": ["items"]
+                                }
+                            }
+                        }, 
+                        "required": []
+                    },
                     handler=self._pay_reservation_handler,
                     **self.swaig_fields
                 )
@@ -1232,10 +1272,110 @@ class RestaurantReservationSkill(SkillBase):
                 # Round total amount to 2 decimal places
                 total_amount = round(total_amount, 2)
                 
-                # Create the parameters array
+                # CHECK: Has the customer already confirmed the bill total?
+                payment_confirmed = meta_data.get('payment_confirmed')
+                payment_step = meta_data.get('payment_step')
+                
+                # If we're waiting for confirmation, check if user just gave an affirmative response
+                if payment_step == 'awaiting_confirmation' and not payment_confirmed:
+                    call_log = raw_data.get('call_log', []) if raw_data else []
+                    if self._detect_affirmative_response(call_log, "payment confirmation"):
+                        payment_confirmed = True
+                        print(f"🔍 Customer confirmed payment - proceeding with credit card collection")
+                        
+                        # CRITICAL FIX: Save confirmation state to metadata so it persists between function calls
+                        current_metadata = meta_data.copy() if meta_data else {}
+                        current_metadata['payment_confirmed'] = True
+                        current_metadata['payment_step'] = 'confirmed'
+                        
+                        # Update the metadata in the raw_data for persistence
+                        if hasattr(raw_data, 'get') and 'meta_data' in raw_data:
+                            raw_data['meta_data'].update(current_metadata)
+                        
+                        meta_data = current_metadata  # Update local meta_data reference
+                    else:
+                        # Check for negative responses
+                        negative_patterns = [
+                            r'\b(no|nope|not|don\'t|cancel|stop|nevermind|never mind)\b',
+                            r'\b(i don\'t want|i changed my mind|not interested)\b'
+                        ]
+                        
+                        recent_entries = [entry for entry in reversed(call_log) if entry.get('role') == 'user'][:2]
+                        for entry in recent_entries:
+                            if entry.get('content'):
+                                content = entry.get('content', '').lower().strip()
+                                for pattern in negative_patterns:
+                                    if re.search(pattern, content, re.IGNORECASE):
+                                        print(f"🔍 Customer declined payment: '{content}'")
+                                        result = SwaigFunctionResult(
+                                            "No problem! Your reservation is still confirmed. "
+                                            "You can pay when you arrive at the restaurant. "
+                                            "Is there anything else I can help you with?"
+                                        )
+                                        result.set_metadata({
+                                            "payment_step": "cancelled",
+                                            "reservation_number": reservation_number
+                                        })
+                                        return result
+                
+                # If not confirmed yet, show bill total and ask for confirmation
+                if not payment_confirmed:
+                    print(f"🔍 Showing bill total for confirmation: ${total_amount:.2f}")
+                    
+                    # Create detailed order breakdown
+                    order_details = []
+                    for order in orders:
+                        if order.total_amount and order.total_amount > 0:
+                            order_details.append(f"• Order #{order.order_number}: ${order.total_amount:.2f}")
+                    
+                    if meta_data.get('reservation_created'):
+                        message = f"✅ Perfect! Here's your bill summary:\n\n"
+                        message += f"📋 Reservation #{reservation_number} for {reservation.name}\n"
+                        message += f"📅 Party of {reservation.party_size} on {reservation.date} at {reservation.time}\n\n"
+                        message += f"🍽️ Your Pre-Order:\n"
+                        if order_details:
+                            message += "\n".join(order_details) + "\n\n"
+                        message += f"💰 Total Amount: ${total_amount:.2f}\n\n"
+                        message += f"Would you like to proceed with payment of ${total_amount:.2f}? Please say 'yes' to continue or 'no' to cancel."
+                    else:
+                        message = f"📋 Bill Summary for Reservation #{reservation_number}\n\n"
+                        message += f"👤 Customer: {reservation.name}\n"
+                        message += f"📅 Party of {reservation.party_size} on {reservation.date} at {reservation.time}\n\n"
+                        if order_details:
+                            message += f"🍽️ Your Orders:\n"
+                            message += "\n".join(order_details) + "\n\n"
+                        message += f"💰 Total Amount: ${total_amount:.2f}\n\n"
+                        message += f"Would you like to proceed with payment of ${total_amount:.2f}? Please say 'yes' to continue or 'no' to cancel."
+                    
+                    # Return with confirmation request
+                    result = SwaigFunctionResult(message)
+                    result.set_metadata({
+                        "payment_step": "awaiting_confirmation",
+                        "reservation_number": reservation_number,
+                        "customer_name": reservation.name,
+                        "cardholder_name": reservation.name,  # AUTO-POPULATE: Use reservation name as cardholder name
+                        "phone_number": phone_number,
+                        "total_amount": total_amount,
+                        "reservation_details": {
+                            "reservation_number": reservation_number,
+                            "customer_name": reservation.name,
+                            "party_size": reservation.party_size,
+                            "reservation_date": str(reservation.date),
+                            "reservation_time": str(reservation.time),
+                            "reservation_id": reservation.id
+                        },
+                        **{k: v for k, v in meta_data.items() if k.startswith(('reservation_', 'customer_'))}
+                    })
+                    return result
+                
+                # If we reach here, payment has been confirmed - proceed with credit card collection
+                print(f"🔍 Payment confirmed, proceeding with credit card collection for ${total_amount:.2f}")
+                
+                # Create the parameters array with cardholder_name to pre-populate SignalWire payment form
                 parameters_array = [
                     {"name": "reservation_number", "value": reservation_number},
                     {"name": "customer_name", "value": reservation.name},  # Use reservation name instead of cardholder_name
+                    {"name": "cardholder_name", "value": reservation.name},  # Pre-populate to skip name prompt
                     {"name": "phone_number", "value": phone_number or ""},
                     {"name": "payment_type", "value": "reservation"}
                 ]
@@ -1245,19 +1385,21 @@ class RestaurantReservationSkill(SkillBase):
                     parameters_array.append({"name": "call_id", "value": call_id})
                     print(f"🔍 Added call_id to parameters: {call_id}")
                 
-                # Create response message - make it more natural for newly created reservations
+                # Create response message with payment result variables for immediate feedback
                 if meta_data.get('reservation_created'):
-                    message = f"✅ Excellent! Let me process the payment for your pre-order.\n\n"
-                    message += f"Reservation #{reservation_number} for {reservation.name}\n"
-                    message += f"Party of {reservation.party_size} on {reservation.date} at {reservation.time}\n"
-                    message += f"Pre-order total: ${total_amount:.2f}\n\n"
-                    message += f"I'll now collect your credit card information for secure payment processing."
+                    message = f"🔄 Processing payment for ${total_amount:.2f}...\n\n"
+                    message += f"I'll now collect your credit card information securely. Please have your card ready.\n\n"
                 else:
-                    message = f"💳 Ready to process payment for Reservation #{reservation_number}\n"
-                    message += f"Customer: {reservation.name}\n"
-                    message += f"Party of {reservation.party_size} on {reservation.date} at {reservation.time}\n"
-                    message += f"Total amount: ${total_amount:.2f}\n\n"
-                    message += f"I'll now collect your credit card information for secure payment processing."
+                    message = f"🔄 Processing payment for ${total_amount:.2f}...\n\n"
+                    message += f"I'll now collect your credit card information securely. Please have your card ready.\n\n"
+                
+                # Add SignalWire payment result variables for immediate success/failure feedback
+                message += f"${{pay_payment_results.success ? "
+                message += f"'🎉 Excellent! Your payment of ${total_amount:.2f} has been processed successfully! ' + "
+                message += f"'Your confirmation number is ' + pay_payment_results.confirmation_number + '. ' + "
+                message += f"'Thank you for dining with Bobby\\'s Table!' : "
+                message += f"'I\\'m sorry, there was an issue processing your payment: ' + pay_payment_results.error_message + '. ' + "
+                message += f"'Please try again or contact the restaurant for assistance.'}}"
                 
                 # Create SwaigFunctionResult
                 result = SwaigFunctionResult(message)
@@ -4909,65 +5051,4 @@ class RestaurantReservationSkill(SkillBase):
         except Exception as e:
             return SwaigFunctionResult(f"Error sending payment receipt: {str(e)}")
 
-def pay_reservation_skill(context):
-    """
-    Voice skill to collect payment for a reservation/order using SignalWire Pay and Stripe.
-    Prompts for reservation number, cardholder name, SMS number, email, processes payment, and sends SMS receipt.
-    """
-    # 1. Prompt for reservation number
-    reservation_number = context.get('reservation_number')
-    if not reservation_number:
-        return {
-            'prompt': "Let's get your bill paid! Please say or enter your reservation number. You can find this on your confirmation text or email.",
-            'expecting_input': True,
-            'next': 'pay_reservation_skill'
-        }
 
-    # 2. Prompt for cardholder name
-    cardholder_name = context.get('cardholder_name')
-    if not cardholder_name:
-        return {
-            'prompt': "What name is on the credit card you'll be using?",
-            'expecting_input': True,
-            'next': 'pay_reservation_skill',
-            'context': {'reservation_number': reservation_number}
-        }
-
-    # 3. Prompt for SMS number (required)
-    phone_number = context.get('phone_number')
-    if not phone_number:
-        return {
-            'prompt': "What mobile number should we send your payment receipt to? Please say or enter your SMS number.",
-            'expecting_input': True,
-            'next': 'pay_reservation_skill',
-            'context': {'reservation_number': reservation_number, 'cardholder_name': cardholder_name}
-        }
-
-    # 4. Prompt for email (optional)
-    email = context.get('email')
-    if email is None:
-        return {
-            'prompt': "If you'd like an email receipt as well, please say or enter your email address. Or you can say 'skip' to continue.",
-            'expecting_input': True,
-            'next': 'pay_reservation_skill',
-            'context': {'reservation_number': reservation_number, 'cardholder_name': cardholder_name, 'phone_number': phone_number}
-        }
-    if isinstance(email, str) and email.strip().lower() == 'skip':
-        email = ''
-
-    # 5. Process payment (this is a voice skill, not SWAIG)
-    # For voice skills, we would typically integrate with payment processing here
-    # For now, return a placeholder response
-    result = {'success': True, 'message': 'Payment processed via voice skill'}
-
-    # 6. Announce result
-    if result.get('success'):
-        return {
-            'prompt': "Thank you! Your payment was successful. Your bill is now marked as paid, and we've sent a receipt to your phone. If you need anything else, just let us know!",
-            'end': True
-        }
-    else:
-        return {
-            'prompt': f"Sorry, there was a problem processing your payment: {result.get('error', 'Unknown error')}. Please try again or contact Bobby's Table for help.",
-            'end': True
-        }

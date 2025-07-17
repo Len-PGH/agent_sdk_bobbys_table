@@ -240,9 +240,10 @@ class RestaurantMenuSkill(SkillBase):
                                 "type": "object",
                                 "properties": {
                                     "name": {"type": "string", "description": "Menu item name"},
-                                    "quantity": {"type": "integer", "description": "Quantity to order", "default": 1}
+                                    "quantity": {"type": "integer", "description": "Quantity to order", "default": 1},
+                                    "price": {"type": "number", "description": "Price per item from menu"}
                                 },
-                                "required": ["name"]
+                                "required": ["name", "quantity", "price"]
                             },
                             "description": "List of menu items to order"
                         },
@@ -680,6 +681,7 @@ class RestaurantMenuSkill(SkillBase):
                 for item_spec in items:
                     item_name = item_spec.get('name', '').strip()
                     quantity = item_spec.get('quantity', 1)
+                    item_price = item_spec.get('price', 0) # Get price from item_spec
                     
                     if not item_name:
                         continue
@@ -729,13 +731,19 @@ class RestaurantMenuSkill(SkillBase):
                     except (ValueError, TypeError):
                         quantity = 1
                     
+                    # Validate price matches menu price
+                    if abs(item_price - menu_item_data['price']) > 0.01:  # Allow for small floating point differences
+                        result = SwaigFunctionResult(f"Price mismatch for {menu_item_data['name']}. Expected ${menu_item_data['price']:.2f}, got ${item_price:.2f}. Please use current menu prices.")
+                        result.set_metadata(meta_data)
+                        return result
+                    
                     # Add to order
-                    item_total = menu_item_data['price'] * quantity
+                    item_total = item_price * quantity # Use item_price from args
                     order_items.append({
                         'menu_item_id': menu_item_data['id'],
                         'name': menu_item_data['name'],
                         'quantity': quantity,
-                        'price': menu_item_data['price'],
+                        'price': item_price, # Store item_price in order_items
                         'total': item_total
                     })
                     total_amount += item_total

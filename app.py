@@ -1073,6 +1073,120 @@ def serve_static(filename):
         mimetype = 'application/javascript'
     return send_from_directory(app.config['STATIC_FOLDER'], filename, mimetype=mimetype)
 
+# Webhook Debug Routes
+webhook_debug_log = []
+
+@app.route('/webhook-debug-console')
+def webhook_debug_console():
+    """Serve the webhook debug console HTML page"""
+    return render_template('webhook_debug.html')
+
+@app.route('/webhook-debug', methods=['GET', 'POST', 'PUT', 'DELETE'])
+def webhook_debug_endpoint():
+    """Debug endpoint to receive and log webhook data"""
+    global webhook_debug_log
+    
+    try:
+        timestamp = datetime.now().isoformat()
+        method = request.method
+        headers = dict(request.headers)
+        
+        # Get request data
+        if request.is_json:
+            data = request.get_json()
+        elif request.form:
+            data = dict(request.form)
+        else:
+            data = request.get_data(as_text=True)
+        
+        # Log the webhook
+        webhook_entry = {
+            'timestamp': timestamp,
+            'method': method,
+            'headers': headers,
+            'data': data,
+            'url': request.url,
+            'remote_addr': request.remote_addr,
+            'user_agent': request.headers.get('User-Agent', ''),
+            'success': True
+        }
+        
+        webhook_debug_log.append(webhook_entry)
+        
+        # Keep only last 100 entries
+        if len(webhook_debug_log) > 100:
+            webhook_debug_log = webhook_debug_log[-100:]
+        
+        app_logger.info(f"Webhook Debug - {method} request received from {request.remote_addr}")
+        app_logger.info(f"Webhook Debug - Data: {data}")
+        
+        return jsonify({
+            'status': 'success',
+            'message': 'Webhook received and logged',
+            'timestamp': timestamp,
+            'method': method,
+            'data_received': bool(data)
+        }), 200
+        
+    except Exception as e:
+        error_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'method': request.method,
+            'headers': dict(request.headers),
+            'data': str(e),
+            'url': request.url,
+            'remote_addr': request.remote_addr,
+            'user_agent': request.headers.get('User-Agent', ''),
+            'success': False,
+            'error': str(e)
+        }
+        
+        webhook_debug_log.append(error_entry)
+        app_logger.error(f"Webhook Debug Error: {str(e)}")
+        
+        return jsonify({
+            'status': 'error',
+            'message': str(e),
+            'timestamp': datetime.now().isoformat()
+        }), 500
+
+@app.route('/webhook-debug/poll')
+def webhook_debug_poll():
+    """Poll endpoint to get recent webhook data"""
+    global webhook_debug_log
+    
+    # Get only recent entries (last 10)
+    recent_webhooks = webhook_debug_log[-10:] if webhook_debug_log else []
+    
+    return jsonify({
+        'webhooks': recent_webhooks,
+        'total_count': len(webhook_debug_log),
+        'timestamp': datetime.now().isoformat()
+    })
+
+@app.route('/webhook-debug/clear', methods=['POST'])
+def webhook_debug_clear():
+    """Clear the webhook debug log"""
+    global webhook_debug_log
+    webhook_debug_log = []
+    
+    return jsonify({
+        'status': 'success',
+        'message': 'Webhook debug log cleared',
+        'timestamp': datetime.now().isoformat()
+    })
+
+@app.route('/webhook-debug/export')
+def webhook_debug_export():
+    """Export webhook debug log as JSON"""
+    global webhook_debug_log
+    
+    response = make_response(jsonify(webhook_debug_log))
+    response.headers['Content-Disposition'] = f'attachment; filename=webhook-debug-{datetime.now().strftime("%Y%m%d-%H%M%S")}.json'
+    response.headers['Content-Type'] = 'application/json'
+    
+    return response
+
 # Global conversation memory to track function calls per AI session
 conversation_memory = {}
 
@@ -1315,6 +1429,36 @@ def validate_and_correct_function_call(function_name, params, extracted_info, ca
     # CRITICAL DEBUG: Always log validation calls
     print(f"🔍 VALIDATION CALLED: function={function_name}, params={params}")
     
+    # NEW: Check for menu question routing errors
+    if function_name == 'get_reservation' and (not params or not params.get('reservation_number')):
+        # Check if this is a menu price question based on conversation context
+        context_text = ' '.join([
+            str(entry.get('content', '')) for entry in call_log[-5:] 
+            if isinstance(entry, dict) and entry.get('role') == 'user'
+        ]).lower()
+        
+        # Menu question patterns
+        menu_patterns = [
+            r'how much is',
+            r'what.*price',
+            r'how much does.*cost',
+            r'price of',
+            r'cost of',
+            r'what.*menu',
+            r'menu.*price',
+            r'tell me about.*menu'
+        ]
+        
+        # Check if any menu patterns match the conversation context
+        is_menu_question = any(re.search(pattern, context_text) for pattern in menu_patterns)
+        
+        if is_menu_question:
+            print(f"🚨 MENU QUESTION ROUTING ERROR: AI called get_reservation for menu question")
+            print(f"   Context: {context_text}")
+            print(f"   Redirecting to get_menu...")
+            
+            return 'get_menu', {}
+    
     # Check for the critical 5-digit vs 6-digit routing error
     if function_name == 'get_reservation':
         reservation_number = params.get('reservation_number', '')
@@ -1348,6 +1492,88 @@ def validate_and_correct_function_call(function_name, params, extracted_info, ca
                     corrected_params['order_type'] = 'pickup'
                     
                 return 'get_order_details', corrected_params
+            
+            # Check for speech recognition digit duplication (6-digit number that should be 5-digit order)
+            elif len(clean_number) == 6:
+                # Look for common speech recognition patterns that duplicate digits
+                # Only detect OBVIOUS duplication patterns, not legitimate consecutive digits
+                
+                possible_5_digit = None
+                duplication_confidence = 0
+                
+                # Pattern 1: Single digit duplication (e.g., "74724" -> "747224")
+                # Look for exactly ONE pair of consecutive identical digits
+                consecutive_pairs = []
+                for i in range(len(clean_number) - 1):
+                    if clean_number[i] == clean_number[i + 1]:
+                        consecutive_pairs.append(i)
+                
+                # Only proceed if there's exactly ONE pair of consecutive identical digits
+                # This avoids breaking legitimate numbers like "22334" -> "223344"
+                if len(consecutive_pairs) == 1:
+                    dup_pos = consecutive_pairs[0]
+                    # Remove one of the duplicated digits
+                    possible_5_digit = clean_number[:dup_pos] + clean_number[dup_pos+1:]
+                    duplication_confidence = 70  # Medium confidence for single duplication
+                    print(f"🔍 Detected single digit duplication at position {dup_pos}: {clean_number} -> {possible_5_digit}")
+                
+                # Pattern 2: Check for very specific speech recognition patterns
+                # "74724" -> "747224" (middle digit duplicated)
+                elif len(clean_number) == 6:
+                    # Check if removing any single digit creates a valid-looking 5-digit number
+                    for i in range(len(clean_number)):
+                        candidate = clean_number[:i] + clean_number[i+1:]
+                        # Check if this looks like a typical order number pattern
+                        if len(candidate) == 5 and candidate.isdigit():
+                            # Higher confidence if the removed digit matches an adjacent digit
+                            if i > 0 and clean_number[i] == clean_number[i-1]:
+                                possible_5_digit = candidate
+                                duplication_confidence = 80  # High confidence
+                                print(f"🔍 Detected speech duplication (removed duplicate): {clean_number} -> {possible_5_digit}")
+                                break
+                            elif i < len(clean_number) - 1 and clean_number[i] == clean_number[i+1]:
+                                possible_5_digit = candidate
+                                duplication_confidence = 80  # High confidence
+                                print(f"🔍 Detected speech duplication (removed duplicate): {clean_number} -> {possible_5_digit}")
+                                break
+                
+                # If we found a potential 5-digit number, check context and confidence
+                if possible_5_digit and len(possible_5_digit) == 5 and duplication_confidence > 0:
+                    context_text = ' '.join([
+                        str(entry.get('content', '')) for entry in call_log[-10:] 
+                        if isinstance(entry, dict) and entry.get('role') in ['user', 'assistant']
+                    ]).lower()
+                    
+                    # Keywords that suggest this is an order, not a reservation
+                    order_keywords = ['order', 'pickup', 'delivery', 'food', 'pay for order', 'order number']
+                    reservation_keywords = ['reservation', 'table', 'booking', 'dinner', 'lunch']
+                    
+                    order_score = sum(1 for keyword in order_keywords if keyword in context_text)
+                    reservation_score = sum(1 for keyword in reservation_keywords if keyword in context_text)
+                    
+                    # Only apply the fix if we have sufficient confidence AND context suggests it's an order
+                    context_confidence = 20 if order_score > reservation_score else 0
+                    total_confidence = duplication_confidence + context_confidence
+                    
+                    if total_confidence >= 80:  # Require high confidence to avoid breaking legitimate numbers
+                        print(f"🚨 SPEECH RECOGNITION FIX: Detected duplicated digit in order number")
+                        print(f"   Original: {clean_number} (6 digits) -> Corrected: {possible_5_digit} (5 digits)")
+                        print(f"   Duplication confidence: {duplication_confidence}%, Context: {context_confidence}%, Total: {total_confidence}%")
+                        print(f"   Context suggests ORDER (score: {order_score} vs {reservation_score})")
+                        print(f"   Redirecting to get_order_details...")
+                        
+                        corrected_params = {
+                            'order_number': possible_5_digit,
+                            'order_type': 'pickup'  # Default to pickup since most orders are pickup
+                        }
+                        
+                        # Try to determine order type from context
+                        if 'delivery' in context_text:
+                            corrected_params['order_type'] = 'delivery'
+                        elif 'pickup' in context_text or 'pick up' in context_text:
+                            corrected_params['order_type'] = 'pickup'
+                            
+                        return 'get_order_details', corrected_params
     
     # Check for other common mistakes
     elif function_name == 'get_order_details':
@@ -1368,6 +1594,108 @@ def validate_and_correct_function_call(function_name, params, extracted_info, ca
                 }
                 
                 return 'get_reservation', corrected_params
+    
+    # Check for payment function corrections
+    elif function_name == 'pay_reservation':
+        reservation_number = params.get('reservation_number', '')
+        
+        if reservation_number:
+            # Clean the number
+            clean_number = re.sub(r'[^\d]', '', str(reservation_number))
+            
+            # Check if it's a 5-digit number (should be pay_order)
+            if len(clean_number) == 5:
+                print(f"🚨 VALIDATION ERROR: AI called pay_reservation with 5-digit number: {clean_number}")
+                print(f"   5-digit numbers are ORDERS, not reservations!")
+                print(f"   Redirecting to pay_order...")
+                
+                corrected_params = {
+                    'order_number': clean_number
+                }
+                
+                return 'pay_order', corrected_params
+    
+    elif function_name == 'pay_order':
+        order_number = params.get('order_number', '')
+        
+        if order_number:
+            # Clean the number
+            clean_number = re.sub(r'[^\d]', '', str(order_number))
+            
+            # Check if it's a 6-digit number (should be pay_reservation)
+            if len(clean_number) == 6:
+                print(f"🚨 VALIDATION ERROR: AI called pay_order with 6-digit number: {clean_number}")
+                print(f"   6-digit numbers are RESERVATIONS, not orders!")
+                print(f"   Redirecting to pay_reservation...")
+                
+                corrected_params = {
+                    'reservation_number': clean_number
+                }
+                
+                return 'pay_reservation', corrected_params
+    
+    # ENHANCEMENT: Add additional context for pay_reservation function calls
+    if function_name == 'pay_reservation':
+        enhanced_params = dict(params)  # Make a copy
+        reservation_number = enhanced_params.get('reservation_number')
+        
+        if reservation_number:
+            print(f"🔧 ENHANCING pay_reservation call with reservation details for #{reservation_number}")
+            
+            try:
+                from models import Reservation, Order
+                
+                # Look up reservation details
+                reservation = Reservation.query.filter_by(reservation_number=reservation_number).first()
+                if reservation:
+                    print(f"✅ Found reservation: {reservation.name}, party of {reservation.party_size}")
+                    
+                    # Calculate total amount from orders
+                    total_amount = 0.0
+                    orders = Order.query.filter_by(reservation_id=reservation.id).all()
+                    for order in orders:
+                        order_amount = order.total_amount or 0.0
+                        total_amount += order_amount
+                    
+                    total_amount = round(total_amount, 2)
+                    
+                    # Determine payment status
+                    payment_status = "unpaid"
+                    if any(order.payment_status == 'paid' for order in orders):
+                        if all(order.payment_status == 'paid' for order in orders):
+                            payment_status = "paid"
+                        else:
+                            payment_status = "partial"
+                    
+                    # Enhance parameters with reservation details
+                    enhanced_params.update({
+                        'reservation_id': reservation.id,
+                        'name': reservation.name,
+                        'total_amount': total_amount,
+                        'payment_status': payment_status,
+                        'party_size': reservation.party_size,
+                        'reservation_date': str(reservation.date),
+                        'reservation_time': str(reservation.time),
+                        'special_requests': reservation.special_requests or ""
+                    })
+                    
+                    # Add phone number if not already present
+                    if not enhanced_params.get('phone_number') and reservation.phone:
+                        enhanced_params['phone_number'] = reservation.phone
+                    
+                    print(f"🔧 Enhanced pay_reservation parameters:")
+                    print(f"   Total Amount: ${total_amount:.2f}")
+                    print(f"   Payment Status: {payment_status}")
+                    print(f"   Party Size: {reservation.party_size}")
+                    print(f"   Date/Time: {reservation.date} at {reservation.time}")
+                    
+                    return function_name, enhanced_params
+                else:
+                    print(f"⚠️ Could not find reservation #{reservation_number} for enhancement")
+                    
+            except Exception as e:
+                print(f"⚠️ Error enhancing pay_reservation parameters: {e}")
+                # Continue with original parameters if enhancement fails
     
     # No corrections needed
     return function_name, params
@@ -1607,7 +1935,7 @@ def swaig_receptionist():
                 },
                 'create_order': {
                     'function': 'create_order',
-                    'purpose': 'Create a pickup or delivery order (NOT linked to a dining reservation). Use this for customers who want food to go, not for adding items to existing reservations.',
+                    'purpose': 'Create a standalone food order for pickup or delivery',
                     'argument': {
                         'type': 'object',
                         'properties': {
@@ -1636,7 +1964,7 @@ def swaig_receptionist():
                 },
                 'get_order_details': {
                     'function': 'get_order_details',
-                    'purpose': 'Check the kitchen status of a pickup or delivery order. Use this when customers call to ask "Is my order ready?" or "How much longer?"',
+                    'purpose': 'Get order details and status for a to-go order for pickup or delivery. Search by order number, customer phone number, or customer name. Use this when customers ask about their order status',
                     'argument': {
                         'type': 'object',
                         'properties': {
@@ -1687,15 +2015,25 @@ def swaig_receptionist():
                 },
                 'pay_reservation': {
                     'function': 'pay_reservation',
-                    'purpose': 'Process payment for an existing reservation using SignalWire Pay and Stripe. This function handles the entire payment flow: finds reservation, shows bill total, collects card details, and processes payment.',
+                    'purpose': 'Collect payment for an existing reservation. Use this function to collect payment for an existing reservation. Give the payment results to the customer.',
                     'argument': {
                         'type': 'object',
                         'properties': {
                             'reservation_number': {'type': 'string', 'description': '6-digit reservation number to pay for (will be extracted from conversation if not provided)'},
-                            'cardholder_name': {'type': 'string', 'description': 'Name on the credit card (will be requested if not provided)'},
+                            'cardholder_name': {'type': 'string', 'description': 'Name on the credit card (auto-filled from reservation name)'},
                             'phone_number': {'type': 'string', 'description': 'SMS number for receipt (will use caller ID if not provided)'}
                         },
                         'required': []
+                    },
+                    'response': {
+                        'type': 'object',
+                        'properties': {
+                            'success': {'type': 'boolean', 'description': 'Whether the payment was successful'},
+                            'confirmation_number': {'type': 'string', 'description': 'Payment confirmation number (if successful)'},
+                            'amount_charged': {'type': 'number', 'description': 'Amount charged in USD'},
+                            'error_message': {'type': 'string', 'description': 'Error details (if payment failed)'},
+                            'receipt_sent': {'type': 'boolean', 'description': 'Whether SMS receipt was sent successfully'}
+                        }
                     }
                 }
             }
@@ -2277,7 +2615,7 @@ def swaig_receptionist_info():
 
                                 {
                                     "function": "create_order",
-                                    "purpose": "Create a new food order. Extract menu items and quantities from natural language. If user says 'I want the salmon' or 'One cheesecake', extract that information. This will generate a unique order ID. Always ask customers if they want to pay now or at pickup/delivery.",
+                                    "purpose": "Create a standalone food order for pickup or delivery",
                                     "argument": {
                                         "type": "object",
                                         "properties": {
@@ -2317,15 +2655,25 @@ def swaig_receptionist_info():
                                 },
                                 {
                                     "function": "pay_reservation",
-                                    "purpose": "Process payment for an existing reservation using SignalWire Pay and Stripe. This function handles the entire payment flow: finds reservation, shows bill total, collects card details, and processes payment.",
+                                    "purpose": "Collect payment for an existing reservation. Use this function to collect payment for an existing reservation. Give the payment results to the customer.",
                                     "argument": {
                                         "type": "object",
                                         "properties": {
                                             "reservation_number": {"type": "string", "description": "6-digit reservation number to pay for (will be extracted from conversation if not provided)"},
-                                            "cardholder_name": {"type": "string", "description": "Name on the credit card (will be requested if not provided)"},
+                                            "cardholder_name": {"type": "string", "description": "Name on the credit card (auto-filled from reservation name)"},
                                             "phone_number": {"type": "string", "description": "SMS number for receipt (will use caller ID if not provided)"}
                                         },
                                         "required": []
+                                    },
+                                    "response": {
+                                        "type": "object",
+                                        "properties": {
+                                            "success": {"type": "boolean", "description": "Whether the payment was successful"},
+                                            "confirmation_number": {"type": "string", "description": "Payment confirmation number (if successful)"},
+                                            "amount_charged": {"type": "number", "description": "Amount charged in USD"},
+                                            "error_message": {"type": "string", "description": "Error details (if payment failed)"},
+                                            "receipt_sent": {"type": "boolean", "description": "Whether SMS receipt was sent successfully"}
+                                        }
                                     }
                                 },
                                 {
@@ -2355,7 +2703,7 @@ def swaig_receptionist_info():
                             ]
                         },
                         "prompt": {
-                            "text": "Hi there! I'm Bobby from Bobby's Table. Great to have you call us today! How can I help you out? Whether you're looking to make a reservation, check on an existing one, hear about our menu, or place an order, I'm here to help make it easy for you.\n\nIMPORTANT CONVERSATION GUIDELINES:\n\n**RESERVATION LOOKUPS - CRITICAL:**\n- When customers want to check their reservation, ALWAYS ask for their reservation number FIRST\n- Say: 'Do you have your reservation number? It's a 6-digit number we sent you when you made the reservation.' (6 digits = reservation, 5 digits = order)\n- Only if they don't have it, then ask for their name as backup\n- Reservation numbers are the fastest and most accurate way to find reservations\n- Handle spoken numbers like 'seven eight nine zero one two' which becomes '789012'\n\n**🚨 PAYMENTS - SIMPLE PAYMENT RULE 🚨:**\n**Use the pay_reservation function for all existing reservation payments!**\n\n**SIMPLE PAYMENT FLOW:**\n1. Customer explicitly asks to pay (\"I want to pay\", \"Pay now\", \"Can I pay?\") → IMMEDIATELY call pay_reservation function\n2. pay_reservation handles everything: finds reservation, shows bill total, collects card details, and processes payment\n3. The function will guide the customer through each step conversationally and securely\n\n**PAYMENT EXAMPLES:**\n- Customer: 'I want to pay my bill' → YOU: Call pay_reservation function\n- Customer: 'Pay now' → YOU: Call pay_reservation function\n- Customer: 'Can I pay for my reservation?' → YOU: Call pay_reservation function\n\n**CRITICAL: Use pay_reservation for existing reservations only!**\n- ERROR: NEVER use pay_reservation for new reservation creation (use create_reservation instead)\n- ERROR: NEVER call pay_reservation when customer is just confirming order details\n\n**PRICING AND PRE-ORDERS - CRITICAL:**\n- When customers mention food items, ALWAYS provide the price immediately\n- Example: 'Buffalo Wings are twelve dollars and ninety-nine cents'\n- When creating reservations with pre-orders, ALWAYS mention the total cost\n- Example: 'Your Buffalo Wings and Draft Beer total sixteen dollars and ninety-eight cents'\n- ALWAYS ask if customers want to pay for their pre-order after confirming the total\n- Example: 'Would you like to pay for your pre-order now to complete your reservation?'\n\n**🔄 CORRECT PREORDER WORKFLOW:**\n- When customers want to create reservations with pre-orders, show them an order confirmation FIRST\n- The order confirmation shows: reservation details, each person's food items, individual prices, and total cost\n- Wait for customer to confirm their order details before proceeding (say 'Yes, that's correct')\n- After order confirmation, CREATE THE RESERVATION IMMEDIATELY\n- The correct flow is: Order Details → Customer Confirms → Create Reservation → Give Number → Offer Payment\n- After creating the reservation:\n  1. Give the customer their reservation number clearly\n  1.1 Mention that SMS confirmation is available if they'd like their reservation details sent to their phone\n  1.2 If the user requests SMS confirmation, send the reservation details via sms message\n 2. Ask if they want to pay now: 'Would you like to pay for your pre-order now?'\n- Payment is OPTIONAL - customers can always pay when they arrive\n\n**🔄 ORDER CONFIRMATION vs PAYMENT REQUESTS - CRITICAL:**\n- \"Yes, that's correct\" = Order confirmation → Call create_reservation function\n- \"Yes, create my reservation\" = Order confirmation → Call create_reservation function\n- \"That looks right\" = Order confirmation → Call create_reservation function\n- \"Pay now\" = Payment request → Call pay_reservation function\n- \"I want to pay\" = Payment request → Call pay_reservation function\n- \"Can I pay?\" = Payment request → Call pay_reservation function\n\n**🚨 CRITICAL: NEVER CALL pay_reservation WHEN USER IS CONFIRMING ORDER DETAILS 🚨:**\n- If user says \"Yes\" after order summary → Call create_reservation function\n- If user says \"That's correct\" after order summary → Call create_reservation function\n- If user says \"Looks good\" after order summary → Call create_reservation function\n- If user says \"Perfect\" after order summary → Call create_reservation function\n- ONLY call pay_reservation when user explicitly asks to pay AFTER reservation is created\n\n**🔍 CRITICAL: DISTINGUISH BETWEEN RESERVATIONS AND ORDERS:**\n- RESERVATIONS = table bookings (use get_reservation)\n- ORDERS = pickup/delivery food orders (use get_order_details)\n- If customer says \"pickup order\", \"delivery order\", \"food order\" → use get_order_details\n- If customer says \"reservation\", \"table booking\", \"dinner reservation\" → use get_reservation\n\n**🔍 ORDER STATUS CHECKS - CRITICAL:**\n- When customers ask to check their ORDER status, use get_order_details function\n- Examples: \"Check my order status\", \"Where is my order?\", \"Is my order ready?\"\n- NEVER use update_order_status - this function doesn't exist\n- NEVER use get_reservation for pickup/delivery orders\n- Use get_order_details with the order number the customer provides\n- Handle spoken numbers: \"nine two six five seven\" becomes \"92657\"\n- Always provide complete status information including estimated ready time\n\n**🚨 MANDATORY FUNCTION ROUTING RULES 🚨:**\n- 5-digit number (like 91576, 62879, 12345) = ORDER → MUST use get_order_details\n- 6-digit number (like 789012, 333444, 675421) = RESERVATION → MUST use get_reservation\n- Customer says \"order\" = ORDER → MUST use get_order_details\n- Customer says \"pickup\" = ORDER → MUST use get_order_details\n- Customer says \"delivery\" = ORDER → MUST use get_order_details\n- Customer says \"reservation\" = RESERVATION → MUST use get_reservation\n- Customer says \"table booking\" = RESERVATION → MUST use get_reservation\n\n**ORDER STATUS EXAMPLES:**\n- Customer: \"Check on my pickup order 92657\" → YOU: Call get_order_details with order_number: \"92657\" (5 digits = order)\n- Customer: \"Is my food order ready?\" → YOU: Call get_order_details with their order number\n- Customer: \"Where is my order 12345?\" → YOU: Call get_order_details with order_number: \"12345\" (5 digits = order)\n- Customer: \"I'm calling about my pickup order 62879\" → YOU: Call get_order_details with order_number: \"62879\" (5 digits = order)\n- Customer: \"Check my reservation 789012\" → YOU: Call get_reservation with reservation_number: \"789012\" (6 digits = reservation)\n\n**OTHER GUIDELINES:**\n- When making reservations, ALWAYS ask if customers want to pre-order from the menu\n- For parties larger than one person, ask for each person's name and their individual food preferences\n- Always say numbers as words (say 'one' instead of '1', 'two' instead of '2', etc.)\n- Extract food items mentioned during reservation requests and include them in party_orders\n- Be conversational and helpful - guide customers through the pre-ordering process naturally\n- Remember: The system now has a confirmation step for preorders - embrace this workflow!\\n- CRITICAL NUMBER FORMAT: 5 digits = order, 6 digits = reservation"
+                            "text": "Hi there! I'm Bobby from Bobby's Table. Great to have you call us today! How can I help you out? Whether you're looking to make a reservation, check on an existing one, hear about our menu, or place an order, I'm here to help make it easy for you.\n\nIMPORTANT CONVERSATION GUIDELINES:\n\n**RESERVATION LOOKUPS - CRITICAL:**\n- When customers want to check their reservation, ALWAYS ask for their reservation number FIRST\n- Say: 'Do you have your reservation number? It's a 6-digit number we sent you when you made the reservation.' (6 digits = reservation, 5 digits = order)\n- Only if they don't have it, then ask for their name as backup\n- Reservation numbers are the fastest and most accurate way to find reservations\n- Handle spoken numbers like 'seven eight nine zero one two' which becomes '789012'\n\n**🚨 PAYMENTS - SIMPLE PAYMENT RULE 🚨:**\n**Use the pay_reservation function for all existing reservation payments!**\n\n**SIMPLE PAYMENT FLOW:**\n1. Customer explicitly asks to pay (\"I want to pay\", \"Pay now\", \"Can I pay?\") → IMMEDIATELY call pay_reservation function\n2. pay_reservation handles everything: finds reservation, shows bill total, collects card details, and processes payment\n3. The function will guide the customer through each step conversationally and securely\n\n**PAYMENT EXAMPLES:**\n- Customer: 'I want to pay my bill' → YOU: Call pay_reservation function\n- Customer: 'Pay now' → YOU: Call pay_reservation function\n- Customer: 'Can I pay for my reservation?' → YOU: Call pay_reservation function\n\n**CRITICAL: Use pay_reservation for existing reservations only!**\n- ERROR: NEVER use pay_reservation for new reservation creation (use create_reservation instead)\n- ERROR: NEVER call pay_reservation when customer is just confirming order details\n\n**PRICING AND PRE-ORDERS - CRITICAL:**\n- When customers mention food items, ALWAYS provide the price immediately using data from get_menu function\n- 🚨 NEVER use hardcoded prices - ONLY use actual database prices from get_menu function\n- 🚨 For individual price questions: Search the cached_menu data for the exact item and price\n- Example: '[MENU ITEM NAME] are [ACTUAL PRICE FROM DATABASE]'\n- When creating reservations with pre-orders, ALWAYS mention the total cost using actual database prices\n- Example: 'Your [ITEMS] total [ACTUAL CALCULATED TOTAL FROM DATABASE PRICES]'\n- ALWAYS ask if customers want to pay for their pre-order after confirming the total\n- Example: 'Would you like to pay for your pre-order now to complete your reservation?'\n\n**🚨 MENU PRICE QUESTION ROUTING - CRITICAL:**\n- \"How much is French toast?\" → YOU: Call get_menu function (NEVER get_reservation!)\n- \"What's the price of the burger?\" → YOU: Call get_menu function (NEVER get_reservation!)\n- \"How much does [item] cost?\" → YOU: Call get_menu function (NEVER get_reservation!)\n- \"Tell me about your menu\" → YOU: Call get_menu function (NEVER get_reservation!)\n- ANY menu or price question → YOU: Call get_menu function FIRST\n\n**🔄 CORRECT PREORDER WORKFLOW:**\n- When customers want to create reservations with pre-orders, show them an order confirmation FIRST\n- The order confirmation shows: reservation details, each person's food items, individual prices, and total cost\n- Wait for customer to confirm their order details before proceeding (say 'Yes, that's correct')\n- After order confirmation, CREATE THE RESERVATION IMMEDIATELY\n- The correct flow is: Order Details → Customer Confirms → Create Reservation → Give Number → Offer Payment\n- After creating the reservation:\n  1. Give the customer their reservation number clearly\n  1.1 Mention that SMS confirmation is available if they'd like their reservation details sent to their phone\n  1.2 If the user requests SMS confirmation, send the reservation details via sms message\n 2. Ask if they want to pay now: 'Would you like to pay for your pre-order now?'\n- Payment is OPTIONAL - customers can always pay when they arrive\n\n**🔄 ORDER CONFIRMATION vs PAYMENT REQUESTS - CRITICAL:**\n- \"Yes, that's correct\" = Order confirmation → Call create_reservation function\n- \"Yes, create my reservation\" = Order confirmation → Call create_reservation function\n- \"That looks right\" = Order confirmation → Call create_reservation function\n- \"Pay now\" = Payment request → Call pay_reservation function\n- \"I want to pay\" = Payment request → Call pay_reservation function\n- \"Can I pay?\" = Payment request → Call pay_reservation function\n\n**🚨 CRITICAL: NEVER CALL pay_reservation WHEN USER IS CONFIRMING ORDER DETAILS 🚨:**\n- If user says \"Yes\" after order summary → Call create_reservation function\n- If user says \"That's correct\" after order summary → Call create_reservation function\n- If user says \"Looks good\" after order summary → Call create_reservation function\n- If user says \"Perfect\" after order summary → Call create_reservation function\n- ONLY call pay_reservation when user explicitly asks to pay AFTER reservation is created\n\n**🔍 CRITICAL: DISTINGUISH BETWEEN RESERVATIONS AND ORDERS:**\n- RESERVATIONS = table bookings (use get_reservation)\n- ORDERS = pickup/delivery food orders (use get_order_details)\n- If customer says \"pickup order\", \"delivery order\", \"food order\" → use get_order_details\n- If customer says \"reservation\", \"table booking\", \"dinner reservation\" → use get_reservation\n\n**🔍 ORDER STATUS CHECKS - CRITICAL:**\n- When customers ask to check their ORDER status, use get_order_details function\n- Examples: \"Check my order status\", \"Where is my order?\", \"Is my order ready?\"\n- NEVER use update_order_status - this function doesn't exist\n- NEVER use get_reservation for pickup/delivery orders\n- Use get_order_details with the order number the customer provides\n- Handle spoken numbers: \"nine two six five seven\" becomes \"92657\"\n- Always provide complete status information including estimated ready time\n\n**🚨 MANDATORY FUNCTION ROUTING RULES 🚨:**\n- 5-digit number (like 91576, 62879, 12345) = ORDER → MUST use get_order_details\n- 6-digit number (like 789012, 333444, 675421) = RESERVATION → MUST use get_reservation\n- Customer says \"order\" = ORDER → MUST use get_order_details\n- Customer says \"pickup\" = ORDER → MUST use get_order_details\n- Customer says \"delivery\" = ORDER → MUST use get_order_details\n- Customer says \"reservation\" = RESERVATION → MUST use get_reservation\n- Customer says \"table booking\" = RESERVATION → MUST use get_reservation\n\n**ORDER STATUS EXAMPLES:**\n- Customer: \"Check on my pickup order 92657\" → YOU: Call get_order_details with order_number: \"92657\" (5 digits = order)\n- Customer: \"Is my food order ready?\" → YOU: Call get_order_details with their order number\n- Customer: \"Where is my order 12345?\" → YOU: Call get_order_details with order_number: \"12345\" (5 digits = order)\n- Customer: \"I'm calling about my pickup order 62879\" → YOU: Call get_order_details with order_number: \"62879\" (5 digits = order)\n- Customer: \"Check my reservation 789012\" → YOU: Call get_reservation with reservation_number: \"789012\" (6 digits = reservation)\n\n**OTHER GUIDELINES:**\n- When making reservations, ALWAYS ask if customers want to pre-order from the menu\n- For parties larger than one person, ask for each person's name and their individual food preferences\n- Always say numbers as words (say 'one' instead of '1', 'two' instead of '2', etc.)\n- Extract food items mentioned during reservation requests and include them in party_orders\n- Be conversational and helpful - guide customers through the pre-ordering process naturally\n- Remember: The system now has a confirmation step for preorders - embrace this workflow!\\n- CRITICAL NUMBER FORMAT: 5 digits = order, 6 digits = reservation"
                         }
                     }
                 }
@@ -5329,6 +5677,14 @@ if __name__ == '__main__':
     print("📞 Voice Interface: http://0.0.0.0:8080/receptionist")
     print("🍳 Kitchen Dashboard: http://0.0.0.0:8080/kitchen")
     print("Press Ctrl+C to stop the service")
+    print("-" * 50)
+    
+    # Debug: Print environment variables
+    print("\n🔧 Environment Variables:")
+    print(f"   SIGNALWIRE_PROJECT_ID: {os.getenv('SIGNALWIRE_PROJECT_ID', 'NOT SET')}")
+    print(f"   SIGNALWIRE_SPACE: {os.getenv('SIGNALWIRE_SPACE', 'NOT SET')}")
+    print(f"   SIGNALWIRE_TOKEN: {'SET' if os.getenv('SIGNALWIRE_TOKEN') else 'NOT SET'}")
+    print(f"   SIGNALWIRE_FROM_NUMBER: {os.getenv('SIGNALWIRE_FROM_NUMBER', 'NOT SET')}")
     print("-" * 50)
 
     # Clean up any orphaned payment sessions from previous runs
