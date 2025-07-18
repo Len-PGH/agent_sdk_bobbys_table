@@ -753,10 +753,10 @@ class RestaurantMenuSkill(SkillBase):
                     result.set_metadata(meta_data)
                     return result
                 
-                # Generate order number
+                # Generate order number (5-digit)
                 import random
                 import string
-                order_number = ''.join(random.choices(string.digits, k=6))
+                order_number = ''.join(random.choices(string.digits, k=5))
                 
                 # Create the order
                 new_order = Order(
@@ -1595,16 +1595,173 @@ class RestaurantMenuSkill(SkillBase):
             traceback.print_exc()
             return SwaigFunctionResult(f"Sorry, there was an error updating your order. Please try again or call us directly at {self._format_phone_number(os.getenv('SIGNALWIRE_FROM_NUMBER', '+15555555555'))}.")
 
+    def _detect_affirmative_response(self, call_log, context="payment"):
+        """Detect if user gave an affirmative response in recent conversation"""
+        if not call_log:
+            return False
+        
+        # Common affirmative responses
+        affirmative_patterns = [
+            r'\b(yes|yeah|yep|yup|sure|okay|ok|alright|absolutely|definitely)\b',
+            r'\b(let\'s do it|go ahead|sounds good|that works|perfect)\b',
+            r'\b(i\'d like to|i want to|i would like to)\b.*\b(pay|payment)\b',
+            r'\b(pay|payment|credit card|card)\b',
+            r'\b(proceed|continue|confirm)\b'
+        ]
+        
+        # Check the last few user messages for affirmative responses
+        recent_entries = [entry for entry in reversed(call_log) if entry.get('role') == 'user'][:3]
+        
+        for entry in recent_entries:
+            if entry.get('content'):
+                content = entry.get('content', '').lower().strip()
+                
+                # Check for affirmative patterns
+                for pattern in affirmative_patterns:
+                    if re.search(pattern, content, re.IGNORECASE):
+                        print(f"🔍 Detected affirmative response for {context}: '{content}'")
+                        return True
+                
+                # Also check for simple single-word responses
+                if content in ['yes', 'yeah', 'yep', 'yup', 'sure', 'okay', 'ok', 'alright']:
+                    print(f"🔍 Detected simple affirmative response: '{content}'")
+                    return True
+        
+        return False
+
     def _pay_order_handler(self, args, raw_data):
-        """Process payment for an existing order using SignalWire Pay and Stripe"""
+        """Process payment using SWML pay verb with Stripe integration - handles both new and existing orders"""
         print("🔧 Entering _pay_order_handler")
         print(f"🔍 Function args: {args}")
         print(f"🔍 Function raw_data keys: {list(raw_data.keys()) if raw_data else None}")
         
+        # Initialize result to None to help debug scope issues
+        result = None
+        print("🔍 Initialized result variable to None")
+        
         try:
             from signalwire_agents.core.function_result import SwaigFunctionResult
             import os
+            import re
+            print("✅ Imports successful")
+            
+            # Extract meta_data for session management
+            meta_data = raw_data.get('meta_data', {}) if raw_data else {}
+            print(f"🔍 Current meta_data: {meta_data}")
+            
+            # Get call_id for payment session integration
+            call_id = raw_data.get('call_id') if raw_data else None
+            print(f"🔍 Call ID: {call_id}")
+            
+            # Extract basic payment information
+            order_number = args.get('order_number')
+            cardholder_name = args.get('cardholder_name')
+            phone_number = args.get('phone_number')
+            
+            # Get phone number from caller ID if not provided
+            if not phone_number:
+                caller_phone = raw_data.get('caller_id_num') or raw_data.get('caller_id_number')
+                if caller_phone:
+                    phone_number = caller_phone
+                    print(f"🔄 Using phone number from caller ID: {phone_number}")
+            
+            # AUTO-DETECT: Check if this is for a newly created order from session metadata
+            if not order_number:
+                # Check meta_data for recently created order
+                order_created = meta_data.get('order_created')
+                session_order_number = meta_data.get('order_number')
+                payment_needed = meta_data.get('payment_needed')
+                
+                print(f"🔍 Auto-detection check:")
+                print(f"   order_created: {order_created}")
+                print(f"   session_order_number: {session_order_number}")
+                print(f"   payment_needed: {payment_needed}")
+                
+                # Enhanced: Check for affirmative response to payment after order creation
+                if (order_created and session_order_number and payment_needed and 
+                    not args.get('order_number')):
+                    # Check if user gave an affirmative response recently
+                    call_log = raw_data.get('call_log', []) if raw_data else []
+                    if self._detect_affirmative_response(call_log, "payment"):
+                        print(f"🔍 Detected affirmative payment response after order creation")
+                        # Auto-fill ALL payment information from session
+                        order_number = session_order_number
+                        if not cardholder_name and meta_data.get('customer_name'):
+                            cardholder_name = meta_data.get('customer_name')
+                        if not phone_number and meta_data.get('phone_number'):
+                            phone_number = meta_data.get('phone_number')
+                        print(f"🔍 Auto-filled payment info: order#{order_number}, name={cardholder_name}, phone={phone_number}")
+                
+                if order_created and session_order_number:
+                    order_number = session_order_number
+                    print(f"🔍 Auto-detected new order from session: #{order_number}")
+                    
+                    # Also auto-fill cardholder name if available
+                    if not cardholder_name:
+                        session_customer_name = meta_data.get('customer_name')
+                        if session_customer_name:
+                            cardholder_name = session_customer_name
+                            print(f"🔍 Auto-detected cardholder name: {cardholder_name}")
+                    
+                    # Auto-fill phone number if available
+                    if not phone_number:
+                        session_phone = meta_data.get('phone_number')
+                        if session_phone:
+                            phone_number = session_phone
+                            print(f"🔍 Auto-detected phone number: {phone_number}")
+                else:
+                    # Try to detect from conversation history
+                    call_log = raw_data.get('call_log', []) if raw_data else []
+                    for entry in reversed(call_log[-10:]):  # Check last 10 entries
+                        if (entry.get('role') == 'assistant' and 
+                            entry.get('content') and 
+                            'order confirmed' in entry.get('content', '').lower()):
+                            
+                            # Try to extract order number from the assistant's message
+                            content = entry.get('content', '')
+                            order_match = re.search(r'Order #(\w+)', content)
+                            if order_match:
+                                order_number = order_match.group(1)
+                                print(f"🔍 Auto-detected order from conversation: #{order_number}")
+                                break
+            
+            # ENHANCED: Also check if we have session context but parameters were not auto-filled
+            # CRITICAL FIX: Use main metadata order_number as highest priority
+            if not order_number and meta_data.get('order_number'):
+                order_number = meta_data.get('order_number')
+                print(f"🔍 Using order_number from meta_data: #{order_number}")
+                
+            # BACKUP: Only fall back to verified_order if no main order_number found
+            if not order_number and meta_data.get('verified_order', {}).get('order_number'):
+                backup_order_number = meta_data.get('verified_order', {}).get('order_number')
+                print(f"🔄 BACKUP: Using verified_order.order_number: #{backup_order_number}")
+                order_number = backup_order_number
+                
+            if not cardholder_name and meta_data.get('customer_name'):
+                cardholder_name = meta_data.get('customer_name')
+                print(f"🔍 Using customer_name as cardholder_name from meta_data: {cardholder_name}")
+                
+            if not phone_number and meta_data.get('phone_number'):
+                phone_number = meta_data.get('phone_number')
+                print(f"🔍 Using phone_number from meta_data: {phone_number}")
+            
+            # Validate required information - but be smarter about what we ask for
+            if not order_number:
+                result = SwaigFunctionResult(
+                    "I need your order number to process the payment. "
+                    "What's your order number?"
+                )
+                result.set_metadata({
+                    "payment_step": "need_order_number",
+                    "cardholder_name": cardholder_name,
+                    "phone_number": phone_number
+                })
+                return result
+            
+            # STEP 1: Look up order and show bill summary FIRST (before asking for cardholder name)
+            # Look up order and calculate total
             import sys
+            import os
             
             # Add the parent directory to sys.path to import app
             parent_dir = os.path.dirname(os.path.dirname(__file__))
@@ -1612,42 +1769,22 @@ class RestaurantMenuSkill(SkillBase):
                 sys.path.insert(0, parent_dir)
             
             from app import app, start_payment_session
-            from models import Order, OrderItem, MenuItem, db
+            from models import Order, OrderItem, MenuItem
             
             with app.app_context():
-                # Extract parameters
-                order_number = args.get('order_number')
-                order_id = args.get('order_id')
-                customer_name = args.get('customer_name')
-                customer_phone = args.get('customer_phone')
+                order = Order.query.filter_by(order_number=order_number).first()
+                if not order:
+                    result = SwaigFunctionResult(
+                        f"I couldn't find an order with number {order_number}. "
+                        "Please check the number and try again."
+                    )
+                    result.set_metadata({
+                        "payment_step": "error",
+                        "error": "order_not_found"
+                    })
+                    return result
                 
-                # Get call_id for payment session integration
-                call_id = raw_data.get('call_id') if raw_data else None
-                print(f"🔍 Call ID: {call_id}")
-                
-                # Get phone number from caller ID if not provided
-                if not customer_phone:
-                    caller_phone = raw_data.get('caller_id_num') or raw_data.get('caller_id_number')
-                    if caller_phone:
-                        customer_phone = caller_phone
-                        print(f"🔄 Using phone number from caller ID: {customer_phone}")
-                
-                # SIMPLIFIED: Only find order by order_number - no lookup logic
-                order = None
-                
-                if order_number:
-                    # Search by order number ONLY
-                    order = Order.query.filter_by(order_number=order_number).first()
-                    if not order:
-                        return SwaigFunctionResult(f"❌ Order #{order_number} not found. Please check the order number and try again or contact us directly at {self._format_phone_number(os.getenv('SIGNALWIRE_FROM_NUMBER', '+15555555555'))}.")
-                elif order_id:
-                    # Search by order ID ONLY
-                    order = Order.query.get(order_id)
-                    if not order:
-                        return SwaigFunctionResult(f"❌ Order ID {order_id} not found.")
-                else:
-                    # NO LOOKUP LOGIC - require specific order number
-                    return SwaigFunctionResult("❌ To process payment, I need your specific order number. If you don't have it, please ask me to check your order status first using get_order_details, then I can process your payment.")
+                print(f"✅ Found order: {order.person_name}, {order.order_type}, ${order.total_amount}")
                 
                 # Check if order can be paid
                 if order.payment_status == 'paid':
@@ -1656,103 +1793,323 @@ class RestaurantMenuSkill(SkillBase):
                 if order.status == 'cancelled':
                     return SwaigFunctionResult(f"❌ Order #{order.order_number} has been cancelled and cannot be paid for.")
                 
+                # Get total amount
+                total_amount = round(order.total_amount or 0.0, 2)
+                
                 # Get order items for display
                 order_items = OrderItem.query.filter_by(order_id=order.id).all()
+                print(f"🔍 Found {len(order_items)} items for order {order_number}")
                 
-                # Build order summary
-                message = f"💳 **PROCESSING PAYMENT FOR ORDER #{order.order_number}**\n\n"
-                message += f"👤 **Customer:** {order.person_name or 'N/A'}\n"
-                message += f"📞 **Phone:** {order.customer_phone or 'N/A'}\n"
-                message += f"📦 **Type:** {order.order_type.title()}\n"
-                message += f"📋 **Status:** {order.status.title()}\n\n"
+                # CHECK: Has the customer already confirmed the bill total?
+                payment_confirmed = meta_data.get('payment_confirmed')
+                payment_step = meta_data.get('payment_step')
                 
-                if order_items:
-                    message += "🍽️ **Order Items:**\n"
-                    for item in order_items:
-                        menu_item = MenuItem.query.get(item.menu_item_id)
-                        item_name = menu_item.name if menu_item else f"Item #{item.menu_item_id}"
-                        message += f"• {item.quantity}x {item_name} - ${item.price_at_time * item.quantity:.2f}\n"
-                    message += "\n"
+                # If we're waiting for confirmation, check if user just gave an affirmative response
+                if payment_step == 'awaiting_confirmation' and not payment_confirmed:
+                    call_log = raw_data.get('call_log', []) if raw_data else []
+                    if self._detect_affirmative_response(call_log, "payment confirmation"):
+                        payment_confirmed = True
+                        print(f"🔍 Customer confirmed payment - proceeding with credit card collection")
+                        
+                        # CRITICAL FIX: Save confirmation state to metadata so it persists between function calls
+                        current_metadata = meta_data.copy() if meta_data else {}
+                        current_metadata['payment_confirmed'] = True
+                        current_metadata['payment_step'] = 'confirmed'
+                        
+                        # Update the metadata in the raw_data for persistence
+                        if hasattr(raw_data, 'get') and 'meta_data' in raw_data:
+                            raw_data['meta_data'].update(current_metadata)
+                        
+                        meta_data = current_metadata  # Update local meta_data reference
+                    else:
+                        # Check for negative responses
+                        negative_patterns = [
+                            r'\b(no|nope|not|don\'t|cancel|stop|nevermind|never mind)\b',
+                            r'\b(i don\'t want|i changed my mind|not interested)\b'
+                        ]
+                        
+                        recent_entries = [entry for entry in reversed(call_log) if entry.get('role') == 'user'][:2]
+                        for entry in recent_entries:
+                            if entry.get('content'):
+                                content = entry.get('content', '').lower().strip()
+                                for pattern in negative_patterns:
+                                    if re.search(pattern, content, re.IGNORECASE):
+                                        print(f"🔍 Customer declined payment: '{content}'")
+                                        result = SwaigFunctionResult(
+                                            "No problem! Your order is still confirmed. "
+                                            "You can pay when you pick up your order. "
+                                            "Is there anything else I can help you with?"
+                                        )
+                                        result.set_metadata({
+                                            "payment_step": "cancelled",
+                                            "order_number": order_number
+                                        })
+                                        return result
                 
-                message += f"💰 **Total Amount:** ${order.total_amount:.2f}\n\n"
+                # STEP 2: Show bill summary and ask for confirmation (if not confirmed yet)
+                if not payment_confirmed:
+                    print(f"🔍 Showing bill total for confirmation: ${total_amount:.2f}")
+                    
+                    # Use order name for display, not cardholder name (since we don't have it yet)
+                    customer_display_name = order.person_name
+                    
+                    # Create detailed order breakdown
+                    order_details = []
+                    if order_items:
+                        for item in order_items:
+                            menu_item = MenuItem.query.get(item.menu_item_id)
+                            item_name = menu_item.name if menu_item else f"Item #{item.menu_item_id}"
+                            order_details.append(f"• {item.quantity}x {item_name} - ${item.price_at_time * item.quantity:.2f}")
+                    
+                    message = f"📋 Bill Summary for Order #{order_number}\n\n"
+                    message += f"👤 Customer: {customer_display_name}\n"
+                    message += f"📦 Order Type: {order.order_type.title()}\n\n"
+                    if order_details:
+                        message += f"🍽️ Your Order:\n"
+                        message += "\n".join(order_details) + "\n\n"
+                    message += f"💰 Total Amount: ${total_amount:.2f}\n\n"
+                    message += f"Would you like to proceed with payment of ${total_amount:.2f}? Please say 'yes' to continue or 'no' to cancel."
+                    
+                    # Return with confirmation request
+                    result = SwaigFunctionResult(message)
+                    result.set_metadata({
+                        "payment_step": "awaiting_confirmation",
+                        "order_number": order_number,
+                        "customer_name": customer_display_name,
+                        "cardholder_name": customer_display_name,  # AUTO-POPULATE: Use order name as cardholder name
+                        "phone_number": phone_number,
+                        "total_amount": total_amount,
+                        "order_details": {
+                            "order_number": order_number,
+                            "customer_name": customer_display_name,
+                            "order_type": order.order_type,
+                            "order_id": order.id
+                        }
+                    })
+                    return result
+                
+                # STEP 3: Payment confirmed - automatically use order name as cardholder name
+                if not cardholder_name:
+                    # Always use the order name as cardholder name (no need to ask)
+                    if order.person_name:
+                        cardholder_name = order.person_name
+                        print(f"🔍 Auto-using order name as cardholder name: {cardholder_name}")
+                    elif meta_data.get('customer_name'):
+                        cardholder_name = meta_data.get('customer_name')
+                        print(f"🔍 Auto-using customer name as cardholder name: {cardholder_name}")
+                    else:
+                        cardholder_name = "Card Holder"  # Default fallback
+                        print(f"🔍 Using default cardholder name: {cardholder_name}")
+                
+                # STEP 4: We have confirmation AND cardholder name - proceed with payment
+                print(f"🔍 Payment confirmed and cardholder name provided, proceeding with credit card collection for ${total_amount:.2f}")
+                
+                # Create the parameters array with cardholder_name to pre-populate SignalWire payment form
+                parameters_array = [
+                    {"name": "order_number", "value": order_number},
+                    {"name": "customer_name", "value": cardholder_name},
+                    {"name": "cardholder_name", "value": cardholder_name},  # Pre-populate to skip name prompt
+                    {"name": "phone_number", "value": phone_number or ""},
+                    {"name": "payment_type", "value": "order"}
+                ]
+                
+                # Only add call_id if it has a non-empty value
+                if call_id and call_id.strip():
+                    parameters_array.append({"name": "call_id", "value": call_id})
+                    print(f"🔍 Added call_id to parameters: {call_id}")
+                
+                # Create response message with payment result variables for immediate feedback
+                if meta_data.get('order_created'):
+                    message = f"🔄 Processing payment for ${total_amount:.2f}...\n\n"
+                    message += f"I'll now collect your credit card information securely. Please have your card ready.\n\n"
+                else:
+                    message = f"🔄 Processing payment for ${total_amount:.2f}...\n\n"
+                    message += f"I'll now collect your credit card information securely. Please have your card ready.\n\n"
+                
+                # Add SignalWire payment result variables for immediate success/failure feedback
+                message += f"${{pay_payment_results.success ? "
+                message += f"'🎉 Excellent! Your payment of ${total_amount:.2f} has been processed successfully! ' + "
+                message += f"'Your confirmation number is ' + pay_payment_results.confirmation_number + '. ' + "
+                message += f"'Thank you for ordering from Bobby\\'s Table!' : "
+                message += f"'I\\'m sorry, there was an issue processing your payment: ' + pay_payment_results.error_message + '. ' + "
+                message += f"'Please try again or contact the restaurant for assistance.'}}"
+                
+                # Create SwaigFunctionResult
+                result = SwaigFunctionResult(message)
+                
+                # Set meta_data for payment tracking
+                result.set_metadata({
+                    "payment_step": "processing_payment",
+                    "verified_order": {
+                        "order_number": order_number,
+                        "customer_name": cardholder_name,
+                        "order_type": order.order_type,
+                        "cardholder_name": cardholder_name,
+                        "phone_number": phone_number,
+                        "total_amount": total_amount,
+                        "order_id": order.id
+                    },
+                    "payment_session_active": True
+                })
+                
+                # Get payment URLs from environment
+                base_url = os.getenv('SIGNALWIRE_PAYMENT_CONNECTOR_URL') or os.getenv('BASE_URL', 'https://localhost:8080')
+                
+                if base_url and not base_url.endswith('/api/payment-processor'):
+                    payment_connector_url = f"{base_url.rstrip('/')}/api/payment-processor"
+                else:
+                    payment_connector_url = base_url or f"{os.getenv('BASE_URL', 'https://localhost:8080')}/api/payment-processor"
+                
+                status_url = payment_connector_url.replace('/api/payment-processor', '/api/signalwire/payment-callback')
+                
+                print(f"🔗 Using payment connector URL: {payment_connector_url}")
                 
                 # CRITICAL: Start payment session for callback tracking
                 if call_id:
-                    start_payment_session(call_id, order.order_number)
-                    print(f"✅ Started payment session for call {call_id}, order {order.order_number}")
+                    start_payment_session(call_id, order_number)
+                    print(f"✅ Started payment session for call {call_id}, order {order_number}")
                 else:
                     print(f"⚠️ No call_id provided - payment session tracking may be limited")
                 
-                # Get SignalWire configuration
-                project_id = os.environ.get('SIGNALWIRE_PROJECT_ID')
-                token = os.environ.get('SIGNALWIRE_TOKEN')
-                space_url = os.environ.get('SIGNALWIRE_SPACE_URL', 'bobbys-table.signalwire.com')
-                
-                if not project_id or not token:
-                    return SwaigFunctionResult("❌ Payment system is temporarily unavailable. Please try again later or pay when you pick up your order.")
-                
-                # Create payment connector URL
-                payment_connector_url = f"https://{space_url}/api/relay/rest/signalwire_agents/payment_connector"
-                print(f"🔗 Using payment connector URL: {payment_connector_url}")
-                
-                # Use SignalWire SDK pay() method
+                # Use SignalWire SDK v0.1.26 pay() method
                 try:
                     print(f"✅ Using SignalWire SDK pay() method")
-                    
-                    # Create payment request
-                    payment_amount = int(order.total_amount * 100)  # Convert to cents
-                    
-                    message += "🔒 **Starting secure payment process...**\n"
-                    message += "Please follow the prompts to enter your payment information securely.\n\n"
-                    message += "📱 You'll receive an SMS receipt once payment is complete."
-                    
-                    # Create SwaigFunctionResult and configure payment
-                    result = SwaigFunctionResult(message)
-                    
-                    # Create parameters array for payment connector
-                    parameters_array = [
-                        {"name": "order_id", "value": str(order.id)},
-                        {"name": "order_number", "value": order.order_number},
-                        {"name": "customer_name", "value": order.person_name},
-                        {"name": "customer_phone", "value": customer_phone or order.customer_phone},
-                        {"name": "payment_type", "value": "order"}
-                    ]
-                    
-                    # Only add call_id if it has a non-empty value
-                    if call_id and call_id.strip():
-                        parameters_array.append({"name": "call_id", "value": call_id})
-                    
-                    # Use the result.pay() method (same as reservation payments)
                     result.pay(
                         payment_connector_url=payment_connector_url,
                         input_method="dtmf",
+                        status_url=status_url,
                         payment_method="credit-card",
-                        timeout=120,  # Increased to 2 minutes for realistic phone payment
+                        timeout=8,  # Increased to 2 minutes for realistic phone payment
                         max_attempts=5,  # Increased to 5 attempts
                         security_code=True,
                         postal_code=True,
                         min_postal_code_length=5,
                         token_type="one-time",
-                        charge_amount=f"{order.total_amount:.2f}",
+                        charge_amount=f"{total_amount:.2f}",
                         currency="usd",
                         language="en-US",
                         voice="rime.spore",
-                        description=f"Bobby's Table Order #{order.order_number}",
+                        description=f"Bobby's Table Order #{order_number}",
                         valid_card_types="visa mastercard amex discover diners jcb unionpay",
+                        ai_response="The payment status is ${pay_results}, do not mention anything else about collecting payment if successful",
                         parameters=parameters_array
                     )
-                    
-                    print(f"✅ Payment collection configured for ${order.total_amount} - Order #{order.order_number}")
-                    return result
-                    
-                except Exception as e:
-                    print(f"❌ SignalWire payment error: {e}")
+                    print(f"✅ result.pay() completed successfully")
+                except Exception as pay_error:
+                    print(f"❌ Error in result.pay(): {pay_error}")
                     import traceback
                     traceback.print_exc()
-                    return SwaigFunctionResult("❌ Payment system error. Please try again later or pay when you pick up your order.")
+                    raise  # Re-raise to be caught by outer exception handler
+                
+                print(f"✅ Payment collection configured for ${total_amount} - Order #{order_number}")
+                return result
                 
         except Exception as e:
-            print(f"❌ Error in _pay_order_handler: {e}")
+            print(f"❌ Error processing payment: {e}")
+            print(f"🔍 Exception type: {type(e)}")
             import traceback
             traceback.print_exc()
-            return SwaigFunctionResult(f"❌ Payment system error. Please try again later or call us directly at {self._format_phone_number(os.getenv('SIGNALWIRE_FROM_NUMBER', '+15555555555'))}.") 
+            
+            # Create new result for error handling
+            error_result = SwaigFunctionResult(
+                "I'm sorry, there was an error processing your payment. "
+                "Please try again or contact the restaurant directly."
+            )
+            error_result.set_metadata({
+                "payment_step": "error",
+                "error": str(e)
+            })
+            return error_result
+
+    def _payment_retry_handler(self, args, raw_data):
+        """Handle payment retry when the previous payment failed"""
+        from signalwire_agents.core.function_result import SwaigFunctionResult
+        
+        try:
+            print(f"🔄 Payment retry handler called with args: {args}")
+            
+            # Extract meta_data and call information
+            meta_data = raw_data.get('meta_data', {}) if raw_data else {}
+            call_id = raw_data.get('call_id') if raw_data else None
+            
+            # Get payment session data to understand what failed
+            payment_session = None
+            if call_id:
+                # Import app to access payment_sessions
+                import sys
+                import os
+                parent_dir = os.path.dirname(os.path.dirname(__file__))
+                if parent_dir not in sys.path:
+                    sys.path.insert(0, parent_dir)
+                from app import app
+                
+                payment_sessions = getattr(app, 'payment_sessions', {})
+                payment_session = payment_sessions.get(call_id)
+                
+            if payment_session and payment_session.get('payment_status') == 'failed':
+                error_type = payment_session.get('error_type', 'unknown')
+                failure_reason = payment_session.get('failure_reason', 'payment-failed')
+                attempt = payment_session.get('attempt', '1')
+                
+                print(f"🔍 Previous payment failed: {error_type} ({failure_reason}) - attempt {attempt}")
+                
+                if error_type == 'invalid-card-type':
+                    response_text = (
+                        "I see your previous payment was declined because the card type wasn't recognized. "
+                        "Please make sure you're using a Visa, Mastercard, American Express, or Discover card. "
+                        "Would you like to try again with a different card?"
+                    )
+                elif error_type == 'invalid-card-number':
+                    response_text = (
+                        "Your card number wasn't recognized. Please double-check the card number and try again. "
+                        "Would you like to retry the payment?"
+                    )
+                elif error_type == 'card-declined':
+                    response_text = (
+                        "Your card was declined by your bank. You may want to contact your bank or try a different card. "
+                        "Would you like to try again?"
+                    )
+                else:
+                    response_text = (
+                        f"Your payment encountered an issue ({error_type}). "
+                        "Would you like to try again or would you prefer to pay when you pick up your order?"
+                    )
+                
+                return SwaigFunctionResult(response_text)
+            
+            # If no failed payment session, treat as a general retry request
+            order_number = args.get('order_number') or meta_data.get('order_number')
+            if not order_number:
+                return SwaigFunctionResult(
+                    "I'd be happy to help you retry your payment. Could you please provide your order number?"
+                )
+            
+            # Check if user wants to retry
+            call_log = raw_data.get('call_log', []) if raw_data else []
+            user_wants_retry = self._detect_affirmative_response(call_log, "payment retry")
+            
+            if user_wants_retry:
+                # Clear the failed payment status and retry
+                if call_id and payment_session:
+                    payment_session.pop('payment_status', None)
+                    payment_session.pop('error_type', None)
+                    payment_session.pop('failure_reason', None)
+                    print(f"🔄 Cleared failed payment status for retry")
+                
+                # Call the main payment handler
+                return self._pay_order_handler(args, raw_data)
+            else:
+                return SwaigFunctionResult(
+                    "No problem! You can also pay when you pick up your order. "
+                    "Your order is still confirmed. Is there anything else I can help you with?"
+                )
+                
+        except Exception as e:
+            print(f"❌ Error in payment retry handler: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            return SwaigFunctionResult(
+                "I'm sorry, I encountered an error with the payment retry. "
+                "You can pay when you pick up your order. Is there anything else I can help you with?"
+            ) 
