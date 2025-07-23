@@ -2,7 +2,7 @@ import os
 import json
 import stripe
 import logging
-from flask import Flask, render_template, request, redirect, url_for, jsonify, flash, send_from_directory, make_response, Response
+from flask import Flask, render_template, request, redirect, url_for, jsonify, flash, send_from_directory, make_response, Response, session
 from logging_config import setup_logging
 from flask_sqlalchemy import SQLAlchemy
 from flask_httpauth import HTTPBasicAuth
@@ -25,6 +25,11 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'devsecret')
 app.config['local_tz'] = os.getenv('LOCAL_TZ', 'America/New_York')
 
+# Notification Sound Configuration
+app.config['NOTIFICATION_SOUND_TYPE'] = os.getenv('NOTIFICATION_SOUND_TYPE', 'chime')
+app.config['NOTIFICATION_VOLUME'] = float(os.getenv('NOTIFICATION_VOLUME', '0.7'))
+app.config['NOTIFICATION_FALLBACK'] = os.getenv('NOTIFICATION_FALLBACK', 'off')
+
 # Setup file logging
 loggers = setup_logging()
 app_logger = loggers['main']
@@ -37,6 +42,15 @@ payment_sessions_global = {}
 
 # Global event queue for SSE calendar updates
 calendar_event_queue = queue.Queue(maxsize=100)  # Limit queue size to prevent memory issues
+
+# Template context processor for notification configuration
+@app.context_processor
+def inject_notification_config():
+    return {
+        'notification_sound_type': app.config['NOTIFICATION_SOUND_TYPE'],
+        'notification_volume': app.config['NOTIFICATION_VOLUME'],
+        'notification_fallback': app.config['NOTIFICATION_FALLBACK']
+    }
 
 # Stripe configuration (using test keys for development)
 # For production, set these environment variables with your live keys
@@ -1446,7 +1460,63 @@ def validate_and_correct_function_call(function_name, params, extracted_info, ca
             r'cost of',
             r'what.*menu',
             r'menu.*price',
-            r'tell me about.*menu'
+            r'tell me about.*menu',
+            # NEW: Meal-specific patterns (CRITICAL FIX for breakfast/lunch/dinner questions)
+            r'what.*(?:breakfast|lunch|dinner|brunch)',
+            r'what.*do.*you.*have.*for.*(?:breakfast|lunch|dinner|brunch)',
+            r'what.*on.*(?:breakfast|lunch|dinner|brunch).*menu',
+            r'(?:breakfast|lunch|dinner|brunch).*menu',
+            r'(?:breakfast|lunch|dinner|brunch).*options',
+            r'tell me about.*(?:breakfast|lunch|dinner|brunch)',
+            r'can you tell me.*(?:breakfast|lunch|dinner|brunch)',
+            r'what.*available.*(?:breakfast|lunch|dinner|brunch)',
+            r'do you serve.*(?:breakfast|lunch|dinner|brunch)',
+            # NEW: Pre-order and menu browsing patterns (CRITICAL FIX)
+            r'pre.*order.*menu',
+            r'pre.*order.*from.*menu',
+            r'menu.*items.*and.*prices',
+            r'menu.*with.*prices',
+            r'get.*menu.*details',
+            r'get.*current.*menu',
+            r'share.*menu',
+            r'provide.*menu',
+            r'menu.*so.*choose',
+            r'menu.*to.*choose',
+            r'look.*at.*menu',
+            r'see.*the.*menu',
+            # NEW: Common menu availability questions
+            r'do you have.*(?:chicken|burger|pizza|salad|wrap|sandwich|pasta|steak|fish|wings|fries|dessert|drink)',
+            r'is.*(?:chicken|burger|pizza|salad|wrap|sandwich|pasta|steak|fish|wings|fries|dessert|drink).*available',
+            r'what.*(?:chicken|burger|pizza|salad|wrap|sandwich|pasta|steak|fish|wings|fries|dessert|drink)',
+            r'can i get.*(?:chicken|burger|pizza|salad|wrap|sandwich|pasta|steak|fish|wings|fries|dessert|drink)',
+            r'i want.*(?:chicken|burger|pizza|salad|wrap|sandwich|pasta|steak|fish|wings|fries|dessert|drink)',
+            r'i wanna.*(?:chicken|burger|pizza|salad|wrap|sandwich|pasta|steak|fish|wings|fries|dessert|drink)',
+            r'order.*(?:chicken|burger|pizza|salad|wrap|sandwich|pasta|steak|fish|wings|fries|dessert|drink)',
+            r'place.*order',
+            r'what.*on.*menu',
+            r'show.*menu',
+            r'see.*menu',
+            r'what.*on.*the.*menu',
+            r'tell me.*menu',
+            # NEW: Specific drink and common food item patterns
+            r'can i get.*(?:pepsi|coke|beer|wine|coffee|tea|water|juice|lemonade)',
+            r'i want.*(?:pepsi|coke|beer|wine|coffee|tea|water|juice|lemonade)',
+            r'do you have.*(?:pepsi|coke|beer|wine|coffee|tea|water|juice|lemonade)',
+            # NEW: Beverage comparison and menu inquiry patterns (CRITICAL FIX)
+            r'difference.*between.*(?:pepsi|coke|beer|wine|coffee|tea)',
+            r'what.*difference.*(?:pepsi|coke|beer|wine|coffee|tea)',
+            r'compare.*(?:pepsi|coke|beer|wine|coffee|tea)',
+            r'(?:pepsi|coke|beer|wine|coffee|tea).*(?:vs|versus|compared to)',
+            r'(?:pepsi|coke|beer|wine|coffee|tea).*or.*(?:pepsi|coke|beer|wine|coffee|tea)',
+            r'regular.*(?:pepsi|coke).*diet.*(?:pepsi|coke)',
+            r'diet.*(?:pepsi|coke).*regular.*(?:pepsi|coke)',
+            r'types.*of.*(?:pepsi|coke|beer|wine|coffee|tea)',
+            r'what.*(?:pepsi|coke|beer|wine|coffee|tea).*available',
+            r'which.*(?:pepsi|coke|beer|wine|coffee|tea).*have',
+            # NEW: Generic beverage category patterns
+            r'types.*of.*(?:soda|soft.*drink|beverage|drink)',
+            r'what.*(?:soda|soft.*drink|beverage|drink).*have',
+            r'what.*(?:soda|soft.*drink|beverage|drink).*available'
         ]
         
         # Check if any menu patterns match the conversation context
@@ -1458,6 +1528,68 @@ def validate_and_correct_function_call(function_name, params, extracted_info, ca
             print(f"   Redirecting to get_menu...")
             
             return 'get_menu', {}
+    
+    # NEW: Check for weather question routing errors
+    if function_name != 'get_weather_forecast':
+        # Check if this is a weather question based on conversation context
+        context_text = ' '.join([
+            str(entry.get('content', '')) for entry in call_log[-5:] 
+            if isinstance(entry, dict) and entry.get('role') == 'user'
+        ]).lower()
+        
+        # Weather question patterns
+        weather_patterns = [
+            r'what.*weather',
+            r'weather.*like',
+            r'going.*rain',
+            r'will.*rain',
+            r'is.*raining',
+            # NEW: Critical slang and common rain patterns
+            r'gonna.*rain',          # "gonna rain today"
+            r'is.*it.*rain',         # "is it gonna rain"
+            r'rain.*today',          # "rain today"
+            r'rain.*tomorrow',       # "rain tomorrow"
+            r'it.*rain',             # "will it rain", "is it raining"
+            r'gonna.*be.*rain',      # "gonna be raining"
+            r'is.*gonna.*rain',      # "is it gonna rain"
+            r'will.*it.*rain',       # "will it rain"
+            # Common weather terms
+            r'sunny',
+            r'cloudy',
+            r'storm',
+            r'forecast',
+            r'temperature',
+            r'degrees',
+            r'hot.*outside',
+            r'cold.*outside',
+            r'will.*cold',
+            r'be.*cold',
+            r'weather.*today',
+            r'weather.*tomorrow',
+            r'weather.*pittsburgh',
+            r'weather.*outside',
+            r'good.*weather',
+            r'nice.*weather',
+            r'bad.*weather',
+            # NEW: Additional weather inquiries
+            r'rain.*tonight',
+            r'rain.*this.*week',
+            r'weather.*look.*like',
+            r'how.*hot',
+            r'how.*cold',
+            r'umbrella.*need',
+            r'need.*umbrella'
+        ]
+        
+        # Check if any weather patterns match the conversation context
+        is_weather_question = any(re.search(pattern, context_text) for pattern in weather_patterns)
+        
+        if is_weather_question:
+            print(f"🚨 WEATHER QUESTION ROUTING ERROR: AI called {function_name} for weather question")
+            print(f"   Context: {context_text}")
+            print(f"   Redirecting to get_weather_forecast...")
+            
+            return 'get_weather_forecast', {}
     
     # Check for the critical 5-digit vs 6-digit routing error
     if function_name == 'get_reservation':
@@ -1546,7 +1678,7 @@ def validate_and_correct_function_call(function_name, params, extracted_info, ca
                     
                     # Keywords that suggest this is an order, not a reservation
                     order_keywords = ['order', 'pickup', 'delivery', 'food', 'pay for order', 'order number']
-                    reservation_keywords = ['reservation', 'table', 'booking', 'dinner', 'lunch']
+                    reservation_keywords = ['reservation', 'table', 'booking']
                     
                     order_score = sum(1 for keyword in order_keywords if keyword in context_text)
                     reservation_score = sum(1 for keyword in reservation_keywords if keyword in context_text)
@@ -2703,7 +2835,7 @@ def swaig_receptionist_info():
                             ]
                         },
                         "prompt": {
-                            "text": "Hi there! I'm Bobby from Bobby's Table. Great to have you call us today! How can I help you out? Whether you're looking to make a reservation, check on an existing one, hear about our menu, or place an order, I'm here to help make it easy for you.\n\nIMPORTANT CONVERSATION GUIDELINES:\n\n**RESERVATION LOOKUPS - CRITICAL:**\n- When customers want to check their reservation, ALWAYS ask for their reservation number FIRST\n- Say: 'Do you have your reservation number? It's a 6-digit number we sent you when you made the reservation.' (6 digits = reservation, 5 digits = order)\n- Only if they don't have it, then ask for their name as backup\n- Reservation numbers are the fastest and most accurate way to find reservations\n- Handle spoken numbers like 'seven eight nine zero one two' which becomes '789012'\n\n**🚨 PAYMENTS - SIMPLE PAYMENT RULE 🚨:**\n**Use the pay_reservation function for all existing reservation payments!**\n\n**SIMPLE PAYMENT FLOW:**\n1. Customer explicitly asks to pay (\"I want to pay\", \"Pay now\", \"Can I pay?\") → IMMEDIATELY call pay_reservation function\n2. pay_reservation handles everything: finds reservation, shows bill total, collects card details, and processes payment\n3. The function will guide the customer through each step conversationally and securely\n\n**PAYMENT EXAMPLES:**\n- Customer: 'I want to pay my bill' → YOU: Call pay_reservation function\n- Customer: 'Pay now' → YOU: Call pay_reservation function\n- Customer: 'Can I pay for my reservation?' → YOU: Call pay_reservation function\n\n**CRITICAL: Use pay_reservation for existing reservations only!**\n- ERROR: NEVER use pay_reservation for new reservation creation (use create_reservation instead)\n- ERROR: NEVER call pay_reservation when customer is just confirming order details\n\n**PRICING AND PRE-ORDERS - CRITICAL:**\n- When customers mention food items, ALWAYS provide the price immediately using data from get_menu function\n- 🚨 NEVER use hardcoded prices - ONLY use actual database prices from get_menu function\n- 🚨 For individual price questions: Search the cached_menu data for the exact item and price\n- Example: '[MENU ITEM NAME] are [ACTUAL PRICE FROM DATABASE]'\n- When creating reservations with pre-orders, ALWAYS mention the total cost using actual database prices\n- Example: 'Your [ITEMS] total [ACTUAL CALCULATED TOTAL FROM DATABASE PRICES]'\n- ALWAYS ask if customers want to pay for their pre-order after confirming the total\n- Example: 'Would you like to pay for your pre-order now to complete your reservation?'\n\n**🚨 MENU PRICE QUESTION ROUTING - CRITICAL:**\n- \"How much is French toast?\" → YOU: Call get_menu function (NEVER get_reservation!)\n- \"What's the price of the burger?\" → YOU: Call get_menu function (NEVER get_reservation!)\n- \"How much does [item] cost?\" → YOU: Call get_menu function (NEVER get_reservation!)\n- \"Tell me about your menu\" → YOU: Call get_menu function (NEVER get_reservation!)\n- ANY menu or price question → YOU: Call get_menu function FIRST\n\n**🔄 CORRECT PREORDER WORKFLOW:**\n- When customers want to create reservations with pre-orders, show them an order confirmation FIRST\n- The order confirmation shows: reservation details, each person's food items, individual prices, and total cost\n- Wait for customer to confirm their order details before proceeding (say 'Yes, that's correct')\n- After order confirmation, CREATE THE RESERVATION IMMEDIATELY\n- The correct flow is: Order Details → Customer Confirms → Create Reservation → Give Number → Offer Payment\n- After creating the reservation:\n  1. Give the customer their reservation number clearly\n  1.1 Mention that SMS confirmation is available if they'd like their reservation details sent to their phone\n  1.2 If the user requests SMS confirmation, send the reservation details via sms message\n 2. Ask if they want to pay now: 'Would you like to pay for your pre-order now?'\n- Payment is OPTIONAL - customers can always pay when they arrive\n\n**🔄 ORDER CONFIRMATION vs PAYMENT REQUESTS - CRITICAL:**\n- \"Yes, that's correct\" = Order confirmation → Call create_reservation function\n- \"Yes, create my reservation\" = Order confirmation → Call create_reservation function\n- \"That looks right\" = Order confirmation → Call create_reservation function\n- \"Pay now\" = Payment request → Call pay_reservation function\n- \"I want to pay\" = Payment request → Call pay_reservation function\n- \"Can I pay?\" = Payment request → Call pay_reservation function\n\n**🚨 CRITICAL: NEVER CALL pay_reservation WHEN USER IS CONFIRMING ORDER DETAILS 🚨:**\n- If user says \"Yes\" after order summary → Call create_reservation function\n- If user says \"That's correct\" after order summary → Call create_reservation function\n- If user says \"Looks good\" after order summary → Call create_reservation function\n- If user says \"Perfect\" after order summary → Call create_reservation function\n- ONLY call pay_reservation when user explicitly asks to pay AFTER reservation is created\n\n**🔍 CRITICAL: DISTINGUISH BETWEEN RESERVATIONS AND ORDERS:**\n- RESERVATIONS = table bookings (use get_reservation)\n- ORDERS = pickup/delivery food orders (use get_order_details)\n- If customer says \"pickup order\", \"delivery order\", \"food order\" → use get_order_details\n- If customer says \"reservation\", \"table booking\", \"dinner reservation\" → use get_reservation\n\n**🔍 ORDER STATUS CHECKS - CRITICAL:**\n- When customers ask to check their ORDER status, use get_order_details function\n- Examples: \"Check my order status\", \"Where is my order?\", \"Is my order ready?\"\n- NEVER use update_order_status - this function doesn't exist\n- NEVER use get_reservation for pickup/delivery orders\n- Use get_order_details with the order number the customer provides\n- Handle spoken numbers: \"nine two six five seven\" becomes \"92657\"\n- Always provide complete status information including estimated ready time\n\n**🚨 MANDATORY FUNCTION ROUTING RULES 🚨:**\n- 5-digit number (like 91576, 62879, 12345) = ORDER → MUST use get_order_details\n- 6-digit number (like 789012, 333444, 675421) = RESERVATION → MUST use get_reservation\n- Customer says \"order\" = ORDER → MUST use get_order_details\n- Customer says \"pickup\" = ORDER → MUST use get_order_details\n- Customer says \"delivery\" = ORDER → MUST use get_order_details\n- Customer says \"reservation\" = RESERVATION → MUST use get_reservation\n- Customer says \"table booking\" = RESERVATION → MUST use get_reservation\n\n**ORDER STATUS EXAMPLES:**\n- Customer: \"Check on my pickup order 92657\" → YOU: Call get_order_details with order_number: \"92657\" (5 digits = order)\n- Customer: \"Is my food order ready?\" → YOU: Call get_order_details with their order number\n- Customer: \"Where is my order 12345?\" → YOU: Call get_order_details with order_number: \"12345\" (5 digits = order)\n- Customer: \"I'm calling about my pickup order 62879\" → YOU: Call get_order_details with order_number: \"62879\" (5 digits = order)\n- Customer: \"Check my reservation 789012\" → YOU: Call get_reservation with reservation_number: \"789012\" (6 digits = reservation)\n\n**OTHER GUIDELINES:**\n- When making reservations, ALWAYS ask if customers want to pre-order from the menu\n- For parties larger than one person, ask for each person's name and their individual food preferences\n- Always say numbers as words (say 'one' instead of '1', 'two' instead of '2', etc.)\n- Extract food items mentioned during reservation requests and include them in party_orders\n- Be conversational and helpful - guide customers through the pre-ordering process naturally\n- Remember: The system now has a confirmation step for preorders - embrace this workflow!\\n- CRITICAL NUMBER FORMAT: 5 digits = order, 6 digits = reservation"
+                            "text": "Hi there! I'm Bobby from Bobby's Table. Great to have you call us today! How can I help you out? Whether you're looking to make a reservation, check on an existing one, hear about our menu, or place an order, I'm here to help make it easy for you.\n\nIMPORTANT CONVERSATION GUIDELINES:\n\n**RESERVATION LOOKUPS - CRITICAL:**\n- When customers want to check their reservation, ALWAYS ask for their reservation number FIRST\n- Say: 'Do you have your reservation number? It's a 6-digit number we sent you when you made the reservation.' (6 digits = reservation, 5 digits = order)\n- Only if they don't have it, then ask for their name as backup\n- Reservation numbers are the fastest and most accurate way to find reservations\n- Handle spoken numbers like 'seven eight nine zero one two' which becomes '789012'\n\n**🚨 PAYMENTS - SIMPLE PAYMENT RULE 🚨:**\n**Use the pay_reservation function for all existing reservation payments!**\n\n**SIMPLE PAYMENT FLOW:**\n1. Customer explicitly asks to pay (\"I want to pay\", \"Pay now\", \"Can I pay?\") → IMMEDIATELY call pay_reservation function\n2. pay_reservation handles everything: finds reservation, shows bill total, collects card details, and processes payment\n3. The function will guide the customer through each step conversationally and securely\n\n**PAYMENT EXAMPLES:**\n- Customer: 'I want to pay my bill' → YOU: Call pay_reservation function\n- Customer: 'Pay now' → YOU: Call pay_reservation function\n- Customer: 'Can I pay for my reservation?' → YOU: Call pay_reservation function\n\n**CRITICAL: Use pay_reservation for existing reservations only!**\n- ERROR: NEVER use pay_reservation for new reservation creation (use create_reservation instead)\n- ERROR: NEVER call pay_reservation when customer is just confirming order details\n\n**PRICING AND PRE-ORDERS - CRITICAL:**\n- When customers mention food items, ALWAYS provide the price immediately using data from get_menu function\n- 🚨 NEVER use hardcoded prices - ONLY use actual database prices from get_menu function\n- 🚨 For individual price questions: Search the cached_menu data for the exact item and price\n- Example: '[MENU ITEM NAME] are [ACTUAL PRICE FROM DATABASE]'\n- When creating reservations with pre-orders, ALWAYS mention the total cost using actual database prices\n- Example: 'Your [ITEMS] total [ACTUAL CALCULATED TOTAL FROM DATABASE PRICES]'\n- ALWAYS ask if customers want to pay for their pre-order after confirming the total\n- Example: 'Would you like to pay for your pre-order now to complete your reservation?'\n\n**🚨 MENU PRICE QUESTION ROUTING - CRITICAL:**\n- \"How much is French toast?\" → YOU: Call get_menu function (NEVER get_reservation!)\n- \"What's the price of the burger?\" → YOU: Call get_menu function (NEVER get_reservation!)\n- \"How much does [item] cost?\" → YOU: Call get_menu function (NEVER get_reservation!)\n- \"Tell me about your menu\" → YOU: Call get_menu function (NEVER get_reservation!)\n- ANY menu or price question → YOU: Call get_menu function FIRST\n\n**🔄 CORRECT PREORDER WORKFLOW:**\n- When customers want to create reservations with pre-orders, show them an order confirmation FIRST\n- The order confirmation shows: reservation details, each person's food items, individual prices, and total cost\n- Wait for customer to confirm their order details before proceeding (say 'Yes, that's correct')\n- After order confirmation, CREATE THE RESERVATION IMMEDIATELY\n- The correct flow is: Order Details → Customer Confirms → Create Reservation → Give Number → Offer Payment\n- After creating the reservation:\n  1. Give the customer their reservation number clearly\n  1.1 Mention that SMS confirmation is available if they'd like their reservation details sent to their phone\n  1.2 If the user requests SMS confirmation, send the reservation details via sms message\n 2. Ask if they want to pay now: 'Would you like to pay for your pre-order now?'\n- Payment is OPTIONAL - customers can always pay when they arrive\n\n**🔄 ORDER CONFIRMATION vs PAYMENT REQUESTS - CRITICAL:**\n- \"Yes, that's correct\" = Order confirmation → Call create_reservation function\n- \"Yes, create my reservation\" = Order confirmation → Call create_reservation function\n- \"That looks right\" = Order confirmation → Call create_reservation function\n- \"Pay now\" = Payment request → Call pay_reservation function\n- \"I want to pay\" = Payment request → Call pay_reservation function\n- \"Can I pay?\" = Payment request → Call pay_reservation function\n\n**🚨 CRITICAL: NEVER CALL pay_reservation WHEN USER IS CONFIRMING ORDER DETAILS 🚨:**\n- If user says \"Yes\" after order summary → Call create_reservation function\n- If user says \"That's correct\" after order summary → Call create_reservation function\n- If user says \"Looks good\" after order summary → Call create_reservation function\n- If user says \"Perfect\" after order summary → Call create_reservation function\n- ONLY call pay_reservation when user explicitly asks to pay AFTER reservation is created\n\n**🔍 CRITICAL: DISTINGUISH BETWEEN RESERVATIONS AND ORDERS:**\n- RESERVATIONS = table bookings (use get_reservation)\n- ORDERS = pickup/delivery food orders (use get_order_details)\n- If customer says \"pickup order\", \"delivery order\", \"food order\" → use get_order_details\n- If customer says \"reservation\", \"table booking\", \"dinner reservation\" → use get_reservation\n\n**🔍 ORDER STATUS CHECKS - CRITICAL:**\n- When customers ask to check their ORDER status, use get_order_details function\n- Examples: \"Check my order status\", \"Where is my order?\", \"Is my order ready?\"\n- NEVER use update_order_status - this function doesn't exist\n- NEVER use get_reservation for pickup/delivery orders\n- Use get_order_details with the order number the customer provides\n- Handle spoken numbers: \"nine two six five seven\" becomes \"92657\"\n- Always provide complete status information including estimated ready time\n\n**🚨 MANDATORY FUNCTION ROUTING RULES 🚨:**\n- 5-digit number (like 91576, 62879, 12345) = ORDER → MUST use get_order_details\n- 6-digit number (like 789012, 333444, 675421) = RESERVATION → MUST use get_reservation\n- Customer says \"order\" = ORDER → MUST use get_order_details\n- Customer says \"pickup\" = ORDER → MUST use get_order_details\n- Customer says \"delivery\" = ORDER → MUST use get_order_details\n- Customer says \"reservation\" = RESERVATION → MUST use get_reservation\n- Customer says \"table booking\" = RESERVATION → MUST use get_reservation\n\n**ORDER STATUS EXAMPLES:**\n- Customer: \"Check on my pickup order 92657\" → YOU: Call get_order_details with order_number: \"92657\" (5 digits = order)\n- Customer: \"Is my food order ready?\" → YOU: Call get_order_details with their order number\n- Customer: \"Where is my order 12345?\" → YOU: Call get_order_details with order_number: \"12345\" (5 digits = order)\n- Customer: \"I'm calling about my pickup order 62879\" → YOU: Call get_order_details with order_number: \"62879\" (5 digits = order)\n- Customer: \"Check my reservation 789012\" → YOU: Call get_reservation with reservation_number: \"789012\" (6 digits = reservation)\n\n**🌤️ WEATHER FORECAST CAPABILITIES - CRITICAL:**\n- YOU CAN provide weather forecasts using the get_weather_forecast function\n- When customers ask about weather (for dining, outdoor seating, or general weather), ALWAYS call get_weather_forecast\n- Examples: \"What's the weather like?\", \"Will it rain?\", \"Is it good weather for outdoor dining?\"\n- The get_weather_forecast function provides detailed weather info for the restaurant area (Pittsburgh, PA 15222)\n- ALWAYS use get_weather_forecast when customers ask about weather conditions\n- If customers mention outdoor seating, get_weather_forecast will offer outdoor seating options automatically\n\n**🌤️ WEATHER EXAMPLES - ALWAYS CALL get_weather_forecast:**\n- Customer: \"What's the weather going to be like?\" → YOU: Call get_weather_forecast function\n- Customer: \"Will it rain tomorrow?\" → YOU: Call get_weather_forecast function  \n- Customer: \"Is it good weather for outdoor dining?\" → YOU: Call get_weather_forecast function\n- Customer: \"What's the weather like in Pittsburgh?\" → YOU: Call get_weather_forecast function\n- Customer: \"What's the temperature outside?\" → YOU: Call get_weather_forecast function\n- Customer: \"Is it sunny today?\" → YOU: Call get_weather_forecast function\n- Customer: \"Will it be cloudy?\" → YOU: Call get_weather_forecast function\n- Customer: \"What's the forecast?\" → YOU: Call get_weather_forecast function\n- Customer: \"Is it hot outside?\" → YOU: Call get_weather_forecast function\n- Customer: \"Any storms coming?\" → YOU: Call get_weather_forecast function\n- Customer asks about weather for existing reservation → YOU: Call get_weather_forecast function\n- ANY weather-related question → YOU: Call get_weather_forecast function\n\n**🚨 NEVER SAY YOU CAN'T PROVIDE WEATHER - YOU CAN! 🚨:**\n- ❌ WRONG: \"I don't have the ability to provide weather forecasts\"\n- ✅ CORRECT: Call get_weather_forecast function to provide weather information\n\n**🔄 AUTOMATIC WEATHER ROUTING - CRITICAL:**\n- The system automatically detects weather questions and routes them to get_weather_forecast\n- If you accidentally call the wrong function for a weather question, the system will correct it\n- Weather keywords: weather, rain, sunny, cloudy, storm, forecast, temperature, degrees, hot, cold\n- ALWAYS use get_weather_forecast for ANY weather-related question\n- The function works for current weather, forecasts, and weather for specific dates\n\n**🌿 OUTDOOR SEATING & WEATHER INTEGRATION - CRITICAL:**\n- When creating reservations with outdoor seating, ALWAYS include weather details in your response\n- If the system fetches weather for outdoor seating, INCLUDE the weather forecast in your confirmation\n- Format: \"🌿 OUTDOOR SEATING REQUESTED! 🌤️ Weather Forecast: [conditions], [temp range], [rain chance]\"\n- If weather is unsuitable, include a weather advisory: \"⚠️ Weather Advisory: Conditions may not be ideal for outdoor dining\"\n- ALWAYS mention that outdoor tables are subject to availability and weather conditions\n\n**OTHER GUIDELINES:**\n- When making reservations, ALWAYS ask if customers want to pre-order from the menu\n- For parties larger than one person, ask for each person's name and their individual food preferences\n- Always say numbers as words (say 'one' instead of '1', 'two' instead of '2', etc.)\n- Extract food items mentioned during reservation requests and include them in party_orders\n- Be conversational and helpful - guide customers through the pre-ordering process naturally\n- Remember: The system now has a confirmation step for preorders - embrace this workflow!\\n- CRITICAL NUMBER FORMAT: 5 digits = order, 6 digits = reservation"
                         }
                     }
                 }
@@ -2916,7 +3048,7 @@ def send_order_payment_receipt_sms(order, payment_amount, phone_number=None, con
             if not space_url:
                 signalwire_space = os.getenv('SIGNALWIRE_SPACE')
                 if signalwire_space:
-                    space_url = f"{signalwire_space}.signalwire.com"
+                    space_url = f"{signalwire_space}.swire.io"
                     print(f"🔄 Constructed SIGNALWIRE_SPACE_URL: https://{space_url}")
 
             # If REST API credentials are not available, fall back to the SDK approach
@@ -5669,6 +5801,102 @@ def log_function_call(function_name, params, call_context, result=None, error=No
         
     except Exception as log_error:
         print(f"❌ Error in function call logging: {log_error}")
+
+# CRITICAL FIX: Real-time notification endpoint for voice-created reservations
+@app.route('/api/notify_reservation_created', methods=['POST'])
+def notify_reservation_created():
+    """Handle notifications from voice agent when reservations are created"""
+    try:
+        data = request.get_json()
+        
+        if not data or data.get('type') != 'new_reservation':
+            return jsonify({'error': 'Invalid notification data'}), 400
+        
+        # Log the notification
+        print(f"🔔 VOICE RESERVATION NOTIFICATION: {data.get('reservation_number')} for {data.get('customer_name')}")
+        
+        # Here you could add WebSocket broadcasting, Server-Sent Events, etc.
+        # For now, we'll just log it - the calendar will auto-refresh via polling
+        
+        # Store in session for any connected clients to pick up
+        session['last_voice_reservation'] = {
+            'reservation_number': data.get('reservation_number'),
+            'customer_name': data.get('customer_name'),
+            'timestamp': datetime.utcnow().isoformat(),
+            'created_via': data.get('created_via', 'voice_agent')
+        }
+        
+        return jsonify({'success': True, 'message': 'Notification received'})
+        
+    except Exception as e:
+        print(f"❌ Notification endpoint error: {e}")
+        return jsonify({'error': 'Internal server error'}), 500
+
+# CRITICAL FIX: API endpoint for web clients to check for new voice reservations
+@app.route('/api/reservations/voice_check', methods=['GET'])
+def check_voice_reservations():
+    """Check for new voice-created reservations with enhanced detection"""
+    try:
+        # Primary: Check if there's a new voice reservation in session
+        last_voice_reservation = session.get('last_voice_reservation')
+        
+        if last_voice_reservation:
+            # Clear it after sending to prevent duplicate notifications
+            session.pop('last_voice_reservation', None)
+            print(f"🔔 Returning session-based voice reservation: {last_voice_reservation.get('reservation_number')}")
+            return jsonify({
+                'success': True,
+                'new_voice_reservation': last_voice_reservation
+            })
+        
+        # Fallback: Check for very recent reservations from database
+        # This helps catch reservations if session notification failed
+        try:
+            from datetime import datetime, timedelta
+            from models import Reservation
+            
+            # Check for reservations created in the last 10 seconds
+            recent_threshold = datetime.utcnow() - timedelta(seconds=10)
+            recent_reservations = Reservation.query.filter(
+                Reservation.created_at >= recent_threshold
+            ).order_by(Reservation.created_at.desc()).limit(1).all()
+            
+            if recent_reservations:
+                reservation = recent_reservations[0]
+                # Check if we've already notified about this reservation
+                last_notified_id = session.get('last_notified_reservation_id')
+                
+                if last_notified_id != reservation.id:
+                    # This is a new reservation we haven't notified about
+                    session['last_notified_reservation_id'] = reservation.id
+                    
+                    fallback_notification = {
+                        'reservation_number': reservation.reservation_number,
+                        'customer_name': reservation.name,
+                        'timestamp': reservation.created_at.isoformat(),
+                        'created_via': 'voice_agent_fallback'
+                    }
+                    
+                    print(f"🔔 Returning fallback voice reservation: {reservation.reservation_number}")
+                    return jsonify({
+                        'success': True,
+                        'new_voice_reservation': fallback_notification
+                    })
+                    
+        except Exception as db_error:
+            print(f"⚠️ Database fallback check failed: {db_error}")
+        
+        # No new reservations found
+        return jsonify({
+            'success': True,
+            'new_voice_reservation': None
+        })
+            
+    except Exception as e:
+        print(f"❌ Voice check endpoint error: {e}")
+        import traceback
+        print(f"   Traceback: {traceback.format_exc()}")
+        return jsonify({'error': 'Internal server error'}), 500
 
 if __name__ == '__main__':
     print("🍽️  Starting Bobby's Table Restaurant System")

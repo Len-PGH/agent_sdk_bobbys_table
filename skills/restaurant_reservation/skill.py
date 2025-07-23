@@ -1025,7 +1025,7 @@ class RestaurantReservationSkill(SkillBase):
             try:
                 self.agent.define_tool(
                     name="pay_reservation",
-                    description="Collect payment for an existing reservation. Use this function to collect payment for an existing reservation.",
+                    description="Collect payment for an existing reservation. Use this function to collect payment for an existing reservation. Give the payment results to the customer.",
                     parameters={
                         "type": "object", 
                         "properties": {
@@ -1095,6 +1095,68 @@ class RestaurantReservationSkill(SkillBase):
             except Exception as e:
                 logger.error(f"Failed to register check_payment_completion: {str(e)}", exc_info=True)
                 
+            # Weather forecast tool for restaurant location (zipcode 15222)
+            logger.info("Registering get_weather_forecast")
+            try:
+                self.agent.define_tool(
+                    name="get_weather_forecast",
+                    description="Get weather forecast for the restaurant area (zipcode 15222) for a reservation date. Use this when customers ask about weather for their reservation or the restaurant location.",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "reservation_date": {
+                                "type": "string",
+                                "description": "Date of the reservation (YYYY-MM-DD format) - optional, for context"
+                            },
+                            "reservation_time": {
+                                "type": "string", 
+                                "description": "Time of the reservation (HH:MM format) - optional, for context"
+                            }
+                        },
+                        "required": []
+                    },
+                    handler=self._get_weather_forecast_handler,
+                    **self.swaig_fields
+                )
+                logger.info("Registered get_weather_forecast")
+            except Exception as e:
+                logger.error(f"Failed to register get_weather_forecast: {str(e)}", exc_info=True)
+                
+            # Outdoor seating request tool
+            logger.info("Registering request_outdoor_seating")
+            try:
+                self.agent.define_tool(
+                    name="request_outdoor_seating",
+                    description="Request outdoor seating for a reservation when weather conditions are favorable. Use this when customers express interest in outdoor dining or when weather forecast suggests it would be pleasant.",
+                    parameters={
+                        "type": "object",
+                        "properties": {
+                            "reservation_number": {
+                                "type": "string",
+                                "description": "6-digit reservation number to add outdoor seating request to"
+                            },
+                            "customer_name": {
+                                "type": "string",
+                                "description": "Customer name for the reservation"
+                            },
+                            "party_size": {
+                                "type": "integer",
+                                "description": "Number of people in the party"
+                            },
+                            "special_note": {
+                                "type": "string",
+                                "description": "Any special notes about the outdoor seating request"
+                            }
+                        },
+                        "required": []
+                    },
+                    handler=self._request_outdoor_seating_handler,
+                    **self.swaig_fields
+                )
+                logger.info("Registered request_outdoor_seating")
+            except Exception as e:
+                logger.error(f"Failed to register request_outdoor_seating: {str(e)}", exc_info=True)
+                
             # SMS and receipt handlers are managed by the menu skill to avoid duplication
             # logger.info("SMS and receipt handlers managed by menu skill")
             # Get tool count from the registry
@@ -1129,6 +1191,7 @@ class RestaurantReservationSkill(SkillBase):
             
             # Extract basic payment information
             reservation_number = args.get('reservation_number')
+            cardholder_name = args.get('cardholder_name')
             phone_number = args.get('phone_number')
             
             # Get phone number from caller ID if not provided
@@ -1159,13 +1222,22 @@ class RestaurantReservationSkill(SkillBase):
                         print(f"🔍 Detected affirmative payment response after reservation creation")
                         # Auto-fill ALL payment information from session
                         reservation_number = session_reservation_number
+                        if not cardholder_name and meta_data.get('customer_name'):
+                            cardholder_name = meta_data.get('customer_name')
                         if not phone_number and meta_data.get('phone_number'):
                             phone_number = meta_data.get('phone_number')
-                        print(f"🔍 Auto-filled payment info: res#{reservation_number}, phone={phone_number}")
+                        print(f"🔍 Auto-filled payment info: res#{reservation_number}, name={cardholder_name}, phone={phone_number}")
                 
                 if reservation_created and session_reservation_number:
                     reservation_number = session_reservation_number
                     print(f"🔍 Auto-detected new reservation from session: #{reservation_number}")
+                    
+                    # Also auto-fill cardholder name if available
+                    if not cardholder_name:
+                        session_customer_name = meta_data.get('customer_name')
+                        if session_customer_name:
+                            cardholder_name = session_customer_name
+                            print(f"🔍 Auto-detected cardholder name: {cardholder_name}")
                     
                     # Auto-fill phone number if available
                     if not phone_number:
@@ -1201,14 +1273,15 @@ class RestaurantReservationSkill(SkillBase):
                 print(f"🔄 BACKUP: Using verified_reservation.reservation_number: #{backup_reservation_number}")
                 reservation_number = backup_reservation_number
                 
-                         # No longer needed - SignalWire handles cardholder name collection
+            if not cardholder_name and meta_data.get('customer_name'):
+                cardholder_name = meta_data.get('customer_name')
+                print(f"🔍 Using customer_name as cardholder_name from meta_data: {cardholder_name}")
                 
             if not phone_number and meta_data.get('phone_number'):
                 phone_number = meta_data.get('phone_number')
                 print(f"🔍 Using phone_number from meta_data: {phone_number}")
             
-            # FIXED: Only validate reservation number and phone number
-            # SignalWire's result.pay() handles ALL card collection automatically
+            # Validate required information - but be smarter about what we ask for
             if not reservation_number:
                 result = SwaigFunctionResult(
                     "I need your reservation number to process the payment. "
@@ -1216,22 +1289,12 @@ class RestaurantReservationSkill(SkillBase):
                 )
                 result.set_metadata({
                     "payment_step": "need_reservation_number",
+                    "cardholder_name": cardholder_name,
                     "phone_number": phone_number
                 })
                 return result
             
-            # Only ask for phone number if we don't have it from caller ID or session
-            if not phone_number:
-                result = SwaigFunctionResult(
-                    "I need your phone number to send you a payment receipt. "
-                    "What's your mobile number?"
-                )
-                result.set_metadata({
-                    "payment_step": "need_phone_number",
-                    "reservation_number": reservation_number
-                })
-                return result
-            
+            # STEP 1: Look up reservation and show bill summary FIRST (before asking for cardholder name)
             # Look up reservation and calculate total
             import sys
             import os
@@ -1318,9 +1381,12 @@ class RestaurantReservationSkill(SkillBase):
                                         })
                                         return result
                 
-                # If not confirmed yet, show bill total and ask for confirmation
+                # STEP 2: Show bill summary and ask for confirmation (if not confirmed yet)
                 if not payment_confirmed:
                     print(f"🔍 Showing bill total for confirmation: ${total_amount:.2f}")
+                    
+                    # Use reservation name for display, not cardholder name (since we don't have it yet)
+                    customer_display_name = reservation.name
                     
                     # Create detailed order breakdown
                     order_details = []
@@ -1328,54 +1394,56 @@ class RestaurantReservationSkill(SkillBase):
                         if order.total_amount and order.total_amount > 0:
                             order_details.append(f"• Order #{order.order_number}: ${order.total_amount:.2f}")
                     
-                    if meta_data.get('reservation_created'):
-                        message = f"✅ Perfect! Here's your bill summary:\n\n"
-                        message += f"📋 Reservation #{reservation_number} for {reservation.name}\n"
-                        message += f"📅 Party of {reservation.party_size} on {reservation.date} at {reservation.time}\n\n"
-                        message += f"🍽️ Your Pre-Order:\n"
-                        if order_details:
-                            message += "\n".join(order_details) + "\n\n"
-                        message += f"💰 Total Amount: ${total_amount:.2f}\n\n"
-                        message += f"Would you like to proceed with payment of ${total_amount:.2f}? Please say 'yes' to continue or 'no' to cancel."
-                    else:
-                        message = f"📋 Bill Summary for Reservation #{reservation_number}\n\n"
-                        message += f"👤 Customer: {reservation.name}\n"
-                        message += f"📅 Party of {reservation.party_size} on {reservation.date} at {reservation.time}\n\n"
-                        if order_details:
-                            message += f"🍽️ Your Orders:\n"
-                            message += "\n".join(order_details) + "\n\n"
-                        message += f"💰 Total Amount: ${total_amount:.2f}\n\n"
-                        message += f"Would you like to proceed with payment of ${total_amount:.2f}? Please say 'yes' to continue or 'no' to cancel."
+                    message = f"📋 Bill Summary for Reservation #{reservation_number}\n\n"
+                    message += f"👤 Customer: {customer_display_name}\n"
+                    message += f"📅 Party of {reservation.party_size} on {reservation.date} at {reservation.time}\n\n"
+                    if order_details:
+                        message += f"🍽️ Your Orders:\n"
+                        message += "\n".join(order_details) + "\n\n"
+                    message += f"💰 Total Amount: ${total_amount:.2f}\n\n"
+                    message += f"Would you like to proceed with payment of ${total_amount:.2f}? Please say 'yes' to continue or 'no' to cancel."
                     
                     # Return with confirmation request
                     result = SwaigFunctionResult(message)
                     result.set_metadata({
                         "payment_step": "awaiting_confirmation",
                         "reservation_number": reservation_number,
-                        "customer_name": reservation.name,
-                        "cardholder_name": reservation.name,  # AUTO-POPULATE: Use reservation name as cardholder name
+                        "customer_name": customer_display_name,
+                        "cardholder_name": customer_display_name,  # AUTO-POPULATE: Use reservation name as cardholder name
                         "phone_number": phone_number,
                         "total_amount": total_amount,
                         "reservation_details": {
                             "reservation_number": reservation_number,
-                            "customer_name": reservation.name,
+                            "customer_name": customer_display_name,
                             "party_size": reservation.party_size,
                             "reservation_date": str(reservation.date),
                             "reservation_time": str(reservation.time),
                             "reservation_id": reservation.id
-                        },
-                        **{k: v for k, v in meta_data.items() if k.startswith(('reservation_', 'customer_'))}
+                        }
                     })
                     return result
                 
-                # If we reach here, payment has been confirmed - proceed with credit card collection
-                print(f"🔍 Payment confirmed, proceeding with credit card collection for ${total_amount:.2f}")
+                # STEP 3: Payment confirmed - automatically use reservation name as cardholder name
+                if not cardholder_name:
+                    # Always use the reservation name as cardholder name (no need to ask)
+                    if reservation.name:
+                        cardholder_name = reservation.name
+                        print(f"🔍 Auto-using reservation name as cardholder name: {cardholder_name}")
+                    elif meta_data.get('customer_name'):
+                        cardholder_name = meta_data.get('customer_name')
+                        print(f"🔍 Auto-using customer name as cardholder name: {cardholder_name}")
+                    else:
+                        cardholder_name = "Card Holder"  # Default fallback
+                        print(f"🔍 Using default cardholder name: {cardholder_name}")
+                
+                # STEP 4: We have confirmation AND cardholder name - proceed with payment
+                print(f"🔍 Payment confirmed and cardholder name provided, proceeding with credit card collection for ${total_amount:.2f}")
                 
                 # Create the parameters array with cardholder_name to pre-populate SignalWire payment form
                 parameters_array = [
                     {"name": "reservation_number", "value": reservation_number},
-                    {"name": "customer_name", "value": reservation.name},  # Use reservation name instead of cardholder_name
-                    {"name": "cardholder_name", "value": reservation.name},  # Pre-populate to skip name prompt
+                    {"name": "customer_name", "value": cardholder_name},
+                    {"name": "cardholder_name", "value": cardholder_name},  # Pre-populate to skip name prompt
                     {"name": "phone_number", "value": phone_number or ""},
                     {"name": "payment_type", "value": "reservation"}
                 ]
@@ -1409,10 +1477,11 @@ class RestaurantReservationSkill(SkillBase):
                     "payment_step": "processing_payment",
                     "verified_reservation": {
                         "reservation_number": reservation_number,
-                        "customer_name": reservation.name,
+                        "customer_name": cardholder_name,
                         "party_size": reservation.party_size,
                         "reservation_date": str(reservation.date),
                         "reservation_time": str(reservation.time),
+                        "cardholder_name": cardholder_name,
                         "phone_number": phone_number,
                         "total_amount": total_amount,
                         "reservation_id": reservation.id
@@ -1447,7 +1516,7 @@ class RestaurantReservationSkill(SkillBase):
                         input_method="dtmf",
                         status_url=status_url,
                         payment_method="credit-card",
-                        timeout=120,  # Increased to 2 minutes for realistic phone payment
+                        timeout=8,  # Increased to 2 minutes for realistic phone payment
                         max_attempts=5,  # Increased to 5 attempts
                         security_code=True,
                         postal_code=True,
@@ -1459,6 +1528,7 @@ class RestaurantReservationSkill(SkillBase):
                         voice="rime.spore",
                         description=f"Bobby's Table Reservation #{reservation_number}",
                         valid_card_types="visa mastercard amex discover diners jcb unionpay",
+                        ai_response="The payment status is ${pay_results}, do not mention anything else about collecting payment if successful",
                         parameters=parameters_array
                     )
                     print(f"✅ result.pay() completed successfully")
@@ -2162,7 +2232,7 @@ class RestaurantReservationSkill(SkillBase):
                         # FIXED: Use enhanced parsing for better name extraction and assignment
                         additional_names = self._extract_person_names_from_conversation(conversation_text, customer_name)
                         corrected_party_orders = self._fallback_order_distribution(
-                            re_extracted_items, customer_name, party_size, additional_names
+                            re_extracted_items, customer_name, party_size, additional_names, conversation_text
                         )
                         
                         print(f"🔄 WORKFLOW: Re-assigned items to people:")
@@ -2276,7 +2346,7 @@ class RestaurantReservationSkill(SkillBase):
                         # FIXED: Use enhanced parsing for better name extraction and assignment
                         additional_names = self._extract_person_names_from_conversation(conversation_text, customer_name)
                         corrected_party_orders = self._fallback_order_distribution(
-                            correct_items, customer_name, party_size, additional_names
+                            correct_items, customer_name, party_size, additional_names, conversation_text
                         )
                         
                         print(f"🔄 [Summary] Intelligently assigned items to people:")
@@ -2391,6 +2461,45 @@ class RestaurantReservationSkill(SkillBase):
                     print(f"🔄 Using caller ID as phone number: {normalized_phone}")
                 else:
                     return SwaigFunctionResult("I need your phone number to complete the reservation. Could you please provide that?")
+                
+                # CRITICAL PHONE NUMBER FIX: Ensure we never use phone as name
+                phone_numbers_to_check = [caller_phone, user_provided_phone, conversation_phone, args.get('phone_number')]
+                phone_numbers_to_check = [p for p in phone_numbers_to_check if p]  # Remove None values
+                
+                if not args.get('name') or any(args.get('name') == phone for phone in phone_numbers_to_check):
+                    # Phone number was mistakenly used as name, force re-extraction
+                    print(f"🚨 CRITICAL: Phone number used as name ({args.get('name')}), forcing re-extraction")
+                    args['name'] = None
+                    
+                    # Re-extract customer name more aggressively from conversation
+                    import re
+                    for entry in reversed(call_log):
+                        if entry.get('role') == 'user' and entry.get('content'):
+                            content = entry['content']
+                            # Look for explicit name patterns
+                            name_patterns = [
+                                r'my name is ([A-Z][a-z]+ [A-Z][a-z]+)',
+                                r'i\'m ([A-Z][a-z]+ [A-Z][a-z]+)',
+                                r'this is ([A-Z][a-z]+ [A-Z][a-z]+)',
+                                r'name is ([A-Z][a-z]+ [A-Z][a-z]+)',
+                                r'([A-Z][a-z]+ [A-Z][a-z]+) calling',
+                                r'([A-Z][a-z]+ [A-Z][a-z]+) here'
+                            ]
+                            for pattern in name_patterns:
+                                match = re.search(pattern, content, re.IGNORECASE)
+                                if match:
+                                    potential_name = match.group(1).strip().title()
+                                    if not any(potential_name == phone for phone in phone_numbers_to_check):
+                                        args['name'] = potential_name
+                                        print(f"✅ FIXED: Extracted proper name: {potential_name}")
+                                        break
+                            if args.get('name'):
+                                break
+                    
+                    # Final fallback if no name found
+                    if not args.get('name'):
+                        args['name'] = "Customer"
+                        print(f"🔧 FALLBACK: Using generic 'Customer' name")
                 
                 # Validate required fields
                 required_fields = ['name', 'party_size', 'date', 'time', 'phone_number']
@@ -2662,12 +2771,21 @@ class RestaurantReservationSkill(SkillBase):
                         if party_size > 1:
                             print(f"   🔄 ENHANCED: Distributing {len(converted_items)} items across {party_size} people")
                             
-                            # Use the fallback distribution logic
+                            # Construct conversation text for better assignment
+                            call_log = raw_data.get('call_log', []) if raw_data else []
+                            conversation_text = ' '.join([
+                                entry.get('content', '') 
+                                for entry in call_log 
+                                if entry.get('role') in ['user', 'assistant']
+                            ])
+                            
+                            # Use the fallback distribution logic with conversation context
                             party_orders = self._fallback_order_distribution(
                                 converted_items,  # food_items
                                 customer_name,
                                 party_size,
-                                []  # additional_names (empty list)
+                                [],  # additional_names (empty list)
+                                conversation_text
                             )
                             print(f"   ✅ Enhanced distribution created {len(party_orders)} party orders")
                         else:
@@ -2889,10 +3007,249 @@ class RestaurantReservationSkill(SkillBase):
                         # Don't fail the reservation if SMS fails (match Flask behavior)
                         sms_result = {'success': False, 'error': str(e)}
                 
+                # CHECK FOR OUTDOOR SEATING REQUEST AND FETCH WEATHER
+                outdoor_seating_requested = False
+                
+                # Check if outdoor seating was mentioned in special requests or conversation
+                special_requests = args.get('special_requests', '') or ''
+                outdoor_keywords = ['outdoor', 'outside', 'patio', 'terrace', 'al fresco', 'open air']
+                
+                # Check special requests field for explicit outdoor seating requests
+                if any(keyword in special_requests.lower() for keyword in outdoor_keywords):
+                    # Only add if it's a clear request, not a decline
+                    if not any(negative in special_requests.lower() for negative in ['no', 'not', 'decline', 'cancel', "don't", 'due to weather', 'because of']):
+                        outdoor_seating_requested = True
+                        print("🌿 Outdoor seating detected in special requests")
+                
+                # ENHANCED: Check conversation for outdoor seating mentions with context analysis
+                if not outdoor_seating_requested and raw_data:
+                    call_log = raw_data.get('call_log', [])
+                    conversation_text = ' '.join([
+                        entry.get('content', '') for entry in call_log 
+                        if entry.get('role') == 'user'
+                    ]).lower()
+                    
+                    # Check if outdoor keywords are present
+                    has_outdoor_keywords = any(keyword in conversation_text for keyword in outdoor_keywords)
+                    
+                    if has_outdoor_keywords:
+                        # CRITICAL FIX: Analyze context to determine if it's a request or decline
+                        positive_patterns = [
+                            r'\b(want|would like|prefer|request|add|yes.*outdoor|outdoor.*yes)\b.*\b(outdoor|outside|patio|terrace)\b',
+                            r'\b(outdoor|outside|patio|terrace)\b.*\b(please|want|would like|prefer|yes)\b',
+                            r'\b(can we|could we)\b.*\b(outdoor|outside|patio|terrace)\b',
+                            r'\b(outdoor|outside|patio|terrace)\b.*\b(seating|table|dining)\b.*\b(please|yes)\b'
+                        ]
+                        
+                        negative_patterns = [
+                            r'\b(no|not|don\'t|decline|cancel)\b.*\b(outdoor|outside|patio|terrace)\b',
+                            r'\b(outdoor|outside|patio|terrace)\b.*\b(no|not|don\'t|decline|cancel)\b',
+                            r'\b(due to|because of|considering)\b.*\b(weather|rain|cold|hot)\b.*\b(no|not|don\'t)\b',
+                            r'\b(weather|rain|cold|hot)\b.*\b(no|not|don\'t|decline)\b.*\b(outdoor|outside|patio|terrace)\b',
+                            r'\b(too|very)\b.*\b(cold|hot|rainy|windy)\b.*\b(outdoor|outside|patio|terrace)\b'
+                        ]
+                        
+                        import re
+                        
+                        # Check for positive outdoor seating requests
+                        is_positive_request = any(re.search(pattern, conversation_text) for pattern in positive_patterns)
+                        
+                        # Check for negative responses/declines
+                        is_negative_response = any(re.search(pattern, conversation_text) for pattern in negative_patterns)
+                        
+                        print(f"🔍 Outdoor seating analysis: positive={is_positive_request}, negative={is_negative_response}")
+                        print(f"   Conversation excerpt: ...{conversation_text[-200:]}...")
+                        
+                        # Only request outdoor seating if it's clearly positive and not negative
+                        if is_positive_request and not is_negative_response:
+                            outdoor_seating_requested = True
+                            print("🌿 ✅ Outdoor seating REQUEST confirmed from conversation analysis")
+                        elif is_negative_response:
+                            print("🌿 ❌ Outdoor seating DECLINED detected - will not add outdoor seating request")
+                        else:
+                            # Ambiguous case - check for simple affirmative patterns
+                            simple_positive = any(phrase in conversation_text for phrase in [
+                                'yes outdoor', 'outdoor yes', 'want outdoor', 'outdoor seating please',
+                                'add outdoor', 'outdoor table', 'outside seating', 'patio seating'
+                            ])
+                            if simple_positive:
+                                outdoor_seating_requested = True
+                                print("🌿 ✅ Outdoor seating request detected via simple patterns")
+                            else:
+                                print("🌿 ❓ Outdoor keywords found but context unclear - not adding outdoor seating")
+                
+                # If outdoor seating requested, fetch weather and add to special requests
+                if outdoor_seating_requested:
+                    print(f"🌤️ Fetching weather for outdoor seating request on {args.get('date')}")
+                    
+                    try:
+                        import requests
+                        import os
+                        
+                        weather_api_key = os.getenv('WEATHER_API_KEY')
+                        location = "15222"  # Restaurant zipcode
+                        
+                        if weather_api_key and args.get('date'):
+                            # Fetch weather forecast for reservation date
+                            api_url = f"https://api.weatherapi.com/v1/forecast.json?key={weather_api_key}&q={location}&days=10&aqi=no&alerts=no"
+                            response = requests.get(api_url, timeout=5)
+                            
+                            if response.status_code == 200:
+                                weather_data = response.json()
+                                reservation_date = args.get('date')
+                                
+                                # Find forecast for reservation date
+                                forecast_day = None
+                                for day in weather_data['forecast']['forecastday']:
+                                    if day['date'] == reservation_date:
+                                        forecast_day = day
+                                        break
+                                
+                                if forecast_day:
+                                    day_data = forecast_day['day']
+                                    condition = day_data['condition']['text']
+                                    max_temp = round(day_data['maxtemp_f'])
+                                    min_temp = round(day_data['mintemp_f'])
+                                    chance_rain = day_data.get('daily_chance_of_rain', 0)
+                                    avg_temp = round((max_temp + min_temp) / 2)
+                                    wind_speed = day_data.get('maxwind_mph', 0)
+                                    
+                                    # Check if suitable for outdoor dining
+                                    is_suitable = self._is_suitable_for_outdoor_dining(
+                                        avg_temp, chance_rain, condition, wind_speed
+                                    )
+                                    
+                                    # Format weather details
+                                    weather_details = f"Weather forecast: {condition}, {max_temp}°F/{min_temp}°F, {chance_rain}% rain chance"
+                                    
+                                    # Add outdoor seating request with weather to special requests
+                                    outdoor_request = f"🌿 OUTDOOR SEATING REQUESTED ({weather_details})"
+                                    
+                                    current_special_requests = reservation.special_requests or ''
+                                    if current_special_requests and not any(keyword in current_special_requests.lower() for keyword in outdoor_keywords):
+                                        reservation.special_requests = f"{current_special_requests}; {outdoor_request}"
+                                    elif not current_special_requests:
+                                        reservation.special_requests = outdoor_request
+                                    elif "OUTDOOR SEATING" not in current_special_requests.upper():
+                                        # Replace generic outdoor mention with detailed weather request
+                                        reservation.special_requests = f"{current_special_requests}; {outdoor_request}"
+                                    
+                                    print(f"✅ Added weather forecast to outdoor seating request: {weather_details}")
+                                    
+                                    # Store weather suitability info for response message and conversation persistence
+                                    meta_data['weather_suitable'] = is_suitable
+                                    meta_data['weather_details'] = weather_details
+                                    meta_data['outdoor_seating_requested'] = True
+                                    meta_data['reservation_weather_date'] = reservation_date
+                                    meta_data['weather_last_fetched'] = datetime.now().isoformat()
+                                    
+                                    # Store weather info for conversation context
+                                    meta_data['last_weather_forecast'] = {
+                                        'date': reservation_date,
+                                        'condition': condition,
+                                        'high': max_temp,
+                                        'low': min_temp,
+                                        'rain_chance': chance_rain,
+                                        'suitable_for_outdoor': is_suitable,
+                                        'details': weather_details
+                                    }
+                                    
+                                    if not is_suitable:
+                                        print(f"⚠️ Weather may not be ideal for outdoor dining: {weather_details}")
+                                else:
+                                    print("⚠️ Could not find weather forecast for reservation date")
+                            else:
+                                print(f"⚠️ Weather API request failed: {response.status_code}")
+                        else:
+                            print("⚠️ Weather API key not available or no date provided")
+                            
+                            # Still add outdoor seating request without weather details
+                            current_special_requests = reservation.special_requests or ''
+                            outdoor_request = "🌿 OUTDOOR SEATING REQUESTED"
+                            
+                            if current_special_requests and "OUTDOOR SEATING" not in current_special_requests.upper():
+                                reservation.special_requests = f"{current_special_requests}; {outdoor_request}"
+                            elif not current_special_requests:
+                                reservation.special_requests = outdoor_request
+                                
+                    except Exception as weather_error:
+                        print(f"⚠️ Error fetching weather for outdoor seating: {weather_error}")
+                        # Still add outdoor seating request without weather details
+                        current_special_requests = reservation.special_requests or ''
+                        outdoor_request = "🌿 OUTDOOR SEATING REQUESTED"
+                        
+                        if current_special_requests and "OUTDOOR SEATING" not in current_special_requests.upper():
+                            reservation.special_requests = f"{current_special_requests}; {outdoor_request}"
+                        elif not current_special_requests:
+                            reservation.special_requests = outdoor_request
+
                 # CRITICAL: Enhanced database commit with error handling
                 try:
                     db.session.commit()
                     print(f"✅ Database transaction committed successfully for reservation {reservation.id}")
+                    
+                    # CRITICAL FIX: Trigger real-time web notifications for voice-created reservations
+                    try:
+                        # Import here to avoid circular imports
+                        import requests
+                        import json
+                        
+                        # FIXED: Use correct variable name for total amount
+                        total_amount = total_reservation_amount if 'total_reservation_amount' in locals() else 0.0
+                        
+                        # Send notification to web interface via localhost API
+                        notification_data = {
+                            'type': 'new_reservation',
+                            'reservation_id': reservation.id,
+                            'reservation_number': reservation.reservation_number,
+                            'customer_name': args['name'],
+                            'party_size': args['party_size'],
+                            'date': args['date'],
+                            'time': args['time'],
+                            'total_amount': total_amount,
+                            'created_via': 'voice_agent'
+                        }
+                        
+                        print(f"🔔 Sending web notification for reservation {reservation.reservation_number}")
+                        print(f"   Notification data: {notification_data}")
+                        
+                        # Try multiple possible ports where the web interface might be running
+                        notification_urls = [
+                            'http://localhost:8080/api/notify_reservation_created',
+                            'http://127.0.0.1:8080/api/notify_reservation_created',
+                            'http://localhost:8000/api/notify_reservation_created',
+                            'http://localhost:5000/api/notify_reservation_created',
+                            'http://127.0.0.1:8000/api/notify_reservation_created',
+                            'http://127.0.0.1:5000/api/notify_reservation_created'
+                        ]
+                        
+                        notification_sent = False
+                        for url in notification_urls:
+                            try:
+                                response = requests.post(
+                                    url,
+                                    json=notification_data,
+                                    timeout=2  # Allow slightly more time
+                                )
+                                if response.status_code == 200:
+                                    print(f"✅ Web notification sent successfully to {url}")
+                                    notification_sent = True
+                                    break
+                                else:
+                                    print(f"⚠️ Web notification failed for {url}: {response.status_code}")
+                            except requests.exceptions.RequestException as e:
+                                print(f"⚠️ Web notification failed for {url}: {e}")
+                                continue
+                        
+                        if not notification_sent:
+                            print(f"⚠️ Web notification failed for all URLs - web interface may not be running")
+                            
+                    except Exception as e:
+                        print(f"⚠️ Notification system error: {e}")
+                        import traceback
+                        print(f"   Traceback: {traceback.format_exc()}")
+                        # Don't fail the reservation creation if notification fails
+                    
                 except Exception as commit_error:
                     print(f"❌ CRITICAL: Database commit failed for reservation {reservation.id}: {commit_error}")
                     db.session.rollback()
@@ -2919,6 +3276,25 @@ class RestaurantReservationSkill(SkillBase):
                 
                 if args.get('special_requests'):
                     message += f"📝 Special Requests: {args['special_requests']}\n"
+                
+                # Add weather information and outdoor seating confirmation if applicable
+                if meta_data.get('outdoor_seating_requested'):
+                    weather_suitable = meta_data.get('weather_suitable', True)
+                    weather_details = meta_data.get('weather_details', '')
+                    
+                    message += f"\n🌿 OUTDOOR SEATING REQUESTED!\n"
+                    
+                    if weather_details:
+                        clean_weather = weather_details.replace('Weather forecast: ', '')
+                        message += f"🌤️ Weather Forecast: {clean_weather}\n"
+                        
+                        if weather_suitable:
+                            message += f"✨ Perfect! The weather looks ideal for outdoor dining!\n"
+                        else:
+                            message += f"⚠️ Weather Advisory: Conditions may not be ideal for outdoor dining.\n"
+                            message += f"Don't worry - we'll ensure you have a comfortable table!\n"
+                    
+                    message += f"🍃 Note: Outdoor tables are subject to availability and weather conditions.\n"
                 
                 # Add order information if orders were placed
                 if total_reservation_amount > 0:
@@ -4251,24 +4627,54 @@ class RestaurantReservationSkill(SkillBase):
         """Extract additional person names from conversation text"""
         additional_names = []
         
-        # Common patterns for person names in restaurant conversations
+        # Enhanced patterns for person names in restaurant conversations
+        # Updated to handle compound names like "SpongeBob", "MacDonald", etc.
         name_patterns = [
-            r'\bfor\s+([A-Z][a-z]+)\b',  # "for John"
-            r'\band\s+([A-Z][a-z]+)\b',  # "and Mary"
-            r'\bwith\s+([A-Z][a-z]+)\b', # "with Bob"
-            r'\b([A-Z][a-z]+)\s+will\s+have\b', # "Sarah will have"
-            r'\b([A-Z][a-z]+)\s+wants\b', # "Tom wants"
-            r'\b([A-Z][a-z]+)\s+would\s+like\b', # "Lisa would like"
+            # Key pattern for the specific case: "Party of two, Jim Smith and SpongeBob"
+            r'\bparty\s+of\s+\d+,?\s+([A-Z][a-z\']+(?:\s+[A-Z][a-z\']+)*)\s+and\s+([A-Z][a-z\']*[A-Z]?[a-z\']*)\b',  # "party of two, Jim Smith and SpongeBob"
+            r'\bparty\s+of\s+\d+\s+for\s+([A-Z][a-z\']+(?:\s+[A-Z][a-z\']+)*)\s+and\s+([A-Z][a-z\']*[A-Z]?[a-z\']*)\b',  # "party of two for Jim Smith and SpongeBob"
+            r'\breservation.*?([A-Z][a-z\']+(?:\s+[A-Z][a-z\']+)*)\s+and\s+([A-Z][a-z\']*[A-Z]?[a-z\']*)\b',  # "reservation for Jim Smith and SpongeBob"
+            r'\bfor\s+([A-Z][a-z\']*[A-Z]?[a-z\']*(?:\s+[A-Z][a-z\']+)*)\s+and\s+([A-Z][a-z\']*[A-Z]?[a-z\']*)\b',  # "for Jim and SpongeBob"
+            r'\b([A-Z][a-z\']+(?:\s+[A-Z][a-z\']+)*)\s+and\s+([A-Z][a-z\']*[A-Z]?[a-z\']*)\b',  # "Jim Smith and SpongeBob" (general pattern)
+            r'\band\s+([A-Z][a-z\']*[A-Z]?[a-z\']*)\b',  # "and SpongeBob" - handles compound names
+            r'\bwith\s+([A-Z][a-z\']*[A-Z]?[a-z\']*)\b', # "with SpongeBob"
+            r'\b([A-Z][a-z\']*[A-Z]?[a-z\']*)\s+will\s+have\b', # "SpongeBob will have"
+            r'\b([A-Z][a-z\']*[A-Z]?[a-z\']*)\s+wants\b', # "SpongeBob wants"
+            r'\b([A-Z][a-z\']*[A-Z]?[a-z\']*)\s+would\s+like\b', # "SpongeBob would like"
+            r'\bfor\s+([A-Z][a-z\']*[A-Z]?[a-z\']*)\b',  # "for SpongeBob"
         ]
         
         # Extract names using patterns
         import re
-        for pattern in name_patterns:
-            matches = re.findall(pattern, conversation_text)
+        print(f"🔍 ENHANCED NAME EXTRACTION:")
+        print(f"   Customer name: '{customer_name}'")
+        print(f"   Conversation snippet: '{conversation_text[:200]}...'")
+        
+        for i, pattern in enumerate(name_patterns):
+            matches = re.findall(pattern, conversation_text, re.IGNORECASE)
+            if matches:
+                print(f"   🎯 Pattern {i+1} matched: {pattern}")
+                print(f"   📝 Matches found: {matches}")
+            
             for match in matches:
-                # Skip if it's the same as customer name or already in list
-                if match.lower() != customer_name.lower() and match not in additional_names:
-                    additional_names.append(match)
+                # Handle both single group and multiple group matches
+                if isinstance(match, tuple):
+                    # Multiple groups captured (e.g., "party of two for Jim and SpongeBob")
+                    for name in match:
+                        name = name.strip()
+                        if name and name.lower() != customer_name.lower() and name not in additional_names:
+                            # Clean up names like "Jim's" to "Jim"
+                            cleaned_name = name.rstrip("'s")
+                            additional_names.append(cleaned_name)
+                            print(f"   ✅ Extracted name from pattern {i+1}: '{cleaned_name}'")
+                else:
+                    # Single group captured
+                    name = match.strip()
+                    if name and name.lower() != customer_name.lower() and name not in additional_names:
+                        # Clean up names like "Jim's" to "Jim"  
+                        cleaned_name = name.rstrip("'s")
+                        additional_names.append(cleaned_name)
+                        print(f"   ✅ Extracted name from pattern {i+1}: '{cleaned_name}'")
         
         # Also look for common names in the text
         common_names = [
@@ -4279,41 +4685,140 @@ class RestaurantReservationSkill(SkillBase):
             'Carol', 'Kenneth', 'Ruth', 'Steven', 'Sharon', 'Edward', 'Michelle', 'Brian',
             'Laura', 'Ronald', 'Sarah', 'Anthony', 'Kimberly', 'Kevin', 'Deborah', 'Jason',
             'Dorothy', 'Jeff', 'Amy', 'Jim', 'Angela', 'Steve', 'Brenda', 'Matt', 'Emma',
-            'SpongeBob', 'Patrick', 'Squidward', 'Sandy', 'Mr. Krabs', 'Plankton'  # Fun names
+            'SpongeBob', 'Patrick', 'Squidward', 'Sandy', 'Mr. Krabs', 'Plankton',  # Fun names
+            'Alice', 'Charlie', 'Alex', 'Sam', 'Chris', 'Pat', 'Jordan', 'Casey', 'Taylor',
+            'Morgan', 'Riley', 'Dakota', 'Sage', 'Avery', 'Quinn', 'Blake', 'Cameron', 'Drew'
         ]
         
-        conversation_words = conversation_text.split()
+        # Enhanced name scanning with better word boundary detection
+        conversation_words = re.split(r'\W+', conversation_text)
         for word in conversation_words:
-            clean_word = word.strip('.,!?;:')
-            if clean_word in common_names and clean_word.lower() != customer_name.lower():
-                if clean_word not in additional_names:
-                    additional_names.append(clean_word)
+            # Check if this word matches any common names (case-insensitive)
+            for common_name in common_names:
+                if (word.lower() == common_name.lower() and 
+                    word.lower() != customer_name.lower() and 
+                    common_name not in additional_names):
+                    additional_names.append(common_name)
+                    print(f"   🔍 Found common name: '{common_name}'")
         
         print(f"🔍 Extracted additional names: {additional_names}")
         return additional_names
 
-    def _fallback_order_distribution(self, food_items, customer_name, party_size, additional_names):
-        """Enhanced fallback distribution when main parsing fails"""
+    def _parse_person_food_assignments_from_conversation(self, conversation_text, customer_name, additional_names):
+        """Parse person-specific food assignments from conversation text"""
+        import re
+        
+        person_assignments = {}
+        
+        # Create list of all person names
+        all_names = [customer_name] + additional_names
+        
+        print(f"🔍 Parsing food assignments for: {all_names}")
+        
+        # Enhanced patterns for person-specific assignments in agent responses
+        # Looking for patterns like "For Jim Smith, how about the Grilled Chicken Breast"
+        conversation_lines = conversation_text.split('\n')
+        
+        for line in conversation_lines:
+            # Look for "For [Name]" patterns in agent responses
+            for_pattern = r'[Ff]or\s+([^,]+),.*?([A-Z][a-z\s]+(?:Breast|Burger|Steak|Salad|Sandwich|Pizza|Pasta|Soup|Wings|Fries|Wine|Beer|Soda|Lemonade|Coffee|Tea))'
+            
+            matches = re.finditer(for_pattern, line, re.IGNORECASE)
+            for match in matches:
+                person = match.group(1).strip()
+                food_mention = match.group(2).strip()
+                
+                # Validate person name is in our list
+                person_match = None
+                for name in all_names:
+                    if name.lower() in person.lower() or person.lower() in name.lower():
+                        person_match = name
+                        break
+                
+                if person_match:
+                    if person_match not in person_assignments:
+                        person_assignments[person_match] = []
+                    
+                    person_assignments[person_match].append(food_mention)
+                    print(f"   ✅ {person_match}: {food_mention}")
+        
+        return person_assignments
+
+    def _fallback_order_distribution(self, food_items, customer_name, party_size, additional_names, conversation_text=""):
+        """Enhanced fallback distribution that respects conversation assignments when possible"""
         party_orders = []
         
-        # Create person list
-        person_names = [customer_name] + additional_names
+        # CRITICAL FIX: Ensure customer_name is never a phone number
+        if customer_name and ('+' in customer_name or customer_name.isdigit() or len(customer_name.replace(' ', '').replace('+', '').replace('-', '')) > 10):
+            print(f"🚨 Customer name appears to be phone number: {customer_name}, using fallback")
+            customer_name = "Primary Guest"
+        
+        # CRITICAL FIX: Validate additional names are not phone numbers
+        validated_additional_names = []
+        for name in additional_names:
+            if name and not ('+' in name or name.isdigit() or len(name.replace(' ', '').replace('+', '').replace('-', '')) > 10):
+                validated_additional_names.append(name)
+        
+        # Create person list with validated names
+        person_names = [customer_name] + validated_additional_names
         while len(person_names) < party_size:
             person_names.append(f'Guest {len(person_names)}')
         
-        # Distribute items evenly
-        for i, item in enumerate(food_items):
-            person_index = i % len(person_names)
-            person_name = person_names[person_index]
+        print(f"🔍 Person names for order distribution: {person_names}")
+        
+        # ENHANCED: Try to parse person-specific assignments from conversation first
+        assigned_item_ids = set()  # FIXED: Track IDs instead of dict objects
+        if conversation_text:
+            person_assignments = self._parse_person_food_assignments_from_conversation(conversation_text, customer_name, validated_additional_names)
             
-            # Find existing party order for this person or create new one
-            existing_order = next((po for po in party_orders if po['person_name'] == person_name), None)
-            if existing_order:
-                existing_order['items'].append(item)
-            else:
+            if person_assignments:
+                print("✅ Using conversation-based assignments")
+                # Convert conversation assignments to party orders
+                for person_name in person_names:
+                    assigned_food_names = person_assignments.get(person_name, [])
+                    person_items = []
+                    
+                    # Find matching menu items for assigned food names
+                    for food_name in assigned_food_names:
+                        for item in food_items:
+                            item_name = item.get('name', '').lower()
+                            item_id = item.get('menu_item_id')
+                            if (food_name.lower() in item_name or 
+                                any(word in item_name for word in food_name.lower().split())) and item_id not in assigned_item_ids:
+                                person_items.append(item)
+                                assigned_item_ids.add(item_id)  # FIXED: Add ID, not dict
+                                break
+                    
+                    if person_items:
+                        party_orders.append({
+                            'person_name': person_name,
+                            'items': person_items
+                        })
+        
+        # For any remaining unassigned items, distribute evenly
+        remaining_items = [item for item in food_items if item.get('menu_item_id') not in assigned_item_ids]
+        if remaining_items:
+            print(f"🔄 Distributing {len(remaining_items)} remaining items evenly")
+            for i, item in enumerate(remaining_items):
+                person_index = i % len(person_names)
+                person_name = person_names[person_index]
+                
+                # Find existing party order for this person or create new one
+                existing_order = next((po for po in party_orders if po['person_name'] == person_name), None)
+                if existing_order:
+                    existing_order['items'].append(item)
+                else:
+                    party_orders.append({
+                        'person_name': person_name,
+                        'items': [item]
+                    })
+        
+        # Ensure all people have orders even if empty
+        for person_name in person_names:
+            if not any(po['person_name'] == person_name for po in party_orders):
                 party_orders.append({
                     'person_name': person_name,
-                    'items': [item]
+                    'items': []
                 })
         
         return party_orders
@@ -5050,5 +5555,475 @@ class RestaurantReservationSkill(SkillBase):
             
         except Exception as e:
             return SwaigFunctionResult(f"Error sending payment receipt: {str(e)}")
+
+    def _is_suitable_for_outdoor_dining(self, temperature, rain_chance, condition, wind_speed):
+        """Determine if weather conditions are suitable for outdoor dining"""
+        try:
+            # Temperature criteria: comfortable range for outdoor dining
+            temp_suitable = 65 <= temperature <= 85
+            
+            # Rain criteria: low chance of rain
+            rain_suitable = rain_chance <= 25
+            
+            # Wind criteria: not too windy
+            wind_suitable = wind_speed <= 15
+            
+            # Condition criteria: avoid severe weather
+            condition_lower = condition.lower()
+            severe_conditions = [
+                'thunderstorm', 'storm', 'heavy rain', 'heavy snow', 
+                'blizzard', 'tornado', 'hail', 'sleet', 'freezing'
+            ]
+            condition_suitable = not any(severe in condition_lower for severe in severe_conditions)
+            
+            # All criteria must be met for outdoor seating recommendation
+            is_suitable = temp_suitable and rain_suitable and wind_suitable and condition_suitable
+            
+            print(f"🌿 Outdoor dining check: temp={temperature}°F ({temp_suitable}), "
+                  f"rain={rain_chance}% ({rain_suitable}), wind={wind_speed}mph ({wind_suitable}), "
+                  f"condition='{condition}' ({condition_suitable}) -> suitable={is_suitable}")
+            
+            return is_suitable
+            
+        except Exception as e:
+            print(f"❌ Error checking outdoor dining suitability: {e}")
+            return False
+
+    def _get_weather_forecast_handler(self, args, raw_data):
+        """Get weather forecast for the restaurant area (zipcode 15222)"""
+        from signalwire_agents.core.function_result import SwaigFunctionResult
+        import os
+        import requests
+        from datetime import datetime, timedelta
+        
+        try:
+            print("🌤️ Weather forecast requested")
+            
+            # Extract reservation details if provided in args
+            reservation_date = args.get('reservation_date')
+            reservation_time = args.get('reservation_time')
+            
+            # If no reservation details in args, try to extract from conversation context
+            if not reservation_date:
+                # Try to extract from conversation or agent metadata
+                meta_data = raw_data.get('meta_data', {})
+                call_log = raw_data.get('call_log', [])
+                
+                # Check if weather was already fetched for this conversation
+                if meta_data.get('last_weather_forecast'):
+                    weather_info = meta_data['last_weather_forecast']
+                    reservation_date = weather_info.get('date')
+                    print(f"🔍 Found existing weather forecast in meta_data for {reservation_date}")
+                    
+                    # If the forecast is recent (same conversation), use it
+                    condition = weather_info.get('condition', '')
+                    high_temp = weather_info.get('high', 0)
+                    low_temp = weather_info.get('low', 0)
+                    rain_chance = weather_info.get('rain_chance', 0)
+                    is_suitable = weather_info.get('suitable_for_outdoor', True)
+                    
+                    # Return the cached weather information with additional context
+                    message = f"🌤️ **Weather Forecast for your reservation on {reservation_date}:**\n\n"
+                    message += f"**Condition:** {condition}\n"
+                    message += f"**Temperature:** High of {high_temp}°F, Low of {low_temp}°F\n"
+                    message += f"**Rain Chance:** {rain_chance}%\n\n"
+                    
+                    if is_suitable:
+                        message += f"🌿 **Great news!** The weather looks perfect for outdoor dining! "
+                        message += f"Your outdoor seating request is all set.\n\n"
+                    else:
+                        message += f"⚠️ **Weather Advisory:** The forecast shows conditions that may not be ideal for outdoor dining. "
+                        message += f"Don't worry - we'll ensure you have a comfortable table, and if the weather improves, "
+                        message += f"we can still accommodate your outdoor seating preference based on availability.\n\n"
+                    
+                    message += f"🍃 **Note:** Our outdoor tables are subject to availability and weather conditions. "
+                    message += f"We'll do our best to accommodate your preference!\n\n"
+                    message += f"Is there anything else I can help you with for your reservation?"
+                    
+                    return SwaigFunctionResult(message)
+                
+                # Look for recently created reservation in conversation
+                for entry in reversed(call_log[-10:]):  # Check last 10 entries
+                    content = entry.get('content', '')
+                    if 'reservation number' in content.lower() and 'confirmed' in content.lower():
+                        # Try to extract date from recent reservation confirmation
+                        try:
+                            # Look for date patterns in the confirmation message
+                            import re
+                            date_match = re.search(r'tomorrow|(\d{4}-\d{2}-\d{2})', content.lower())
+                            if date_match:
+                                if 'tomorrow' in content.lower():
+                                    reservation_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+                                    print(f"🔍 Extracted reservation date from context: {reservation_date} (tomorrow)")
+                                break
+                        except:
+                            pass
+                
+                # If still no date, assume they're asking about tomorrow (most common case)
+                if not reservation_date:
+                    reservation_date = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+                    print(f"🔍 Defaulting to tomorrow for weather forecast: {reservation_date}")
+            
+            print(f"🔍 Using reservation date: {reservation_date}, time: {reservation_time}")
+            
+            # Restaurant location - zipcode 15222 (Pittsburgh, PA area)
+            location = "15222"
+            
+            # Get weather API key
+            weather_api_key = os.getenv('WEATHER_API_KEY')
+            if not weather_api_key:
+                return SwaigFunctionResult(
+                    "I'm sorry, I can't check the weather forecast right now due to a system configuration issue. "
+                    "However, I recommend checking your local weather app or website before your reservation!"
+                )
+            
+            print(f"🔍 Getting weather for location: {location}")
+            
+            # Build context message based on reservation details
+            context_message = ""
+            if reservation_date:
+                try:
+                    res_date = datetime.strptime(reservation_date, '%Y-%m-%d')
+                    date_str = res_date.strftime('%A, %B %d')
+                    if reservation_time:
+                        context_message = f"for your reservation on {date_str} at {reservation_time} "
+                    else:
+                        context_message = f"for your reservation on {date_str} "
+                except:
+                    if reservation_time:
+                        context_message = f"for your reservation at {reservation_time} "
+                    else:
+                        context_message = "for your reservation "
+            
+            # Determine if we need current weather or forecast
+            forecast_needed = False
+            if reservation_date:
+                try:
+                    res_date = datetime.strptime(reservation_date, '%Y-%m-%d').date()
+                    today = datetime.now().date()
+                    if res_date > today:
+                        forecast_needed = True
+                        days_ahead = (res_date - today).days
+                        print(f"🔍 Forecast needed for {days_ahead} days ahead")
+                except:
+                    pass
+            
+            # Choose API endpoint based on whether forecast is needed
+            if forecast_needed and reservation_date:
+                # Use forecast API for future dates
+                api_url = f"https://api.weatherapi.com/v1/forecast.json?key={weather_api_key}&q={location}&days=7&aqi=no&alerts=no"
+            else:
+                # Use current weather API for today or when no specific date given
+                api_url = f"https://api.weatherapi.com/v1/current.json?key={weather_api_key}&q={location}&aqi=no"
+            
+            print(f"🔗 Weather API URL: {api_url}")
+            
+            # Make the API request
+            response = requests.get(api_url, timeout=10)
+            response.raise_for_status()
+            weather_data = response.json()
+            
+            # Build the weather response
+            if forecast_needed and 'forecast' in weather_data:
+                # Handle forecast data
+                location_name = weather_data.get('location', {}).get('name', 'the restaurant area')
+                
+                # Find the forecast for the specific date
+                forecast_day = None
+                if reservation_date:
+                    for day in weather_data['forecast']['forecastday']:
+                        if day['date'] == reservation_date:
+                            forecast_day = day
+                            break
+                
+                if forecast_day:
+                    day_data = forecast_day['day']
+                    condition = day_data['condition']['text']
+                    max_temp = round(day_data['maxtemp_f'])
+                    min_temp = round(day_data['mintemp_f'])
+                    chance_rain = day_data.get('daily_chance_of_rain', 0)
+                    avg_temp = round((max_temp + min_temp) / 2)
+                    wind_speed = day_data.get('maxwind_mph', 0)
+                    
+                    message = f"🌤️ **Weather Forecast {context_message}in {location_name}:**\n\n"
+                    message += f"**Condition:** {condition}\n"
+                    message += f"**Temperature:** High of {max_temp}°F, Low of {min_temp}°F\n"
+                    
+                    if chance_rain > 30:
+                        message += f"**Rain:** {chance_rain}% chance of rain\n"
+                        message += f"💡 **Tip:** You might want to bring an umbrella or jacket!\n\n"
+                    else:
+                        message += f"**Rain:** Low chance of rain ({chance_rain}%)\n"
+                        message += f"☀️ **Tip:** Looks like great weather for dining!\n\n"
+                    
+                    # Check if weather is suitable for outdoor seating
+                    is_outdoor_weather = self._is_suitable_for_outdoor_dining(
+                        avg_temp, chance_rain, condition, wind_speed
+                    )
+                    
+                    if is_outdoor_weather:
+                        message += f"🌿 **Outdoor Seating Available:** Perfect weather for our outdoor tables! "
+                        message += f"Would you like me to add outdoor seating to your reservation? "
+                        message += f"Our patio offers a lovely dining experience with beautiful views.\n\n"
+                        message += f"💡 **Just say 'yes, add outdoor seating' or 'request outdoor seating' and I'll update your reservation immediately!**\n\n"
+                    
+                    message += "We look forward to seeing you at Bobby's Table! 🍽️"
+                else:
+                    # Fallback to general forecast
+                    day_data = weather_data['forecast']['forecastday'][0]['day']
+                    condition = day_data['condition']['text']
+                    max_temp = round(day_data['maxtemp_f'])
+                    min_temp = round(day_data['mintemp_f'])
+                    
+                    message = f"🌤️ **Weather Forecast {context_message}in the restaurant area:**\n\n"
+                    message += f"**Condition:** {condition}\n"
+                    message += f"**Temperature:** High of {max_temp}°F, Low of {min_temp}°F\n\n"
+                    message += "We look forward to seeing you at Bobby's Table! 🍽️"
+            else:
+                # Handle current weather data
+                location_name = weather_data.get('location', {}).get('name', 'the restaurant area')
+                current = weather_data['current']
+                condition = current['condition']['text']
+                temp = round(current['temp_f'])
+                feels_like = round(current['feelslike_f'])
+                wind_speed = round(current['wind_mph'])
+                wind_dir = current['wind_dir']
+                humidity = current['humidity']
+                
+                message = f"🌤️ **Current Weather {context_message}in {location_name}:**\n\n"
+                message += f"**Condition:** {condition}\n"
+                message += f"**Temperature:** {temp}°F (feels like {feels_like}°F)\n"
+                message += f"**Wind:** {wind_dir} at {wind_speed} mph\n"
+                message += f"**Humidity:** {humidity}%\n\n"
+                
+                # Add helpful tips based on weather
+                if temp < 40:
+                    message += f"🧥 **Tip:** It's quite cold! Dress warmly for your visit.\n\n"
+                elif temp > 85:
+                    message += f"☀️ **Tip:** It's quite warm! Our restaurant is climate controlled for your comfort.\n\n"
+                elif 'rain' in condition.lower() or 'shower' in condition.lower():
+                    message += f"🌧️ **Tip:** It's raining! We have covered entry for your convenience.\n\n"
+                else:
+                    message += f"✨ **Tip:** Lovely weather for dining! We look forward to seeing you.\n\n"
+                
+                # Check if current weather is suitable for outdoor seating
+                is_outdoor_weather = self._is_suitable_for_outdoor_dining(
+                    feels_like, 0, condition, wind_speed  # Use feels_like temp, 0% rain for current
+                )
+                
+                if is_outdoor_weather:
+                    message += f"🌿 **Outdoor Seating Available:** Perfect weather for our outdoor tables! "
+                    message += f"Would you like me to add outdoor seating to your reservation? "
+                    message += f"Our patio offers a lovely dining experience with beautiful views.\n\n"
+                    message += f"💡 **Just say 'yes, add outdoor seating' or 'request outdoor seating' and I'll update your reservation immediately!**\n\n"
+                
+                message += "We look forward to seeing you at Bobby's Table! 🍽️"
+            
+            return SwaigFunctionResult(message)
+            
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Weather API request failed: {e}")
+            return SwaigFunctionResult(
+                "I'm sorry, I can't check the weather forecast right now due to a connectivity issue. "
+                "Please check your local weather app or website before your reservation. "
+                "We look forward to seeing you at Bobby's Table!"
+            )
+        except Exception as e:
+            print(f"❌ Error in weather forecast handler: {e}")
+            import traceback
+            traceback.print_exc()
+            return SwaigFunctionResult(
+                "I'm sorry, I encountered an issue checking the weather forecast. "
+                "Please check your local weather app or website before your reservation. "
+                "We look forward to seeing you at Bobby's Table!"
+            )
+
+    def _request_outdoor_seating_handler(self, args, raw_data):
+        """Handle requests for outdoor seating with weather details"""
+        from signalwire_agents.core.function_result import SwaigFunctionResult
+        import os
+        import sys
+        import requests
+        from datetime import datetime
+        
+        try:
+            print("🌿 Outdoor seating request received")
+            
+            # Extract parameters from args first
+            reservation_number = args.get('reservation_number')
+            customer_name = args.get('customer_name')
+            party_size = args.get('party_size')
+            special_note = args.get('special_note', '')
+            
+            # If no reservation details in args, try to extract from conversation context
+            if not reservation_number and not customer_name:
+                call_log = raw_data.get('conversation', {}).get('call_log', [])
+                
+                # Look for recently created reservation in conversation
+                for entry in reversed(call_log[-15:]):  # Check last 15 entries
+                    content = entry.get('content', '')
+                    if 'reservation number' in content.lower() and 'confirmed' in content.lower():
+                        # Try to extract reservation number and customer name
+                        import re
+                        # Look for reservation number pattern
+                        number_match = re.search(r'reservation number[:\s]+(\d{6})', content.lower())
+                        if number_match:
+                            reservation_number = number_match.group(1)
+                            print(f"🔍 Extracted reservation number from context: {reservation_number}")
+                        
+                        # Look for customer name pattern
+                        name_match = re.search(r'name[:\s]+([a-zA-Z\s]+)', content.lower())
+                        if name_match:
+                            customer_name = name_match.group(1).strip()
+                            print(f"🔍 Extracted customer name from context: {customer_name}")
+                        break
+                
+                # If still no info, check for recent reservation creation in function calls
+                if not reservation_number:
+                    for entry in reversed(call_log[-10:]):
+                        if entry.get('role') == 'tool' and 'reservation confirmed' in entry.get('content', '').lower():
+                            # Try to extract reservation details from tool response
+                            content = entry.get('content', '')
+                            number_match = re.search(r'(\d{6})', content)
+                            if number_match:
+                                reservation_number = number_match.group(1)
+                                print(f"🔍 Extracted reservation number from tool response: {reservation_number}")
+                                break
+            
+            print(f"🔍 Using reservation_number: {reservation_number}, customer_name: {customer_name}")
+            
+            # Add the parent directory to sys.path to import app
+            parent_dir = os.path.dirname(os.path.dirname(__file__))
+            if parent_dir not in sys.path:
+                sys.path.insert(0, parent_dir)
+            
+            from app import app
+            from models import Reservation, db
+            
+            with app.app_context():
+                # Try to find the reservation
+                reservation = None
+                
+                if reservation_number:
+                    reservation = Reservation.query.filter_by(reservation_number=reservation_number).first()
+                elif customer_name:
+                    # Search by customer name if no reservation number
+                    reservations = Reservation.query.filter(
+                        Reservation.name.ilike(f'%{customer_name}%')
+                    ).all()
+                    if len(reservations) == 1:
+                        reservation = reservations[0]
+                    elif len(reservations) > 1:
+                        return SwaigFunctionResult(
+                            f"I found multiple reservations for {customer_name}. "
+                            "Could you provide your 6-digit reservation number so I can add the outdoor seating request to the correct reservation?"
+                        )
+                
+                if not reservation:
+                    if reservation_number:
+                        return SwaigFunctionResult(
+                            f"I couldn't find reservation #{reservation_number}. "
+                            "Please check the reservation number and try again."
+                        )
+                    else:
+                        return SwaigFunctionResult(
+                            "I'll need either your reservation number or full name to add the outdoor seating request. "
+                            "What's your 6-digit reservation number?"
+                        )
+                
+                # Get current weather for temperature details
+                weather_details = ""
+                try:
+                    weather_api_key = os.getenv('WEATHER_API_KEY')
+                    if weather_api_key:
+                        location = "15222"  # Restaurant zipcode
+                        
+                        # Check if reservation is for future date to determine forecast vs current
+                        reservation_date = reservation.date
+                        today = datetime.now().date()
+                        
+                        if reservation_date > today:
+                            # Use forecast for future dates
+                            api_url = f"https://api.weatherapi.com/v1/forecast.json?key={weather_api_key}&q={location}&days=7&aqi=no&alerts=no"
+                            response = requests.get(api_url, timeout=5)
+                            if response.status_code == 200:
+                                weather_data = response.json()
+                                # Find the forecast for the specific date
+                                for day in weather_data['forecast']['forecastday']:
+                                    if day['date'] == str(reservation_date):
+                                        day_data = day['day']
+                                        condition = day_data['condition']['text']
+                                        max_temp = round(day_data['maxtemp_f'])
+                                        min_temp = round(day_data['mintemp_f'])
+                                        rain_chance = day_data.get('daily_chance_of_rain', 0)
+                                        weather_details = f"Weather forecast: {condition}, {max_temp}°F/{min_temp}°F, {rain_chance}% rain chance"
+                                        break
+                        else:
+                            # Use current weather for today
+                            api_url = f"https://api.weatherapi.com/v1/current.json?key={weather_api_key}&q={location}&aqi=no"
+                            response = requests.get(api_url, timeout=5)
+                            if response.status_code == 200:
+                                weather_data = response.json()
+                                current = weather_data['current']
+                                condition = current['condition']['text']
+                                temp = round(current['temp_f'])
+                                feels_like = round(current['feelslike_f'])
+                                weather_details = f"Current weather: {condition}, {temp}°F (feels like {feels_like}°F)"
+                except Exception as e:
+                    print(f"⚠️ Could not fetch weather details for outdoor seating request: {e}")
+                    weather_details = "Weather details unavailable"
+                
+                # Update the reservation with outdoor seating request including weather
+                current_special_requests = reservation.special_requests or ''
+                outdoor_request = "🌿 OUTDOOR SEATING REQUESTED"
+                
+                # Add weather details to the request
+                if weather_details:
+                    outdoor_request += f" ({weather_details})"
+                
+                if special_note:
+                    outdoor_request += f" - {special_note}"
+                
+                # Add to special requests if not already there
+                if "OUTDOOR SEATING" not in current_special_requests.upper():
+                    if current_special_requests:
+                        new_special_requests = f"{current_special_requests}; {outdoor_request}"
+                    else:
+                        new_special_requests = outdoor_request
+                    
+                    reservation.special_requests = new_special_requests
+                    db.session.commit()
+                    
+                    print(f"✅ Added outdoor seating request with weather details to reservation #{reservation.reservation_number}")
+                    
+                    message = f"🌿 **Outdoor Seating Requested!**\n\n"
+                    message += f"I've added your outdoor seating request to reservation #{reservation.reservation_number}.\n\n"
+                    message += f"**Reservation Details:**\n"
+                    message += f"• **Name:** {reservation.name}\n"
+                    message += f"• **Date:** {reservation.date}\n"
+                    message += f"• **Time:** {reservation.time}\n"
+                    message += f"• **Party Size:** {reservation.party_size}\n"
+                    if weather_details and weather_details != "Weather details unavailable":
+                        message += f"• **Weather:** {weather_details}\n"
+                    message += f"\n🍃 **Note:** Our outdoor tables are subject to availability and weather conditions. "
+                    message += f"If weather becomes unfavorable, we'll ensure you have a comfortable indoor table.\n\n"
+                    message += f"We look forward to serving you on our beautiful patio! 🌟"
+                    
+                    return SwaigFunctionResult(message)
+                else:
+                    message = f"🌿 **Outdoor Seating Already Requested**\n\n"
+                    message += f"Your reservation #{reservation.reservation_number} already has outdoor seating requested.\n\n"
+                    message += f"We look forward to serving you on our beautiful patio! 🌟"
+                    
+                    return SwaigFunctionResult(message)
+                
+        except Exception as e:
+            print(f"❌ Error in outdoor seating request handler: {e}")
+            import traceback
+            traceback.print_exc()
+            return SwaigFunctionResult(
+                "I'm sorry, I encountered an issue processing your outdoor seating request. "
+                "Please mention your preference when you arrive, and we'll do our best to accommodate you!"
+            )
 
 

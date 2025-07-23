@@ -85,6 +85,16 @@
         </footer>
     </main>
     <script src="{{ url_for('serve_static', filename='bootstrap/js/bootstrap.bundle.min.js') }}"></script>
+    
+    <!-- Notification Configuration from Environment Variables -->
+    <script>
+        window.notificationConfig = {
+            soundType: '{{ notification_sound_type }}',
+            volume: {{ notification_volume }},
+            fallback: '{{ notification_fallback }}'
+        };
+    </script>
+    
     {% block scripts %}{% endblock %}
 </body>
 </html> 

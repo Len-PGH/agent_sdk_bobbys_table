@@ -60,7 +60,7 @@ def init_test_data():
                 time='19:00', 
                 phone_number='+1234567890', 
                 status='confirmed',
-                special_requests='Anniversary dinner, window table preferred',
+                special_requests='Anniversary dinner, window table preferred; 🌿 OUTDOOR SEATING REQUESTED (Current weather: Sunny, 72°F (feels like 70°F))',
                 payment_status='unpaid'
             ),
             Reservation(
@@ -71,7 +71,7 @@ def init_test_data():
                 time='18:30', 
                 phone_number='+1987654321', 
                 status='confirmed',
-                special_requests='Wheelchair Accessible',
+                special_requests='Wheelchair Accessible; 🌿 OUTDOOR SEATING REQUESTED (Weather forecast: Clear skies, 78°F/65°F, 5% rain chance)',
                 payment_status='unpaid'
             ),
             Reservation(
@@ -83,6 +83,28 @@ def init_test_data():
                 phone_number='+1122334455', 
                 status='confirmed',
                 special_requests='Business dinner, quiet table please',
+                payment_status='unpaid'
+            ),
+            Reservation(
+                reservation_number='456789', 
+                name='Garcia Family', 
+                party_size=3, 
+                date=str(today + timedelta(days=3)), 
+                time='17:30', 
+                phone_number='+1333444555', 
+                status='confirmed',
+                special_requests='Prefer table with garden view',
+                payment_status='unpaid'
+            ),
+            Reservation(
+                reservation_number='567890', 
+                name='Chen Party', 
+                party_size=2, 
+                date=str(today + timedelta(days=4)), 
+                time='19:15', 
+                phone_number='+1444555666', 
+                status='confirmed',
+                special_requests='Birthday celebration',
                 payment_status='unpaid'
             )
         ]

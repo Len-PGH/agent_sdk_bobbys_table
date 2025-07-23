@@ -288,6 +288,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 calendar.refetchEvents();
                 // Show success message
                 alert('Reservation created successfully!');
+                
+                // Trigger notification for new reservation
+                if (typeof playNotificationSound === 'function') {
+                    playNotificationSound();
+                } else {
+                    // Fallback notification for calendar page
+                    showReservationNotification(`New reservation created: ${data.reservation_number}`);
+                }
             } else {
                 alert('Error: ' + (data.error || 'Could not create reservation.'));
             }
@@ -329,6 +337,151 @@ function showReservationDetails(event) {
             console.log('Reservation data received:', reservation);
             // Format time in 12-hour format
             const time12hr = new Date(`1970-01-01T${reservation.time}`).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+            
+            // Extract weather information from special requests if present
+            let weatherInfo = '';
+            let seatingPreference = 'Indoor'; // Default to indoor
+            let cleanSpecialRequests = reservation.special_requests || '';
+            
+            // Check for outdoor seating requests in various formats
+            const outdoorPatterns = [
+                /🌿 OUTDOOR SEATING REQUESTED/i,
+                /outdoor seating requested/i,
+                /outdoor seating/i,
+                /patio seating/i,
+                /outside seating/i
+            ];
+            
+            const specialRequests = reservation.special_requests || '';
+            const hasOutdoorRequest = outdoorPatterns.some(pattern => pattern.test(specialRequests));
+            
+            // NEW: Check if outdoor seating was discussed but not finalized
+            let outdoorDiscussed = false;
+            if (reservation.meta_data) {
+                try {
+                    const metaData = typeof reservation.meta_data === 'string' ? 
+                        JSON.parse(reservation.meta_data) : reservation.meta_data;
+                    
+                    // Check if weather was fetched or outdoor seating was mentioned in conversation
+                    if (metaData.last_weather_forecast || metaData.weather_details || metaData.outdoor_discussed) {
+                        outdoorDiscussed = true;
+                    }
+                } catch (e) {
+                    console.log('Could not parse meta_data for outdoor discussion:', e);
+                }
+            }
+            
+            if (hasOutdoorRequest) {
+                seatingPreference = 'Outdoor';
+                
+                // Check for weather details in the special requests
+                const weatherMatch = specialRequests.match(/🌿 OUTDOOR SEATING REQUESTED \(([^)]+)\)/);
+                if (weatherMatch) {
+                    // Extract detailed weather information
+                    let weatherDetails = weatherMatch[1];
+                    
+                    // Clean up the weather details format
+                    weatherDetails = weatherDetails.replace(/^(Current weather:|Weather forecast:)\s*/i, '');
+                    
+                    // Determine appropriate emoji based on conditions - prioritize weather condition over rain percentage
+                    let weatherEmoji = '🌤️'; // default
+                    if (weatherDetails.toLowerCase().includes('clear') || weatherDetails.toLowerCase().includes('sunny')) {
+                        weatherEmoji = '☀️';
+                    } else if (weatherDetails.toLowerCase().includes('cloud')) {
+                        weatherEmoji = '⛅';
+                    } else if (weatherDetails.toLowerCase().includes('rain') && (weatherDetails.toLowerCase().includes('rainy') || weatherDetails.toLowerCase().includes('raining') || weatherDetails.toLowerCase().includes('moderate rain') || weatherDetails.toLowerCase().includes('heavy rain'))) {
+                        weatherEmoji = '🌧️';
+                    }
+                    
+                    // Format as: "Weather Forecast: 🌧️ Clear skies, 78°F/65°F, 5% rain chance"
+                    weatherInfo = `Weather Forecast: ${weatherEmoji} ${weatherDetails}`;
+                } else {
+                    // No detailed weather found - provide informative message based on what we have
+                    if (specialRequests.toLowerCase().includes('outdoor seating requested') || 
+                        specialRequests.toLowerCase().includes('outdoor seating')) {
+                        weatherInfo = 'Weather Forecast: 🌤️ Outdoor seating confirmed - Weather details not recorded';
+                        console.log('Warning: Outdoor seating confirmed but weather details missing for reservation', reservation.reservation_number);
+                    } else {
+                        weatherInfo = 'Weather Forecast: 🌤️ Outdoor seating confirmed';
+                    }
+                }
+                
+                // Clean up special requests - remove outdoor seating mentions for cleaner display
+                cleanSpecialRequests = specialRequests
+                    .replace(/🌿 OUTDOOR SEATING REQUESTED[^;]*/gi, '')
+                    .replace(/outdoor seating requested/gi, '')
+                    .replace(/outdoor seating/gi, '')
+                    .replace(/;\s*$/, '') // Remove trailing semicolon
+                    .replace(/^;\s*/, '') // Remove leading semicolon
+                    .trim();
+            }
+            
+            // ENHANCED: Check if weather was discussed but outdoor seating declined
+            // Look for weather information in the API response meta_data if available
+            if (!weatherInfo && reservation.meta_data) {
+                try {
+                    const metaData = typeof reservation.meta_data === 'string' ? 
+                        JSON.parse(reservation.meta_data) : reservation.meta_data;
+                    
+                    if (metaData.last_weather_forecast) {
+                        const weather = metaData.last_weather_forecast;
+                        // Enhanced forecast display with full details
+                        let forecastDetails = `${weather.condition || 'Moderate conditions'}`;
+                        forecastDetails += ` • High: ${weather.high || 'N/A'}°F, Low: ${weather.low || 'N/A'}°F`;
+                        forecastDetails += ` • Rain chance: ${weather.rain_chance || 0}%`;
+                        
+                        // Add wind speed if available
+                        if (weather.wind_speed) {
+                            forecastDetails += ` • Wind: ${weather.wind_speed} mph`;
+                        }
+                        
+                        // Add visibility if available
+                        if (weather.visibility) {
+                            forecastDetails += ` • Visibility: ${weather.visibility} miles`;
+                        }
+                        
+                        // Add humidity if available
+                        if (weather.humidity) {
+                            forecastDetails += ` • Humidity: ${weather.humidity}%`;
+                        }
+                        
+                        // Determine emoji based on conditions - prioritize weather condition over rain percentage
+                        let weatherEmoji = '🌤️'; // default
+                        if (forecastDetails.toLowerCase().includes('clear') || forecastDetails.toLowerCase().includes('sunny')) {
+                            weatherEmoji = '☀️';
+                        } else if (forecastDetails.toLowerCase().includes('cloud')) {
+                            weatherEmoji = '⛅';
+                        } else if (forecastDetails.toLowerCase().includes('rain') && (forecastDetails.toLowerCase().includes('rainy') || forecastDetails.toLowerCase().includes('raining') || forecastDetails.toLowerCase().includes('moderate rain') || forecastDetails.toLowerCase().includes('heavy rain'))) {
+                            weatherEmoji = '🌧️';
+                        }
+                        
+                        weatherInfo = `Weather Forecast: ${weatherEmoji} ${forecastDetails}`;
+                        seatingPreference = 'Indoor (due to weather)';
+                    } else if (metaData.weather_details) {
+                        // Determine emoji for weather details - prioritize weather condition over rain percentage
+                        let weatherEmoji = '🌤️'; // default
+                        if (metaData.weather_details.toLowerCase().includes('clear') || metaData.weather_details.toLowerCase().includes('sunny')) {
+                            weatherEmoji = '☀️';
+                        } else if (metaData.weather_details.toLowerCase().includes('cloud')) {
+                            weatherEmoji = '⛅';
+                        } else if (metaData.weather_details.toLowerCase().includes('rain') && (metaData.weather_details.toLowerCase().includes('rainy') || metaData.weather_details.toLowerCase().includes('raining') || metaData.weather_details.toLowerCase().includes('moderate rain') || metaData.weather_details.toLowerCase().includes('heavy rain'))) {
+                            weatherEmoji = '🌧️';
+                        }
+                        
+                        weatherInfo = `Weather Forecast: ${weatherEmoji} ${metaData.weather_details}`;
+                        seatingPreference = 'Indoor (due to weather)';
+                    }
+                } catch (e) {
+                    console.log('Could not parse meta_data for weather info:', e);
+                                }
+            }
+            
+            // ENHANCED: Show when outdoor seating was discussed but not finalized
+            if (!hasOutdoorRequest && outdoorDiscussed && !weatherInfo) {
+                seatingPreference = 'Indoor (outdoor discussed)';
+                weatherInfo = 'Weather Forecast: 🌤️ Outdoor seating was discussed during reservation';
+            }
+            
             let html = `
                 <div class="mb-3">
                     <h5 class="fw-bold mb-1" style="color: #00e6a7;">Reservation Details</h5>
@@ -339,7 +492,9 @@ function showReservationDetails(event) {
                     <div><strong>Time:</strong> ${time12hr}</div>
                     <div><strong>Phone:</strong> ${reservation.phone_number}</div>
                     <div><strong>Status:</strong> ${reservation.status}</div>
-                    ${reservation.special_requests ? `<div><strong>Special Requests:</strong> ${reservation.special_requests}</div>` : ''}
+                    <div><strong>Seating Preference:</strong> <span class="text-info">${seatingPreference}</span></div>
+                    ${weatherInfo ? `<div><strong>${weatherInfo}</strong></div>` : ''}
+                    ${cleanSpecialRequests ? `<div><strong>Special Requests:</strong> ${cleanSpecialRequests}</div>` : ''}
                 </div>
                 <hr class="my-3">
                 <h5 class="fw-bold mb-3" style="color: #00e6a7;">Party Orders</h5>
@@ -657,6 +812,80 @@ function stopPaymentStatusMonitoring() {
     }
 }
 
+function showReservationNotification(message) {
+    // Create a toast notification for new reservations
+    const toastHTML = `
+    <div class="toast align-items-center text-white bg-success border-0" role="alert" aria-live="assertive" aria-atomic="true" style="position: fixed; top: 20px; right: 20px; z-index: 9999;">
+        <div class="d-flex">
+            <div class="toast-body">
+                <strong>🎉 ${message}</strong>
+            </div>
+            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+        </div>
+    </div>`;
+    
+    // Add to DOM and show
+    document.body.insertAdjacentHTML('beforeend', toastHTML);
+    const toastEl = document.body.lastElementChild;
+    const toast = new bootstrap.Toast(toastEl, { delay: 5000 });
+    toast.show();
+    
+    // Clean up after toast hides
+    toastEl.addEventListener('hidden.bs.toast', () => {
+        toastEl.remove();
+    });
+}
+
+// CRITICAL FIX: Voice reservation detection and notification system
+let lastVoiceReservationCheck = null;
+
+function checkForVoiceReservations() {
+    // Poll for new voice-created reservations every 3 seconds
+    fetch('/api/reservations/voice_check')
+        .then(response => {
+            if (response.ok) {
+                return response.json();
+            }
+            throw new Error('Failed to check voice reservations');
+        })
+        .then(data => {
+            if (data.new_voice_reservation && data.new_voice_reservation !== lastVoiceReservationCheck) {
+                const reservation = data.new_voice_reservation;
+                lastVoiceReservationCheck = reservation.timestamp;
+                
+                // Trigger notification and calendar refresh
+                showReservationNotification(`New voice reservation: ${reservation.reservation_number} for ${reservation.customer_name}`);
+                
+                // Refresh calendar to show new reservation
+                if (typeof calendar !== 'undefined') {
+                    calendar.refetchEvents();
+                }
+                
+                // Play notification sound if available
+                if (typeof playNotificationSound === 'function') {
+                    playNotificationSound();
+                }
+                
+                console.log('🔔 New voice reservation detected:', reservation);
+            }
+        })
+        .catch(error => {
+            // Silently fail - don't spam console
+            console.debug('Voice reservation check failed:', error);
+        });
+}
+
+// Start voice reservation monitoring when page loads
+document.addEventListener('DOMContentLoaded', function() {
+    // Check immediately
+    checkForVoiceReservations();
+    
+    // Then check every 3 seconds
+    setInterval(checkForVoiceReservations, 3000);
+    
+    console.log('✅ Voice reservation monitoring started');
+});
+
 function showPaymentStatusNotification(message) {
     // Create a toast notification
     const toastHtml = `
@@ -806,12 +1035,23 @@ function editReservation(reservationId) {
     fetch(`/api/reservations/${reservationId}`)
         .then(resp => resp.json())
         .then(reservation => {
+            // Extract clean special requests for editing (without weather info)
+            let editCleanSpecialRequests = reservation.special_requests || '';
+            if (reservation.special_requests && reservation.special_requests.includes('🌿 OUTDOOR SEATING REQUESTED')) {
+                editCleanSpecialRequests = reservation.special_requests
+                    .replace(/;\s*🌿 OUTDOOR SEATING REQUESTED[^;]*/g, '')
+                    .replace(/🌿 OUTDOOR SEATING REQUESTED[^;]*/g, '')
+                    .replace(/;\s*$/, '') // Remove trailing semicolon
+                    .replace(/^;\s*/, '') // Remove leading semicolon
+                    .trim();
+            }
+            
             // Populate form fields
             document.getElementById('editName').value = reservation.name;
             document.getElementById('editPartySize').value = reservation.party_size;
             document.getElementById('editTime').value = reservation.time;
             document.getElementById('editPhone').value = reservation.phone_number;
-            document.getElementById('editRequests').value = reservation.special_requests || '';
+            document.getElementById('editRequests').value = editCleanSpecialRequests;
             document.getElementById('editDate').value = reservation.date;
             
             // Check if this is an old school reservation (no orders)
@@ -1045,228 +1285,164 @@ function renderEditPartyOrderForms(reservation) {
     }
 }
 
-// Render menu items for edit modal with existing quantities
-function renderEditMenuItems(personIndex, existingOrder) {
-    let html = '';
-    if (menuData.length > 0) {
-        menuData.forEach(category => {
-            html += `
-                <div class="mb-3">
-                    <h6 class="mb-2">${category.name}</h6>
-                    <div class="list-group">
-            `;
-            category.items.forEach(item => {
-                // Find existing quantity for this item
-                let existingQuantity = 0;
-                if (existingOrder && existingOrder.items) {
-                    const existingItem = existingOrder.items.find(orderItem => {
-                        return orderItem.menu_item && orderItem.menu_item.id === item.id;
-                    });
-                    if (existingItem) {
-                        existingQuantity = existingItem.quantity;
+// Global notification sound function for voice reservations
+function playNotificationSound() {
+    console.log('New voice reservation notification!');
+    
+    // Get sound configuration from server (set via environment variables)
+    const soundType = window.notificationConfig?.soundType || 'chime';
+    const volume = window.notificationConfig?.volume || 0.7;
+    
+    switch(soundType) {
+        case 'chime':
+            playAudioFile('/static/sounds/chime.mp3', volume);
+            break;
+        case 'dink':
+            playAudioFile('/static/sounds/dink.mp3', volume);
+            break;
+        case 'bell':
+            playAudioFile('/static/sounds/bell.mp3', volume);
+            break;
+        case 'soft':
+            playAudioFile('/static/sounds/soft-chime.mp3', volume);
+            break;
+        case 'generated':
+            playGeneratedChime();
+            break;
+        case 'off':
+            // No sound notification
+            console.log('Sound notifications disabled via environment variable');
+            return;
+        default:
+            playAudioFile('/static/sounds/chime.mp3', volume);
+    }
+}
+
+function playAudioFile(url, volume) {
+    try {
+        const audio = new Audio(url);
+        audio.volume = volume;
+        
+        // Handle browser autoplay policy
+        const playPromise = audio.play();
+        
+        if (playPromise !== undefined) {
+            playPromise.then(() => {
+                console.log(`Audio notification played: ${url}`);
+            }).catch(e => {
+                console.log(`Audio notification unavailable (${url}):`, e.message);
+                
+                // If user hasn't interacted yet, show helpful message
+                if (e.name === 'NotAllowedError' && !audioInitialized) {
+                    console.log('💡 Audio notifications will work after you interact with the page (click, key press, etc.)');
+                    
+                    // Show a one-time visual prompt
+                    if (!document.getElementById('audio-permission-toast')) {
+                        const toastHTML = `
+                        <div id="audio-permission-toast" class="toast align-items-center text-white bg-info border-0" role="alert" aria-live="assertive" aria-atomic="true" style="position: fixed; bottom: 20px; right: 20px; z-index: 9999;">
+                            <div class="d-flex">
+                                <div class="toast-body">
+                                    <strong>🔊 Click anywhere to enable audio notifications</strong>
+                                </div>
+                                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+                            </div>
+                        </div>`;
+                        
+                        document.body.insertAdjacentHTML('beforeend', toastHTML);
+                        const toastEl = document.getElementById('audio-permission-toast');
+                        const toast = new bootstrap.Toast(toastEl, { delay: 8000 });
+                        toast.show();
+                        
+                        // Clean up after toast hides
+                        toastEl.addEventListener('hidden.bs.toast', () => {
+                            toastEl.remove();
+                        });
                     }
                 }
-                
-                html += `
-                    <div class="list-group-item bg-dark text-light d-flex justify-content-between align-items-center">
-                        <div>
-                            <strong>${item.name}</strong>
-                            <div class="text-muted small">${item.description}</div>
-                            <div class="text-accent">$${item.price.toFixed(2)}</div>
-                        </div>
-                        <div style="width: 100px;">
-                            <input type="number" class="form-control form-control-sm menu-qty" 
-                                   value="${existingQuantity}" min="0" data-id="${item.id}" data-person="${personIndex}">
-                        </div>
-                    </div>
-                `;
             });
-            html += `
-                    </div>
-                </div>
-            `;
-        });
-    } else {
-        html = '<div class="text-muted">Loading menu items...</div>';
-    }
-    return html;
-}
-
-// Add event listener to stop payment monitoring when reservation modal is closed
-document.addEventListener('DOMContentLoaded', function() {
-    const reservationModal = document.getElementById('reservationModal');
-    if (reservationModal) {
-        reservationModal.addEventListener('hidden.bs.modal', function() {
-            stopPaymentStatusMonitoring();
-        });
-    }
-}); 
-
-// Auto-refresh calendar every 30 seconds to catch SWAIG reservations
-let autoRefreshInterval = null;
-let lastReservationCount = 0;
-let initialCountSet = false; // Track if we've set the initial count
-
-function startAutoRefresh() {
-    // Only start auto-refresh if calendar exists and we're on the calendar page
-    if (typeof calendar !== 'undefined' && document.getElementById('calendar')) {
-        console.log('📅 Starting auto-refresh for SWAIG reservations (30s interval)');
-        
-        autoRefreshInterval = setInterval(() => {
-            console.log('🔄 Auto-refreshing calendar for new phone reservations...');
-            calendar.refetchEvents();
-            
-            // Check for new reservations and show notification
-            checkForNewReservations();
-        }, 5000); // 5 seconds for faster updates
+        }
+    } catch (e) {
+        console.log('Audio notification failed:', e);
     }
 }
 
-function stopAutoRefresh() {
-    if (autoRefreshInterval) {
-        console.log('⏹️ Stopping calendar auto-refresh');
-        clearInterval(autoRefreshInterval);
-        autoRefreshInterval = null;
+// Global audio context for generated sounds
+let globalAudioContext = null;
+let audioInitialized = false;
+
+// Initialize audio context on first user interaction
+function initializeAudioContext() {
+    if (!globalAudioContext) {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (AudioContext) {
+            globalAudioContext = new AudioContext();
+            console.log('Audio context initialized');
+        }
     }
+    audioInitialized = true;
 }
 
-async function checkForNewReservations() {
+// Initialize audio on any user interaction
+document.addEventListener('click', initializeAudioContext, { once: true });
+document.addEventListener('keydown', initializeAudioContext, { once: true });
+document.addEventListener('touchstart', initializeAudioContext, { once: true });
+
+function playGeneratedChime() {
     try {
-        // Get current date range from calendar
-        const view = calendar.view;
-        const start = view.activeStart.toISOString();
-        const end = view.activeEnd.toISOString();
-        
-        // Fetch current reservations
-        const response = await fetch(`/api/reservations/calendar?start=${start}&end=${end}`);
-        if (response.ok) {
-            const reservations = await response.json();
-            
-            // If this is the first time, just set the initial count without showing notifications
-            if (!initialCountSet) {
-                lastReservationCount = reservations.length;
-                initialCountSet = true;
-                console.log(`📊 Initial reservation count set: ${lastReservationCount}`);
+        // Use global audio context or create new one
+        let audioContext = globalAudioContext;
+        if (!audioContext) {
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            if (!AudioContext) {
+                console.log('Web Audio API not supported');
                 return;
             }
-            
-            // Check if we have new reservations (only after initial count is set)
-            if (reservations.length > lastReservationCount) {
-                const newCount = reservations.length - lastReservationCount;
-                showNewReservationNotification(newCount);
-                console.log(`📞 ${newCount} new reservations detected!`);
-            }
-            
-            // Update the count
-            lastReservationCount = reservations.length;
-            console.log(`📊 Current reservation count: ${lastReservationCount}`);
+            audioContext = new AudioContext();
         }
-    } catch (error) {
-        console.error('Error checking for new reservations:', error);
-    }
-}
-
-function showNewReservationNotification(count) {
-    const message = count === 1 
-        ? '📞 New phone reservation received!' 
-        : `📞 ${count} new phone reservations received!`;
-    
-    // Play a subtle notification sound (optional - browser dependent)
-    try {
-        // Create a subtle beep sound
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const oscillator = audioContext.createOscillator();
-        const gainNode = audioContext.createGain();
         
-        oscillator.connect(gainNode);
-        gainNode.connect(audioContext.destination);
+        // Resume audio context if suspended (required for modern browsers)
+        if (audioContext.state === 'suspended') {
+            audioContext.resume();
+        }
         
-        oscillator.frequency.setValueAtTime(800, audioContext.currentTime); // 800 Hz tone
-        gainNode.gain.setValueAtTime(0.1, audioContext.currentTime); // Low volume
-        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
+        // Create a beautiful two-tone chime
+        const playTone = (frequency, startTime, duration, volume = 0.3) => {
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            
+            oscillator.frequency.value = frequency;
+            oscillator.type = 'sine';
+            
+            // Smooth fade in/out for pleasant sound
+            gainNode.gain.setValueAtTime(0, startTime);
+            gainNode.gain.linearRampToValueAtTime(volume, startTime + 0.01);
+            gainNode.gain.linearRampToValueAtTime(volume, startTime + duration - 0.01);
+            gainNode.gain.linearRampToValueAtTime(0, startTime + duration);
+            
+            oscillator.start(startTime);
+            oscillator.stop(startTime + duration);
+        };
         
-        oscillator.start(audioContext.currentTime);
-        oscillator.stop(audioContext.currentTime + 0.5);
+        const now = audioContext.currentTime;
+        const volume = window.notificationConfig?.volume || 0.3;
+        
+        // Play a pleasant two-tone chime: high note then lower note
+        playTone(800, now, 0.15, volume);        // High note (800 Hz)
+        playTone(600, now + 0.15, 0.15, volume); // Lower note (600 Hz)
+        
+        console.log('Generated chime played successfully');
     } catch (e) {
-        // Ignore audio errors - not critical
-        console.log('Audio notification not available');
-    }
-    
-    // Create toast notification
-    const toastHtml = `
-        <div class="toast align-items-center text-white bg-success border-0" role="alert" style="position: fixed; top: 20px; right: 20px; z-index: 9999; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
-            <div class="d-flex">
-                <div class="toast-body">
-                    <i class="fas fa-phone me-2"></i><strong>${message}</strong>
-                    <small class="d-block text-light opacity-75 mt-1">Calendar updated automatically</small>
-                </div>
-                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
-            </div>
-        </div>
-    `;
-    
-    document.body.insertAdjacentHTML('beforeend', toastHtml);
-    const toastElement = document.body.lastElementChild;
-    const toast = new bootstrap.Toast(toastElement, { delay: 8000 }); // Longer delay - 8 seconds
-    toast.show();
-    
-    toastElement.addEventListener('hidden.bs.toast', () => {
-        toastElement.remove();
-    });
-}
-
-// Manual refresh function for immediate updates
-function refreshCalendarNow() {
-    if (typeof calendar !== 'undefined') {
-        console.log('🔄 Manual calendar refresh triggered');
-        calendar.refetchEvents();
-        checkForNewReservations();
+        console.log('Generated chime failed:', e);
+        // No fallback when user has configured fallback=off
     }
 }
 
-// Make it available globally for debugging
-window.refreshCalendarNow = refreshCalendarNow;
-
-// Initialize auto-refresh when calendar is ready
-document.addEventListener('DOMContentLoaded', function() {
-    // Wait for calendar to initialize, then start auto-refresh
-    setTimeout(() => {
-        if (typeof calendar !== 'undefined') {
-            startAutoRefresh();
-            
-            // Initialize reservation count
-            checkForNewReservations();
-            
-            // Do an immediate refresh after 3 seconds to catch any recent reservations
-            setTimeout(() => {
-                console.log('🔄 Initial refresh for recent reservations');
-                refreshCalendarNow();
-            }, 3000);
-            
-            // Also do another check after 10 seconds to catch any reservations that might have been created
-            setTimeout(() => {
-                console.log('🔄 Secondary refresh for recent reservations');
-                refreshCalendarNow();
-            }, 10000);
-        }
-    }, 2000);
-    
-    // Stop auto-refresh when leaving the page
-    window.addEventListener('beforeunload', function() {
-        stopAutoRefresh();
-    });
-    
-    // Pause auto-refresh when page is not visible (tab switching)
-    document.addEventListener('visibilitychange', function() {
-        if (document.hidden) {
-            stopAutoRefresh();
-        } else {
-            // Restart when page becomes visible again
-            setTimeout(() => {
-                if (typeof calendar !== 'undefined') {
-                    startAutoRefresh();
-                }
-            }, 1000);
-        }
-    });
-});
+// Test function for generated chime (can be called from browser console)
+window.testGeneratedChime = function() {
+    console.log('Testing generated chime...');
+    initializeAudioContext(); // Ensure audio context is ready
+    playGeneratedChime();
+};

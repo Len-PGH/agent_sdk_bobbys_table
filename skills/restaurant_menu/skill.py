@@ -480,6 +480,40 @@ class RestaurantMenuSkill(SkillBase):
             )
             print("Registered pay_order tool")
             
+            # Surprise menu selection tool
+            self.agent.define_tool(
+                name="get_surprise_selections",
+                description="Generate random menu selections for customers who want to be surprised. Perfect for when customers say 'surprise me' or want random food and drink recommendations.",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "party_names": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Names of people in the party",
+                            "default": ["Customer"]
+                        },
+                        "food_per_person": {
+                            "type": "integer",
+                            "description": "Number of food items per person",
+                            "default": 1,
+                            "minimum": 0,
+                            "maximum": 3
+                        },
+                        "drinks_per_person": {
+                            "type": "integer", 
+                            "description": "Number of drinks per person",
+                            "default": 1,
+                            "minimum": 0,
+                            "maximum": 3
+                        }
+                    },
+                    "required": []
+                },
+                handler=self._get_surprise_selections_handler
+            )
+            print("Registered get_surprise_selections tool")
+            
         except Exception as e:
             print(f"Error registering restaurant menu tools: {e}")
             import traceback
@@ -731,14 +765,20 @@ class RestaurantMenuSkill(SkillBase):
                     except (ValueError, TypeError):
                         quantity = 1
                     
-                    # Validate price matches menu price
+                    # CRITICAL FIX: Auto-populate price if missing from request
+                    if item_price == 0 or item_price is None:
+                        item_price = menu_item_data['price']
+                        print(f"🔧 Auto-populated price for {menu_item_data['name']}: ${item_price:.2f}")
+                    
+                    # Validate price matches menu price (with auto-fix)
                     if abs(item_price - menu_item_data['price']) > 0.01:  # Allow for small floating point differences
-                        result = SwaigFunctionResult(f"Price mismatch for {menu_item_data['name']}. Expected ${menu_item_data['price']:.2f}, got ${item_price:.2f}. Please use current menu prices.")
-                        result.set_metadata(meta_data)
-                        return result
+                        # Instead of failing, auto-correct the price
+                        corrected_price = menu_item_data['price']
+                        print(f"🔧 Price corrected for {menu_item_data['name']}: ${item_price:.2f} → ${corrected_price:.2f}")
+                        item_price = corrected_price
                     
                     # Add to order
-                    item_total = item_price * quantity # Use item_price from args
+                    item_total = item_price * quantity # Use corrected item_price
                     order_items.append({
                         'menu_item_id': menu_item_data['id'],
                         'name': menu_item_data['name'],
@@ -2113,3 +2153,97 @@ class RestaurantMenuSkill(SkillBase):
                 "I'm sorry, I encountered an error with the payment retry. "
                 "You can pay when you pick up your order. Is there anything else I can help you with?"
             ) 
+
+    def _get_surprise_selections_handler(self, args, raw_data):
+        """Handle surprise menu selection requests"""
+        try:
+            # Get parameters
+            party_names = args.get('party_names', ['Customer'])
+            food_per_person = args.get('food_per_person', 1)
+            drinks_per_person = args.get('drinks_per_person', 1)
+            
+            # Ensure menu is cached
+            cached_menu, meta_data = self._ensure_menu_cached(raw_data)
+            
+            if not cached_menu:
+                result = SwaigFunctionResult("I'm sorry, but I can't access our menu right now to make surprise selections. Please try again in a moment.")
+                result.set_metadata(meta_data)
+                return result
+            
+            # Generate random selections using existing method
+            random_result = self._get_random_party_orders(
+                raw_data=raw_data,
+                party_names=party_names,
+                food_per_person=food_per_person,
+                drinks_per_person=drinks_per_person
+            )
+            
+            if not random_result['success']:
+                result = SwaigFunctionResult(f"I couldn't generate surprise selections: {random_result.get('error', 'Unknown error')}")
+                result.set_metadata(meta_data)
+                return result
+            
+            # Format the response for voice
+            party_orders = random_result['party_orders']
+            total_amount = random_result['total_amount']
+            
+            if len(party_names) == 1:
+                # Single person
+                person_order = party_orders[0]
+                message = f"Here's your surprise selection: "
+                
+                food_items = [item for item in person_order['items'] if item['category'] in ['breakfast', 'appetizers', 'main-courses', 'desserts']]
+                drink_items = [item for item in person_order['items'] if item['category'] == 'drinks']
+                
+                if food_items:
+                    food_names = [item['name'] for item in food_items]
+                    if len(food_names) == 1:
+                        message += f"For food, I chose {food_names[0]} for ${food_items[0]['price']:.2f}. "
+                    else:
+                        message += f"For food, I chose {', '.join(food_names[:-1])} and {food_names[-1]}. "
+                
+                if drink_items:
+                    drink_names = [item['name'] for item in drink_items]
+                    if len(drink_names) == 1:
+                        message += f"For your drink, I selected {drink_names[0]} for ${drink_items[0]['price']:.2f}. "
+                    else:
+                        message += f"For drinks, I selected {', '.join(drink_names[:-1])} and {drink_names[-1]}. "
+                
+                message += f"Your total surprise selection comes to ${person_order['person_total']:.2f}. Does this sound good to you?"
+                
+            else:
+                # Multiple people
+                message = f"Here are surprise selections for your party of {len(party_names)}: "
+                
+                for i, order in enumerate(party_orders):
+                    name = order['person_name']
+                    message += f"For {name}: "
+                    
+                    food_items = [item for item in order['items'] if item['category'] in ['breakfast', 'appetizers', 'main-courses', 'desserts']]
+                    drink_items = [item for item in order['items'] if item['category'] == 'drinks']
+                    
+                    if food_items:
+                        message += f"{food_items[0]['name']}"
+                        if len(food_items) > 1:
+                            message += f" and {food_items[1]['name']}"
+                    
+                    if drink_items:
+                        if food_items:
+                            message += f" with {drink_items[0]['name']}"
+                        else:
+                            message += drink_items[0]['name']
+                    
+                    message += f" (${order['person_total']:.2f})"
+                    
+                    if i < len(party_orders) - 1:
+                        message += ". "
+                    else:
+                        message += f". Your total surprise order comes to ${total_amount:.2f}. How does this sound?"
+            
+            result = SwaigFunctionResult(message)
+            result.set_metadata(meta_data)
+            return result
+            
+        except Exception as e:
+            print(f"Error in surprise selections handler: {e}")
+            return SwaigFunctionResult("I'm sorry, I had trouble generating surprise selections. Please try asking again or let me know what specific items you'd like.")

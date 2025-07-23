@@ -389,8 +389,30 @@ startAutoRefresh();
 
 // Play notification sound for new orders (optional)
 function playNotificationSound() {
-    // You can add audio notification here if desired
     console.log('New order received!');
+    
+    // Get sound configuration from server (set via environment variables)
+    const soundType = window.notificationConfig?.soundType || 'chime';
+    const volume = window.notificationConfig?.volume || 0.7;
+    
+    // Skip notification if sound is disabled
+    if (soundType === 'off') {
+        console.log('Sound notifications disabled via environment variable');
+        return;
+    }
+    
+    // Create audio notification with environment-configured sound
+    try {
+        const audioFile = `/static/sounds/${soundType}.mp3`;
+        const audio = new Audio(audioFile);
+        audio.volume = volume;
+        audio.play().catch(e => {
+            console.log(`Audio notification unavailable (${audioFile}):`, e);
+            // No fallback when user has configured fallback=off
+        });
+    } catch (e) {
+        console.log('Audio notification failed:', e);
+    }
 }
 
 // Filter functionality
