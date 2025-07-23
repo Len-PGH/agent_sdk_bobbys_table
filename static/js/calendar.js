@@ -1446,3 +1446,36 @@ window.testGeneratedChime = function() {
     initializeAudioContext(); // Ensure audio context is ready
     playGeneratedChime();
 };
+
+// Global notification sound function for voice reservations
+function playNotificationSound() {
+    console.log('New voice reservation notification!');
+    
+    // Get sound configuration from server (set via environment variables)
+    const soundType = window.notificationConfig?.soundType || 'chime';
+    const volume = window.notificationConfig?.volume || 0.7;
+    
+    switch(soundType) {
+        case 'chime':
+            playAudioFile('/static/sounds/chime.mp3', volume);
+            break;
+        case 'dink':
+            playAudioFile('/static/sounds/dink.mp3', volume);
+            break;
+        case 'bell':
+            playAudioFile('/static/sounds/bell.mp3', volume);
+            break;
+        case 'soft':
+            playAudioFile('/static/sounds/soft-chime.mp3', volume);
+            break;
+        case 'generated':
+            playGeneratedChime();
+            break;
+        case 'off':
+            // No sound notification
+            console.log('Sound notifications disabled via environment variable');
+            return;
+        default:
+            playAudioFile('/static/sounds/chime.mp3', volume);
+    }
+}
