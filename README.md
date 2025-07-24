@@ -1,7 +1,7 @@
 
 # Bobby's Table Restaurant Management System
 
-A comprehensive restaurant management system with integrated web and voice interfaces powered by SignalWire Agents Python SDK.
+A comprehensive restaurant management system with integrated web and voice interfaces powered by SignalWire Agents Python SDK. Features advanced real-time notifications, configurable audio alerts, and seamless voice-to-web synchronization.
 
 ## 🚀 Quick Start
 
@@ -22,124 +22,334 @@ This will start a single service on port 8080 with:
 - **Web Interface**: http://localhost:8080 (Full restaurant management)
 - **Voice Interface**: http://localhost:8080/receptionist (Phone-based ordering and reservations)
 - **Kitchen Dashboard**: http://localhost:8080/kitchen (Order management)
+- **Calendar View**: http://localhost:8080/calendar (Real-time reservation management)
 
-### Test Voice Functions
+## 🔊 Audio Notification System
 
+Bobby's Table features a comprehensive, configurable notification system for real-time alerts:
+
+### **Notification Types**
+- **chime**: Pleasant chime sound (default)
+- **dink**: Short dink sound
+- **bell**: Bell-like ring
+- **soft**: Quiet soft chime
+- **generated**: Computer-generated two-tone chime (no file needed)
+- **off**: No sound notifications
+
+### **Environment Configuration**
 ```bash
-# Test all SWAIG voice functions via HTTP
-python test_swaig_functions.py
+# Notification Sound Configuration
+NOTIFICATION_SOUND_TYPE=generated    # Sound type (see above options)
+NOTIFICATION_VOLUME=0.7             # Volume level (0.0 to 1.0)
+NOTIFICATION_FALLBACK=off           # TTS fallback (speech/off)
 ```
 
-## 🎯 SWAIG Skills Architecture
+### **Browser Policy Handling**
+- **Auto-detection** of user interaction for audio permissions
+- **Graceful fallback** when audio is blocked
+- **Visual prompts** to enable audio notifications
+- **Smart toast positioning** to avoid UI interference
 
-Bobby's Table uses SignalWire's AI Gateway (SWAIG) with a modular skills-based architecture. Each skill provides specific functionality that can be combined for comprehensive restaurant operations.
+## 🏗️ Core Files Documentation
 
-### 📞 Voice Interface
+### Application Core
 
-**Primary SWAIG Endpoint**: `/receptionist`
-- **URL**: `http://localhost:8080/receptionist`
-- **Authentication**: Basic Auth (admin/admin)
-- **Purpose**: Main voice interface for all restaurant functions
+#### `app.py` - Main Flask Application
+The central Flask application that provides both web interface and SWAIG integration.
 
-### 🛠️ Available Skills
+**Key Features:**
+- **Web Routes**: Restaurant management interface, calendar, menu, kitchen dashboard
+- **SWAIG Integration**: `/receptionist` endpoint for voice interactions
+- **Payment Processing**: Stripe integration with `/api/payment-processor` endpoint
+- **Function Validation**: Advanced validation system for speech recognition errors
+- **Session Management**: Payment session tracking and callback handling
+- **Notification Config**: Environment-driven notification system injection
 
-#### Restaurant Reservation Skill (`skills/restaurant_reservation/skill.py`)
+**Important Functions:**
+- `validate_and_correct_function_call()` - Corrects AI routing mistakes and speech recognition errors
+- `payment_processor()` - Handles Stripe payment processing
+- `signalwire_payment_callback()` - Processes payment callbacks
+- `inject_notification_config()` - Injects notification settings into all templates
+- `notify_reservation_created()` - Real-time notification endpoint for voice reservations
+- `check_voice_reservations()` - Dual-detection system for voice reservation notifications
 
-Provides comprehensive reservation management capabilities:
+#### `start_agents.py` - Application Launcher
+Unified startup script that initializes the integrated Flask app with SWAIG capabilities.
 
-- **`create_reservation`** - Make new reservations with full details, pre-ordering support
-- **`get_reservation`** - Search reservations by any criteria (name, phone, ID, date, party size)
-- **`update_reservation`** - Modify existing reservations or add items to pre-orders
-- **`cancel_reservation`** - Cancel reservations with verification
-- **`add_to_reservation`** - Add food items to existing reservations
-- **`pay_reservation`** - Process payments for reservations with pre-orders
-- **`check_payment_status`** - Verify payment completion status
-- **`retry_payment`** - Handle failed payment retries
-- **`get_calendar_events`** - Retrieve calendar data for reservations
-- **`get_todays_reservations`** - Get today's reservation schedule
-- **`get_reservation_summary`** - Generate reservation analytics
+**Features:**
+- Environment configuration validation
+- Database initialization
+- SignalWire agent setup
+- Graceful shutdown handling
 
-#### Restaurant Menu Skill (`skills/restaurant_menu/skill.py`)
+#### `swaig_agents.py` - SignalWire Agent Management
+Contains the SignalWire agent configuration and skills registration.
 
-Handles all menu-related operations and ordering:
+**Key Components:**
+- `ReceptionistAgent` class with comprehensive restaurant skills
+- Skills registration and configuration
+- Agent persona and behavior definitions
+- Error handling and logging
 
-- **`get_menu`** - Browse menu items by category or view complete menu
-- **`create_order`** - Place orders for pickup or delivery with intelligent item extraction
-- **`add_item_to_order`** - Add additional items to orders being built
-- **`finalize_order`** - Complete and confirm orders
-- **`get_order_status`** - Check order preparation status
-- **`update_order_status`** - Update order status (kitchen use)
-- **`update_pending_order`** - Modify pending orders (add/remove items, change details)
-- **`get_kitchen_orders`** - Kitchen dashboard order filtering
-- **`get_order_queue`** - Current order queue organized by status
-- **`get_kitchen_summary`** - Kitchen operations analytics
-- **`pay_order`** - Process payments for orders
+### Database Layer
 
-### 🔧 Skills Features
+#### `models.py` - Database Models
+SQLAlchemy models defining the restaurant's data structure.
 
-#### Advanced Natural Language Processing
-- **Fuzzy Item Matching**: Handles misspellings and variations ("wings" → "Buffalo Wings")
-- **Conversation Context**: Extracts information from natural conversation flow
-- **Smart Suggestions**: Recommends complementary items (drinks with food orders)
-- **Multi-format Support**: Handles various date/time formats and spoken numbers
+**Models:**
+- `Reservation` - Customer reservations with pre-order support
+- `MenuItem` - Menu items with categories and pricing
+- `Order` - Customer orders (pickup/delivery)
+- `OrderItem` - Individual items within orders
+- `PartyOrder` - Pre-orders linked to reservations
 
-#### Payment Integration
-- **Stripe Integration**: Secure credit card processing via SignalWire pay verb
-- **Payment Session Management**: Tracks payment states across conversation flows
-- **SMS Receipts**: Automatic confirmation messages
-- **Payment Retry**: Handles failed payments with appropriate user guidance
+**Key Features:**
+- Relationship definitions between models
+- Validation methods for data integrity
+- Utility methods for common operations
 
-#### Real-time Synchronization
-- **Shared Database**: All skills use the same SQLite database
-- **Cross-skill Communication**: Reservations can include pre-orders processed by menu skill
-- **Session Management**: Maintains context across skill transitions
+#### `schema.sql` - Database Schema
+SQL schema definition for restaurant database structure.
 
-## 🌐 Web Interface Features
+**Tables:**
+- Reservations, menu items, orders, order items, party orders
+- Proper indexing for performance
+- Foreign key constraints for data integrity
 
-The web interface provides a complete restaurant management dashboard:
+#### `init_test_data.py` - Sample Data
+Populates the database with sample menu items, reservations, and orders for testing.
 
-- **Reservation Calendar**: Visual calendar with drag-and-drop functionality
-- **Menu Management**: Browse and order from categorized menu items
-- **Shopping Cart**: Add items to cart with quantity management
-- **Order Tracking**: Real-time order status updates
-- **Kitchen Dashboard**: Three-column workflow (Pending → Preparing → Ready)
-- **Time Filtering**: Filter orders by date and time ranges
-- **Payment Processing**: Integrated Stripe checkout
+### Skills Architecture
 
-## 🏗️ Integrated Architecture
+#### `skills/restaurant_reservation/skill.py` - Reservation Management
+Comprehensive reservation management skill for voice interactions.
+
+**Core Functions:**
+- `create_reservation()` - Make new reservations with pre-ordering
+- `get_reservation()` - Search reservations by multiple criteria
+- `pay_reservation()` - Process payments for reservations
+- `cancel_reservation()` - Cancel reservations with verification
+- `update_reservation()` - Modify existing reservations
+
+**Advanced Features:**
+- Fuzzy name matching and phone number normalization
+- Speech recognition digit duplication handling
+- Context-aware function routing
+- SMS confirmation and receipt sending
+- Real-time web notification triggers
+
+#### `skills/restaurant_menu/skill.py` - Menu and Ordering
+Handles all menu browsing and order placement functionality.
+
+**Core Functions:**
+- `get_menu()` - Browse menu with intelligent categorization
+- `get_surprise_selections()` - Generate random menu selections for surprise orders
+- `create_order()` - Place orders with natural language item extraction
+- `pay_order()` - Process payments for orders
+- `get_order_status()` - Check order preparation status
+- `update_order_status()` - Update order status (kitchen use)
+
+**Advanced Features:**
+- Natural language item parsing and fuzzy matching
+- Random surprise order generation with pricing
+- Drink suggestions based on food orders
+- Order modification and cancellation
+- Kitchen dashboard integration
+
+#### `skills/utils.py` - Shared Utilities
+Common utility functions used across skills.
+
+**Utilities:**
+- Phone number normalization
+- Date/time parsing and validation
+- SMS sending functions
+- Database query helpers
+
+### Configuration and Deployment
+
+#### `environment.template` - Environment Configuration
+Template for environment variables with detailed documentation.
+
+**Notification Settings:**
+- Sound type configuration with all available options
+- Volume control and fallback behavior
+- Detailed comments explaining each setting
+
+#### `prompt.md` - Agent Prompts
+Contains the detailed prompts and instructions for the SignalWire agent.
+
+**Sections:**
+- Agent persona and behavior
+- Function descriptions and usage
+- Error handling guidelines
+- Voice interaction best practices
+- Surprise order capabilities
+
+#### `requirements.txt` - Dependencies
+Complete list of Python packages required for the application.
+
+**Key Dependencies:**
+- Flask (web framework)
+- SQLAlchemy (database ORM)
+- SignalWire Agents SDK
+- Stripe (payment processing)
+- Requests (HTTP client)
+
+#### `number_utils.py` - Phone Number Processing
+Specialized utilities for phone number handling and validation.
+
+**Features:**
+- Phone number normalization across multiple formats
+- Validation for US phone numbers
+- Parsing from various input formats
+
+### User Interface
+
+#### `templates/` - HTML Templates
+Jinja2 templates for the web interface with notification config injection.
+
+**Key Templates:**
+- `base.html` - Common layout and notification configuration
+- `index.html` - Main dashboard
+- `calendar.html` - Reservation calendar interface with real-time updates
+- `menu.html` - Menu browsing and ordering
+- `kitchen.html` - Kitchen dashboard with configurable notifications
+
+#### `static/` - Static Assets
+CSS, JavaScript, and image files for the web interface.
+
+**Structure:**
+- `css/` - Custom stylesheets
+- `js/` - JavaScript for interactive features and notification system
+- `sounds/` - Audio notification files (chime, dink, bell, soft-chime)
+- `bootstrap/` - Bootstrap CSS framework
+- `fontawesome/` - Icon fonts
+- `fullcalendar/` - Calendar widget
+
+**Key JavaScript Files:**
+- `calendar.js` - Real-time reservation notifications, audio handling, browser policy management
+- `cart.js` - Shopping cart functionality
+- `menu.js` - Menu browsing and ordering
+
+### Testing and Debugging
+
+#### `test_swaig_functions.py` - Function Testing
+Comprehensive testing suite for SWAIG functions.
+
+**Test Categories:**
+- Reservation management tests
+- Menu and ordering tests
+- Payment processing tests
+- Error handling validation
+
+## 🔧 Architecture Overview
 
 ```
-┌─────────────────┐    ┌─────────────────────────────────────┐
-│   SignalWire    │    │         Flask App (Port 8080)       │
-│   Platform      │◄──►│  ┌─────────────┐ ┌─────────────────┐ │
-└─────────────────┘    │  │ Web Routes  │ │ SWAIG Skills    │ │
-                       │  │             │ │ (/receptionist) │ │
-                       │  └─────────────┘ └─────────────────┘ │
-                       │              │                      │
-                       │              ▼                      │
-                       │         ┌─────────────────┐         │
-                       │         │   SQLite DB     │         │
-                       │         │   (Shared)      │         │
-                       │         └─────────────────┘         │
-                       └─────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    Flask Application (app.py)               │
+├─────────────────────────────────────────────────────────────┤
+│  Web Interface     │  SWAIG Endpoint    │  Payment Processor │
+│  (HTML/CSS/JS)     │  (/receptionist)   │  (Stripe)         │
+│  + Notifications   │  + Voice Alerts    │  + SMS Receipts   │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                SignalWire Agent (swaig_agents.py)           │
+├─────────────────────────────────────────────────────────────┤
+│  Reservation Skill  │  Menu Skill       │  Shared Utils     │
+│  (reservations)     │  (ordering +      │  (phone, SMS,     │
+│  + Web Notifications│   surprise)       │   notifications)  │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Database Layer (models.py)               │
+├─────────────────────────────────────────────────────────────┤
+│  Reservations  │  Menu Items  │  Orders  │  Party Orders    │
+│  (SQLAlchemy)  │  (SQLAlchemy)│  (SQLAlchemy)│  (SQLAlchemy)│
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│              Real-time Notification System                  │
+├─────────────────────────────────────────────────────────────┤
+│  Voice → Web Sync  │  Configurable Audio │  Browser Policy  │
+│  Dual Detection    │  Environment Config │  Smart Fallbacks │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-## 📋 Table of Contents
+## 🚀 Deployment on Replit
 
-1. [Installation](#installation)
-2. [Configuration](#configuration)
-3. [Usage](#usage)
-4. [API Endpoints](#api-endpoints)
-5. [SWAIG Skills](#swaig-skills)
-6. [Development](#development)
-7. [Deployment](#deployment)
+### Environment Configuration
+
+1. **Set environment variables in Replit Secrets**:
+   ```bash
+   # Flask Configuration
+   FLASK_ENV=production
+   SECRET_KEY=a1b2c3d4super7h8i9j0k1l2m3n4osecret8s9t0u1vkeyx4y5z6
+   DEBUG=False
+   
+   # Database Configuration
+   DATABASE_URL=sqlite:///instance/restaurant.db
+   
+   # SignalWire Configuration (Voice & SMS)
+   SIGNALWIRE_PROJECT_ID=12345678-1234-5678-9abc-123456789def
+   SIGNALWIRE_TOKEN=PTxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+   SIGNALWIRE_SPACE=subdomainname
+   SIGNALWIRE_FROM_NUMBER=+15551234567
+   
+   # Stripe Payment Configuration
+   STRIPE_PUBLISHABLE_KEY=pk_test_51234567890abcdefghijklmnopqrstuvwxyzABCDEF
+   STRIPE_API_KEY=sk_test_51234567890abcdefghijklmnopqrstuvwxyzABCDEF
+
+   
+   # Application Configuration
+   APP_HOST=0.0.0.0
+   APP_PORT=8080
+   APP_DOMAIN=https://your-repl-name.your-username.repl.co
+   SIGNALWIRE_PAYMENT_CONNECTOR_URL=https://your-repl-name.your-username.repl.co
+   BASE_URL=https://your-repl-name.your-username.repl.co
+   
+   # Logging Configuration
+   LOG_LEVEL=DEBUG
+   LOG_FILE=logs/app.log
+   
+   
+   # Notification Sound Configuration
+   NOTIFICATION_SOUND_TYPE=generated
+   NOTIFICATION_VOLUME=0.7
+   NOTIFICATION_FALLBACK=off
+
+   # Available NOTIFICATION_SOUND_TYPE options:
+   # - chime: Pleasant chime sound (default)
+   # - dink: Short dink sound
+   # - bell: Bell-like ring
+   # - soft: Quiet soft chime
+   # - generated: Computer-generated two-tone chime (no file needed)
+   # - off: No sound notifications
+
+   ```
+
+2. **Configure webhook URLs**:
+   - Use your Replit app URL for a debug webhook
+   - Example: `https://your-repl-name.your-username.repl.co/webhook-debug-console`
+
+### SignalWire Configuration
+
+1. Create SignalWire project
+2. Configure phone numbers
+3. Set webhook URLs:
+   - Voice: `https://your-repl-name.your-username.repl.co/receptionist`
+   - SMS: `https://your-repl-name.your-username.repl.co/receptionist`
 
 ## 🛠️ Installation
 
 ### Prerequisites
 
-- Python 3.8+
+- Python 3.9+
 - SignalWire account (for voice features)
+- Stripe account (for payment processing)
 
 ### Setup
 
@@ -162,158 +372,24 @@ The web interface provides a complete restaurant management dashboard:
 
 4. **Configure environment**
    ```bash
-   cp .env.example .env
-   # Edit .env with your SignalWire credentials
+   # Copy template and configure
+   cp environment.template .env
+   # Edit .env with your credentials and preferences
+   
+   # Example .env configuration:
+   FLASK_ENV=production
+   SECRET_KEY=a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6
+   SIGNALWIRE_PROJECT_ID=12345678-1234-5678-9abc-123456789def
+   SIGNALWIRE_TOKEN=PTxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+   SIGNALWIRE_SPACE=example-space.signalwire.com
+   SIGNALWIRE_FROM_NUMBER=+15551234567
+   STRIPE_PUBLISHABLE_KEY=pk_test_51234567890abcdefghijklmnopqrstuvwxyzABCDEF
+   STRIPE_SECRET_KEY=sk_test_51234567890abcdefghijklmnopqrstuvwxyzABCDEF
+   STRIPE_API_KEY=sk_test_51234567890abcdefghijklmnopqrstuvwxyzABCDEF
+   NOTIFICATION_SOUND_TYPE=generated
+   NOTIFICATION_VOLUME=0.7
+   NOTIFICATION_FALLBACK=off
    ```
-
-## ⚙️ Configuration
-
-Create a `.env` file with the following variables:
-
-```env
-# SignalWire Configuration
-SIGNALWIRE_PROJECT_ID=your_project_id
-SIGNALWIRE_TOKEN=your_token
-SIGNALWIRE_SPACE_URL=your_space_url
-SIGNALWIRE_FROM_NUMBER=+1234567890
-
-# Flask Configuration
-FLASK_ENV=development
-SECRET_KEY=your_secret_key
-
-# Database
-DATABASE_URL=sqlite:///instance/restaurant.db
-
-# Payment Configuration
-STRIPE_PUBLISHABLE_KEY=pk_test_...
-STRIPE_SECRET_KEY=sk_test_...
-SIGNALWIRE_PAYMENT_CONNECTOR_URL=https://your-ngrok-url.ngrok.io
-```
-
-## 🚀 Usage
-
-### Start the Integrated Service
-
-```bash
-# Start the integrated web and voice interface
-python start_agents.py
-```
-
-### Alternative: Start Flask App Directly
-
-```bash
-# Start Flask app with integrated SWAIG functions
-python app.py
-```
-
-### Access the Application
-
-- **Web Interface**: http://localhost:8080
-- **Voice Interface**: http://localhost:8080/receptionist
-- **Kitchen Dashboard**: http://localhost:8080/kitchen
-
-## 🔌 API Endpoints
-
-### Reservations
-
-- `GET /api/reservations` - List all reservations
-- `POST /api/reservations` - Create new reservation
-- `GET /api/reservations/<id>` - Get specific reservation
-- `PUT /api/reservations/<id>` - Update reservation
-- `DELETE /api/reservations/<id>` - Delete reservation
-- `GET /api/reservations/calendar` - Get calendar events
-
-### Menu Items
-
-- `GET /api/menu_items` - List all menu items
-- `GET /api/menu_items/<id>` - Get specific menu item
-
-### Orders
-
-- `GET /api/orders` - List all orders
-- `POST /api/orders` - Create new order
-- `PUT /api/orders/<id>/status` - Update order status
-
-### SWAIG Endpoint
-
-- `POST /receptionist` - Handle all voice function calls
-- `GET /receptionist` - Get SWML document for agent configuration
-
-## 📞 SWAIG Skills Documentation
-
-### Reservation Management Skills
-
-#### create_reservation
-Creates new restaurant reservations with optional pre-ordering.
-
-**Parameters:**
-- `name` (string): Customer name
-- `party_size` (integer): Number of people
-- `date` (string): Reservation date (YYYY-MM-DD)
-- `time` (string): Reservation time (HH:MM)
-- `phone_number` (string): Customer phone number
-- `special_requests` (string): Special requests
-- `party_orders` (array): Optional pre-orders for party members
-
-**Features:**
-- Automatic phone number normalization
-- Date/time validation and format conversion
-- Duplicate reservation prevention
-- SMS confirmation sending
-- Pre-order integration with menu skill
-
-#### get_reservation
-Look up existing reservations using multiple search criteria.
-
-**Parameters:**
-- `phone_number` (string): Customer phone
-- `name` (string): Customer name (full, first, or last)
-- `reservation_number` (string): 6-digit reservation number
-- `confirmation_number` (string): Payment confirmation number
-- `date` (string): Reservation date
-- `format` (string): Response format ("text" or "json")
-
-**Features:**
-- Fuzzy name matching
-- Multiple phone number format support
-- Conversation context extraction
-- Payment status integration
-
-### Menu & Ordering Skills
-
-#### get_menu
-Browse restaurant menu items with intelligent categorization.
-
-**Parameters:**
-- `category` (string): Menu category filter (optional)
-- `format` (string): Response format ("text" or "json")
-
-**Categories:**
-- breakfast, appetizers, main-courses, desserts, drinks
-
-**Features:**
-- Voice-optimized text formatting
-- Menu caching for performance
-- Category-specific recommendations
-
-#### create_order
-Place orders with natural language item extraction.
-
-**Parameters:**
-- `items` (array): Menu items with quantities
-- `customer_name` (string): Customer name
-- `customer_phone` (string): Customer phone
-- `order_type` (string): "pickup" or "delivery"
-- `payment_preference` (string): "now" or "pickup"
-- `special_instructions` (string): Special requests
-- `customer_address` (string): Delivery address (for delivery orders)
-
-**Features:**
-- Natural language item parsing
-- Drink suggestions based on food orders
-- Automatic order number generation
-- SMS order confirmation
-- Payment integration
 
 ## 🧪 Testing
 
@@ -323,116 +399,53 @@ Place orders with natural language item extraction.
 # Test SWAIG functions
 python test_swaig_functions.py
 
-# Test web functionality (manual testing via browser)
-python app.py
-```
-
-### Test Individual Skills
-
-```bash
-# Test database models
+# Test individual components
 python -c "from models import *; print('Models imported successfully')"
-
-# Test skill imports
 python -c "from skills.restaurant_reservation.skill import RestaurantReservationSkill; print('Reservation skill imported')"
 python -c "from skills.restaurant_menu.skill import RestaurantMenuSkill; print('Menu skill imported')"
 ```
 
-## 🔧 Development
+### Test Notification System
 
-### Project Structure
-
-```
-bobbystable/
-├── app.py                     # Main Flask application with SWAIG integration
-├── swaig_agents.py           # SignalWire agents with skills-based architecture
-├── models.py                 # Database models
-├── start_agents.py           # Startup script
-├── skills/                   # Modular skills architecture
-│   ├── restaurant_reservation/
-│   │   ├── __init__.py
-│   │   └── skill.py         # Reservation management skill
-│   ├── restaurant_menu/
-│   │   ├── __init__.py
-│   │   └── skill.py         # Menu and ordering skill
-│   └── utils.py             # Shared utilities
-├── templates/               # HTML templates
-├── static/                 # CSS, JS, images
-├── instance/               # Database files
-└── requirements.txt        # Python dependencies
+```bash
+# Test in browser console (calendar page)
+playNotificationSound()              # Test configured sound
+testGeneratedChime()                # Test generated tone
+window.notificationConfig           # View current config
 ```
 
-### Adding New Skills
+## 🌟 Key Features
 
-1. **Create skill directory**: `skills/your_skill/`
-2. **Implement skill class**: Extend `SkillBase` from SignalWire Agents SDK
-3. **Register tools**: Define SWAIG functions in `register_tools()`
-4. **Add to agent**: Import and add skill in `swaig_agents.py`
+### Advanced Voice-to-Web Synchronization
+- **Dual Detection System**: Primary notification + database fallback for 100% reliability
+- **Real-time Updates**: Voice reservations appear instantly in web interface
+- **Smart Session Management**: Prevents duplicate notifications
+- **Cross-platform Persistence**: Notifications work across multiple browser tabs
 
-Example skill structure:
-```python
-from signalwire_agents.core.skill_base import SkillBase
-from signalwire_agents.core.function_result import SwaigFunctionResult
+### Intelligent Audio Management
+- **Browser Policy Compliance**: Handles modern browser autoplay restrictions
+- **User Interaction Detection**: Automatically enables audio after first click
+- **Graceful Degradation**: Visual prompts when audio is unavailable
+- **Environment-driven Configuration**: Easily customizable via .env variables
 
-class YourSkill(SkillBase):
-    SKILL_NAME = "your_skill"
-    SKILL_DESCRIPTION = "Description of your skill"
-    
-    def register_tools(self) -> None:
-        self.agent.define_tool(
-            name="your_function",
-            description="Function description",
-            parameters={...},
-            handler=self._your_function_handler
-        )
-    
-    def _your_function_handler(self, args, raw_data):
-        # Implementation
-        return SwaigFunctionResult("Response message")
-```
+### Advanced Speech Recognition Handling
+- **Digit Duplication Detection**: Automatically corrects speech recognition errors
+- **Context-Aware Routing**: Routes function calls based on conversation context
+- **Confidence Scoring**: Only applies corrections when highly confident
+- **Surprise Order Generation**: AI can create random menu selections with pricing
 
-### Adding New Features
+### Comprehensive Payment Integration
+- **Stripe Processing**: Secure credit card processing via SignalWire
+- **Payment Session Management**: Tracks payment states across conversations
+- **SMS Receipts**: Automatic confirmation messages
+- **Retry Logic**: Handles failed payments gracefully
 
-1. **Web Features**: Add routes to `app.py`, templates to `templates/`, and static files to `static/`
-2. **Voice Features**: Add methods to appropriate skill classes
-3. **Database Changes**: Update `models.py` and create migration scripts
-
-### Code Style
-
-- Follow PEP 8 for Python code
-- Use meaningful variable and function names
-- Add docstrings to all functions
-- Include error handling and validation
-
-## 🚀 Deployment on Replit
-
-### Environment Configuration
-
-1. **Set environment variables in Replit Secrets**:
-   - `SIGNALWIRE_PROJECT_ID`
-   - `SIGNALWIRE_TOKEN`
-   - `SIGNALWIRE_SPACE_URL`
-   - `SIGNALWIRE_FROM_NUMBER`
-   - `STRIPE_PUBLISHABLE_KEY`
-   - `STRIPE_SECRET_KEY`
-
-2. **Configure webhook URLs**:
-   - Use your Replit app URL for webhooks
-   - Example: `https://your-repl-name.your-username.repl.co/receptionist`
-
-### SignalWire Configuration
-
-1. Create SignalWire project
-2. Configure phone numbers
-3. Set webhook URLs:
-   - Voice: `https://your-repl-name.your-username.repl.co/receptionist`
-   - SMS: `https://your-repl-name.your-username.repl.co/receptionist`
-
-
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
+### Real-time Kitchen Operations
+- **Live Order Updates**: Kitchen dashboard updates in real-time
+- **Configurable Notifications**: Sound alerts for new orders
+- **Visual Indicators**: Flash notifications and browser notifications
+- **Cross-platform Compatibility**: Works on web and voice simultaneously
 
 ---
 
-**Bobby's Table** - Where technology meets hospitality! 🍽️📞
+**Bobby's Table** - Where technology meets hospitality! 🍽️📞🔊
